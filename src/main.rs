@@ -2,6 +2,7 @@
 //! rendered to a Kitty terminal. Also a headless `verify` mode that runs scripted
 //! scenarios and dumps PNGs (for development on a box without a Kitty terminal).
 
+use scamper::backend::{Backend, KittyBackend};
 use scamper::framebuffer::{Framebuffer, Rgba};
 use scamper::input::Input;
 use scamper::math::Vec2;
@@ -385,10 +386,11 @@ fn run_live() {
     );
 
     let mut out: Vec<u8> = Vec::new();
-    let mut b64: Vec<u8> = Vec::new();
     let mut status = String::new();
     let score: u32 = 0;
     let mut fps = 60.0_f64;
+    let mut backend: Box<dyn Backend> = Box::new(KittyBackend::new());
+    let mut full_redraw = true; // force a complete repaint after switch/resize
 
     let sim_dt = 1.0 / 60.0;
     let sim_dt_ns = NS_PER_SEC / 60;
@@ -399,7 +401,6 @@ fn run_live() {
     let mut prev_pos = player.pos;
     let mut pending_jump = false; // latch a press until a sim substep consumes it
     let mut frame: u64 = 0;
-    let mut draw_id = kitty::BUF_A; // double-buffer toggle (BUF_A/BUF_B)
 
     loop {
         if terminal::quit_requested() {
@@ -421,9 +422,13 @@ fn run_live() {
             // on contact but won't push out of a pre-existing overlap).
             clamp_into_arena(&mut player, &arena);
             prev_pos = player.pos;
-            // The image dimensions changed: drop both buffers and repaint clean.
+            // Dimensions changed: clear the backend's artifacts + screen, then
+            // force a full repaint next frame.
+            out.clear();
+            backend.teardown(&mut out);
+            full_redraw = true;
             let mut o = std::io::stdout().lock();
-            let _ = o.write_all(kitty::delete_all());
+            let _ = o.write_all(&out);
             let _ = o.write_all(b"\x1b[2J");
             let _ = o.flush();
         }
@@ -465,21 +470,12 @@ fn run_live() {
         let alpha = acc as f64 / sim_dt_ns as f64;
         let rpos = prev_pos.lerp(player.pos, alpha);
         render(&mut fb, &arena.map, rpos, &player);
-        // Display the small internal image scaled across the play area (all rows
-        // but the status row), so the terminal upscales it to fill the window.
-        // Double-buffer the image id so swapping frames never shows a blank.
-        let disp_rows = arena.rows.saturating_sub(1) as usize;
-        kitty::present_rgba(
-            &mut out,
-            draw_id,
-            arena.fb_w,
-            arena.fb_h,
-            arena.cols as usize,
-            disp_rows,
-            &fb.px,
-            &mut b64,
-        );
-        kitty::append_delete(&mut out, kitty::BUF_A + kitty::BUF_B - draw_id); // remove the other buffer
+        // Hand the rendered framebuffer to the active backend, which fills `out`
+        // with a complete frame (image scaled across the play area, or text
+        // cells). The status line is appended and the whole thing flushed once.
+        let disp_rows = arena.rows.saturating_sub(1);
+        backend.present(&mut out, &fb, arena.cols, disp_rows, full_redraw);
+        full_redraw = false;
         render_status(&mut status, &player, score, fps, arena.rows, arena.cols);
         {
             let mut o = std::io::stdout().lock();
@@ -487,15 +483,14 @@ fn run_live() {
             let _ = o.write_all(status.as_bytes());
             let _ = o.flush();
         }
-        draw_id = kitty::BUF_A + kitty::BUF_B - draw_id; // ping-pong for the next frame
 
         // Log the first frame's encoded size (the bandwidth tell) and a periodic
         // heartbeat so a hang/stall is visible in the log.
         frame += 1;
         if frame == 1 || frame % 120 == 0 {
             dlog!(
-                "frame {frame}: encoded {} bytes (b64 {}), fps={fps:.0}, pos=({:.0},{:.0}) state={}",
-                out.len(), b64.len(), player.pos.x, player.pos.y, state_letter(player.state)
+                "frame {frame}: backend={} encoded {} bytes, fps={fps:.0}, pos=({:.0},{:.0}) state={}",
+                backend.name(), out.len(), player.pos.x, player.pos.y, state_letter(player.state)
             );
         }
 
