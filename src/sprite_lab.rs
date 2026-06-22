@@ -148,11 +148,15 @@ fn main() {
         let set = &SETS[si];
         let anim = &set.anims[ai];
         let now = now_ns();
+        if anim.frames.is_empty() {
+            sleep_until_ns(now_ns() + NS_PER_SEC / 60, 1_000_000);
+            continue; // a frameless anim has nothing to draw
+        }
         if anim.frames.len() > 1 && now - last >= NS_PER_SEC / anim.fps.max(1) as u64 {
             fi = (fi + 1) % anim.frames.len();
             last = now;
         }
-        let frame = anim.frames[fi];
+        let frame = anim.frames[fi.min(anim.frames.len() - 1)];
 
         // Center the sprite in the stage.
         let cols = stage.cols as usize;

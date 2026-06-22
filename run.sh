@@ -54,7 +54,8 @@ menu() {
         printf '\n  \033[2m\xe2\x86\x91/\xe2\x86\x93 move \xc2\xb7 enter select \xc2\xb7 q back\033[0m\n'
         IFS= read -rsn1 key
         if [[ $key == $'\e' ]]; then
-            IFS= read -rsn2 -t 0.01 rest 2>/dev/null || rest=""
+            # wait a touch for the rest of an arrow's CSI (bare Esc has none)
+            IFS= read -rsn2 -t 0.1 rest 2>/dev/null || rest=""
             key+="$rest"
         fi
         case "$key" in

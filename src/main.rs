@@ -241,28 +241,33 @@ struct Arena {
 
 /// Cap on the larger side of the *internal* render image, in pixels. The image
 /// is transmitted at this resolution and the terminal scales it up to fill the
-/// window — so per-frame bandwidth is bounded regardless of window size. (A
-/// full-window native image is megabytes/frame; this keeps it well under 1 MB.)
-const MAX_INTERNAL_DIM: f64 = 320.0;
+/// window — so per-frame bandwidth is bounded regardless of window size.
+const MAX_INTERNAL_DIM: usize = 384;
+
+/// Framebuffer pixels per terminal cell. These DIVIDE the tile size (TILE=16),
+/// which is what makes rendering identical across backends: with the framebuffer
+/// sized to `tiles * TILE` and the cell grid to `tiles * (TILE/CELL_*)`, a tile
+/// spans a whole number of cells, so a wall lands on the same cell boundaries
+/// whether kitty scales the image continuously or the cell tiers sample it.
+/// (4 wide × 8 tall ≈ a terminal cell's 1:2 aspect, so the image isn't stretched.)
+const CELL_PX: usize = 4;
+const CELL_PH: usize = 8;
 
 fn build_arena(ws: terminal::WinSize) -> Arena {
-    let cols = ws.cols.max(20);
-    let rows = ws.rows.max(6);
-    // Pixel size, with a fallback for terminals that don't report it via TIOCGWINSZ.
-    let (xpix, ypix) = if ws.xpix > 0 && ws.ypix > 0 {
-        (ws.xpix as f64, ws.ypix as f64)
-    } else {
-        (cols as f64 * 8.0, rows as f64 * 16.0)
-    };
-    let cell_h = ypix / rows as f64;
-    // Play area in window pixels: full width, minus the reserved bottom status row.
-    let play_w = xpix;
-    let play_h = (ypix - cell_h).max(cell_h);
-    // Downscale to a modest internal resolution (aspect preserved), then snap to
-    // whole tiles. The terminal upscales the result back to the play area.
-    let scale = (play_w.max(play_h) / MAX_INTERNAL_DIM).max(1.0);
-    let tiles_w = ((play_w / scale / TILE).round() as usize).max(6);
-    let tiles_h = ((play_h / scale / TILE).round() as usize).max(6);
+    let term_cols = ws.cols.max(20) as usize;
+    let term_rows = ws.rows.max(6) as usize;
+    let play_rows = term_rows - 1; // reserve the bottom row for the status line
+    let tile = TILE as usize;
+    let cpt_x = tile / CELL_PX; // cells per tile, horizontally (= 4)
+    let cpt_y = tile / CELL_PH; // cells per tile, vertically   (= 2)
+    let max_tiles = MAX_INTERNAL_DIM / tile;
+
+    // Tiles fill as much of the terminal as the bandwidth cap allows; the cell
+    // grid is then an exact multiple of the tile grid (no quantization mismatch).
+    let tiles_w = (term_cols / cpt_x).clamp(3, max_tiles);
+    let tiles_h = (play_rows / cpt_y).clamp(3, max_tiles);
+    let cols_used = tiles_w * cpt_x;
+    let rows_used = tiles_h * cpt_y;
 
     let mut map = TileMap::new(tiles_w, tiles_h);
     for x in 0..tiles_w {
@@ -278,10 +283,10 @@ fn build_arena(ws: terminal::WinSize) -> Arena {
 
     Arena {
         map,
-        fb_w: tiles_w * TILE as usize,
-        fb_h: tiles_h * TILE as usize,
-        rows,
-        cols,
+        fb_w: tiles_w * tile,
+        fb_h: tiles_h * tile,
+        rows: (rows_used + 1) as u16, // playfield rows + the status row
+        cols: cols_used as u16,
     }
 }
 
@@ -749,6 +754,16 @@ fn run_live() {
                 );
                 pending_jump = false; // consumed by the first substep only (no double-fire)
                 acc -= sim_dt_ns;
+                // Event-triggered effects — detected per substep so a jump-and-land
+                // within one render frame still fires (did_double resets on landing).
+                if player.did_double && !was_double {
+                    fx.spawn(&effects::PUFF, player.pos.x + player.w / 2.0, player.pos.y + player.h, now);
+                }
+                if player.grounded && !was_grounded {
+                    fx.spawn(&effects::DUST, player.pos.x + player.w / 2.0, player.pos.y + player.h, now);
+                }
+                was_double = player.did_double;
+                was_grounded = player.grounded;
                 // Safety net (shouldn't happen in a closed box): respawn if it escapes.
                 if player.pos.y > arena.map.px_h() + 64.0 {
                     player = Player::new(arena.map.spawn.0, arena.map.spawn.1);
@@ -757,28 +772,17 @@ fn run_live() {
             }
         } else {
             acc = 0;
+            last_spark_ns = now; // don't burst sparks on resume from a modal
         }
 
-        // Event-triggered effects (spawned at the player's feet in world px).
-        let now = now_ns();
-        let feet_x = player.pos.x + player.w / 2.0;
-        let feet_y = player.pos.y + player.h;
-        if player.did_double && !was_double {
-            fx.spawn(&effects::PUFF, feet_x, feet_y, now); // double-jump burst
-        }
-        if player.grounded && !was_grounded {
-            fx.spawn(&effects::DUST, feet_x, feet_y, now); // landing scuff
-        }
         // Continuous friction sparks straddling the wall-contact line (his box
         // edge), so the burst is half on Munchii and half on the wall.
         if player.state == State::WallSliding && now.saturating_sub(last_spark_ns) >= NS_PER_SEC / 18 {
-            let sx = feet_x + player.wall_dir as f64 * player.w / 2.0;
+            let sx = player.pos.x + player.w / 2.0 + player.wall_dir as f64 * player.w / 2.0;
             let sy = player.pos.y + player.h * 0.6;
             fx.spawn(&effects::SPARK, sx, sy, now);
             last_spark_ns = now;
         }
-        was_double = player.did_double;
-        was_grounded = player.grounded;
         fx.update(now);
 
         // --- present (modal-aware) ---
@@ -1085,7 +1089,55 @@ mod tests {
     #[test]
     fn tiny_window_clamps_to_min_box() {
         let a = build_arena(terminal::WinSize { cols: 1, rows: 1, xpix: 16, ypix: 16 });
-        assert!(a.map.w >= 6 && a.map.h >= 6, "must not produce a degenerate arena");
+        assert!(a.map.w >= 3 && a.map.h >= 3, "must not produce a degenerate arena");
+    }
+
+    #[test]
+    fn backend_dimensional_parity() {
+        // The framebuffer and cell grid must align so a tile spans a WHOLE number
+        // of cells — that's what makes walls (and any tile-based scenery) the same
+        // size whether kitty scales the image or the cell tiers sample it.
+        for ws in [
+            terminal::WinSize { cols: 80, rows: 24, xpix: 800, ypix: 480 },
+            terminal::WinSize { cols: 77, rows: 45, xpix: 1386, ypix: 1620 },
+            terminal::WinSize { cols: 200, rows: 60, xpix: 0, ypix: 0 },
+            terminal::WinSize { cols: 20, rows: 6, xpix: 0, ypix: 0 },
+        ] {
+            let a = build_arena(ws);
+            let cols = a.cols as usize;
+            let disp_rows = a.rows.saturating_sub(1) as usize;
+            assert!(cols > 0 && disp_rows > 0);
+            assert_eq!(a.fb_w % cols, 0, "fb width must be a whole number of cells");
+            assert_eq!(a.fb_h % disp_rows, 0, "fb height must be a whole number of cells");
+            let cell_px = a.fb_w / cols;
+            let cell_ph = a.fb_h / disp_rows;
+            assert_eq!(TILE as usize % cell_px, 0, "a tile must span whole cells (horizontal)");
+            assert_eq!(TILE as usize % cell_ph, 0, "a tile must span whole cells (vertical)");
+            // and the framebuffer is an exact tile grid (no partial tiles)
+            assert_eq!(a.fb_w % TILE as usize, 0);
+            assert_eq!(a.fb_h % TILE as usize, 0);
+        }
+    }
+
+    #[test]
+    fn cell_blocks_tile_without_gaps() {
+        // Sprite/effect rasterization: N glyph blocks must paint a contiguous span
+        // of exactly floor(N*cpw) px (no gaps, no overlap, no ceil inflation), so a
+        // sprite is the same size in the pixel tiers as its cell count in the
+        // character tiers.
+        let cpw = 3.7_f64;
+        let cph = 5.0_f64;
+        let n = 7usize;
+        let mut fb = Framebuffer::new(64, 8);
+        fb.clear(Rgba::rgb(0, 0, 0));
+        for gc in 0..n {
+            cell_block(&mut fb, 0.0, 0.0, gc, 0, cpw, cph, Rgba::rgb(255, 0, 0));
+        }
+        let expected = (n as f64 * cpw).floor() as usize;
+        for x in 0..expected {
+            assert_eq!(fb.px[x * 4], 255, "gap at column {x}");
+        }
+        assert_eq!(fb.px[expected * 4], 0, "painted past the cell span at {expected}");
     }
 
     #[test]

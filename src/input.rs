@@ -84,6 +84,12 @@ impl Input {
         }
         self.parse();
 
+        // Guard against an unterminated escape/OSC sequence (a misbehaving terminal
+        // reply with no ST/BEL) accumulating in `pending` forever.
+        if self.pending.len() > 8192 {
+            self.pending.clear();
+        }
+
         // Legacy auto-release: decay holds; refreshed by repeated bytes in parse().
         if !self.kitty {
             let mut expired = Vec::new();
