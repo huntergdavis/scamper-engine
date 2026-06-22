@@ -41,6 +41,7 @@ fn main() {
             println!("winsize: {ws:?}");
         }
         Some("gfxtest") => run_gfxtest(),
+        Some("shot") => run_shot(),
         _ => run_live(),
     }
 }
@@ -111,6 +112,43 @@ fn run_gfxtest() {
         println!("  NOTE: terminal did not report pixel size (xpix/ypix=0) — the game");
         println!("        falls back to an 8x16 cell guess, which can mis-size the arena.");
     }
+}
+
+// ---------------------------------------------------------------------------
+// Screenshot — render a compact arena + Munchii to plain text (for the README)
+// ---------------------------------------------------------------------------
+
+fn run_shot() {
+    // A compact, README-friendly window size.
+    let ws = terminal::WinSize { cols: 54, rows: 16, xpix: 540, ypix: 320 };
+    let arena = build_arena(ws);
+    let mut fb = Framebuffer::new(arena.fb_w, arena.fb_h);
+    let mut player = Player::new(arena.map.spawn.0, arena.map.spawn.1);
+    fit_player_to_munchii(&mut player, &arena);
+
+    // Settle on the floor, then stand him in the middle facing right.
+    let fp = FeelParams::default();
+    for _ in 0..30 {
+        player.step(&arena.map, 1.0 / 60.0, 0.0, false, false, false, &fp);
+    }
+    player.pos.x = (arena.map.px_w() - player.w) / 2.0;
+
+    render_arena(&mut fb, &arena.map);
+    let cols = arena.cols as usize;
+    let disp_rows = arena.rows.saturating_sub(1) as usize;
+
+    // Munchii's idle pose, aligned to his hitbox.
+    let frame = munchii::anim("idle").frames[0];
+    let lines: Vec<String> = frame.iter().map(|s| s.to_string()).collect();
+    let fw = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0) as i32;
+    let box_left = (player.pos.x / arena.fb_w as f64 * arena.cols as f64).round() as i32;
+    let box_top = (player.pos.y / arena.fb_h as f64 * disp_rows as f64).round() as i32;
+    let ov = Overlay {
+        lines: &lines,
+        col: box_left + (munchii::W as i32 - fw) / 2,
+        row: box_top,
+    };
+    print!("{}", scamper::backend::mono_text(&fb, cols, disp_rows, Some(&ov)));
 }
 
 // ---------------------------------------------------------------------------

@@ -219,6 +219,26 @@ fn luma((r, g, b): (u8, u8, u8)) -> u32 {
     (r as u32 * 299 + g as u32 * 587 + b as u32 * 114) / 1000
 }
 
+/// Render the framebuffer (+ optional sprite overlay) to plain text rows — no
+/// escape codes, no color — for screenshots and docs (the mono tier's look).
+pub fn mono_text(fb: &Framebuffer, cols: usize, play_rows: usize, overlay: Option<&Overlay>) -> String {
+    let mut s = String::with_capacity((cols + 1) * play_rows);
+    if cols == 0 || play_rows == 0 || fb.width == 0 || fb.height == 0 {
+        return s;
+    }
+    for cy in 0..play_rows {
+        for cx in 0..cols {
+            let ch = match overlay.and_then(|o| o.at(cx, cy)) {
+                Some(g) => g,
+                None => ramp_glyph(RAMP_COARSE, luma(sample(fb, cx, cy, cols, play_rows))) as char,
+            };
+            s.push(ch);
+        }
+        s.push('\n');
+    }
+    s
+}
+
 #[inline]
 fn ramp_glyph(ramp: &[u8], lum: u32) -> u8 {
     ramp[(lum as usize * (ramp.len() - 1)) / 255]

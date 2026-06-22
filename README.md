@@ -27,6 +27,31 @@ pixels or sketched from `#` and `@`.
 > backends. Run, jump, double-jump, wall-slide and wall-jump around a box arena
 > that fills your terminal window.
 
+## What it looks like
+
+Munchii in the box arena, the bare **mono** (black-and-white ASCII) tier — the
+floor of the render ladder. `Tab` in-game steps up through colored half-blocks,
+colored ASCII, and full Kitty pixels.
+
+```
+......................................................
+......................................................
+...                                                 ..
+...                                                 ..
+...                                                 ..
+...                                                 ..
+...                                                 ..
+...                                                 ..
+...                            __                   ..
+...                )         (( o==@                ..
+...                |         (\_)                   ..
+...                /____________\                   ..
+...                \____________/                   ..
+...                 n  n      n  n                  ..
+......................................................
+```
+<sub>Generated with <code>scamp shot</code> — the engine rendering itself to text.</sub>
+
 ## Run it
 
 ```sh
