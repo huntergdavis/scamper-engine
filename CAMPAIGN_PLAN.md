@@ -172,9 +172,22 @@ C 24 11
 ```
 
 - `kind` ∈ `ground|brick|coinbrick|question|hidden|pipe|platform|hazard|deco`.
-- The importer maps the Godot TileSet atlas `(source_id, atlas_x, atlas_y)` →
-  `kind` via an authored table; **unmapped tiles default to `ground`** so
-  collision geometry is correct from day one, with semantic kinds refined later.
+- **Tile kinds are semantic** (`atlas_kind`), derived from the project's shared
+  `Tiles` tileset. The themed tilesets only re-texture one atlas layout, so the
+  source→kind map is theme-independent:
+  | atlas source | texture | → kind |
+  |---|---|---|
+  | 0 (row 5) | terrain, `one_way` tiles | `platform` (semisolid) |
+  | 0 (other) | terrain | `ground` |
+  | 1 | embedded solid blocks (scenes coll.) | `ground` |
+  | 2 | `Liquids.png` (lava / deep water) | `hazard` |
+  | 4, 5 | conveyor belts | `platform` |
+  | 3, 6 | deco / edge-connection visuals | `deco` |
+  The deco layer is forced to `deco` by node name. Validated over all 305 levels:
+  ~21.5k `ground`, ~2k `hazard`, ~1.4k `deco`, ~1.2k `platform` spans.
+- **Known refinement:** terrain layers don't carry a foreground/background flag,
+  so a purely-decorative background terrain tile still imports as solid `ground`
+  (errs toward solid — collision-safe). Distinguishing requires per-layer metadata.
 - The importer maps an instanced scene's basename (`Goomba` → `boneling`, …) via
   a scene→type table; unmapped → `unknown:<Name>` (kept, flagged, never silently
   dropped). `Player`→spawn, `EndFlagpole`→goal, `Checkpoint`→`C`.

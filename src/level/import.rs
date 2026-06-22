@@ -209,11 +209,23 @@ pub fn import_tscn(text: &str, id: &str, theme: &str) -> io::Result<Imported> {
 
 // ---- translation tables (ours) ----------------------------------------------
 
-/// Godot TileSet atlas cell → our [`TileKind`]. Stub: every solid tile is
-/// `ground` for now so collision geometry is correct; refine per-TileSet later
-/// (CAMPAIGN_PLAN.md §4a). Kept as a fn so it's the obvious extension point.
-fn atlas_kind(_source_id: u16, _atlas_x: u16, _atlas_y: u16) -> TileKind {
-    TileKind::Ground
+/// Godot tile-atlas source/coords → our [`TileKind`], derived from the project's
+/// shared `Tiles` tileset (CAMPAIGN_PLAN.md §4b). The themed tilesets only
+/// re-texture this one atlas layout, so the mapping is theme-independent:
+///   - source 0 = terrain; its `one_way` semisolid tiles are atlas row 5.
+///   - source 1 = embedded solid blocks (a scenes-collection) → solid ground.
+///   - source 2 = Liquids.png (lava / deep water) → hazard.
+///   - sources 4,5 = conveyor belts → solid, moving → platform.
+///   - sources 3,6 = deco / edge-connection visuals → non-solid deco.
+/// Only applied to terrain layers; the deco layer is forced to `Deco` by name.
+fn atlas_kind(source_id: u16, _atlas_x: u16, atlas_y: u16) -> TileKind {
+    match source_id {
+        2 => TileKind::Hazard,
+        4 | 5 => TileKind::Platform,
+        3 | 6 => TileKind::Deco,
+        0 if atlas_y == 5 => TileKind::Platform, // one-way semisolid row
+        _ => TileKind::Ground, // terrain + embedded solid blocks
+    }
 }
 
 /// How an instanced scene maps into our IR.
@@ -606,6 +618,16 @@ mod tests {
 
         // And it round-trips through the IR text form.
         assert_eq!(Level::from_text(&l.to_text()).unwrap(), *l);
+    }
+
+    #[test]
+    fn atlas_kind_maps_sources_to_semantics() {
+        assert_eq!(atlas_kind(0, 3, 0), TileKind::Ground); // terrain
+        assert_eq!(atlas_kind(0, 2, 5), TileKind::Platform); // one-way semisolid row
+        assert_eq!(atlas_kind(1, 0, 0), TileKind::Ground); // embedded solid block
+        assert_eq!(atlas_kind(2, 0, 2), TileKind::Hazard); // liquids
+        assert_eq!(atlas_kind(4, 0, 0), TileKind::Platform); // conveyor
+        assert_eq!(atlas_kind(6, 0, 0), TileKind::Deco); // edge visual
     }
 
     #[test]
