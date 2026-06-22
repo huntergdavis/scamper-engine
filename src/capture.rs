@@ -259,14 +259,19 @@ pub fn load_snapshots(dir: &Path, name: &str) -> io::Result<Snapshots> {
     Snapshots::from_text(&std::fs::read_to_string(snapshot_path(dir, name))?)
 }
 
-/// A capture name is safe if it's a single path component of `[A-Za-z0-9._-]`.
-/// Rejects empties, dots-only, and anything that could traverse directories.
+/// A capture name is safe if it's a single filename component. Spaces (and most
+/// punctuation) are allowed; path separators, control characters, leading/trailing
+/// whitespace, the dot-names, and over-long names are rejected so a name can't
+/// traverse directories or produce a surprising file.
 pub fn valid_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 128
+        && name == name.trim()
         && name != "."
         && name != ".."
-        && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+        && !name.contains('/')
+        && !name.contains('\\')
+        && !name.chars().any(|c| c.is_control())
 }
 
 // ---- internals ---------------------------------------------------------------
@@ -354,9 +359,15 @@ mod tests {
     #[test]
     fn name_validation() {
         assert!(valid_name("run-1.demo_2"));
+        assert!(valid_name("first run record")); // spaces are fine now
+        assert!(valid_name("Boss fight (take 2)!"));
         assert!(!valid_name(""));
+        assert!(!valid_name("."));
         assert!(!valid_name(".."));
         assert!(!valid_name("a/b"));
-        assert!(!valid_name("has space"));
+        assert!(!valid_name("back\\slash"));
+        assert!(!valid_name(" leading"));
+        assert!(!valid_name("trailing "));
+        assert!(!valid_name("new\nline"));
     }
 }

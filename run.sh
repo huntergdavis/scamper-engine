@@ -61,8 +61,11 @@ menu() {
             key+="$rest"
         fi
         case "$key" in
-            $'\e[A' | k) ((sel = (sel - 1 + n) % n)) ;;
-            $'\e[B' | j) ((sel = (sel + 1) % n)) ;;
+            # NB: assignment form `sel=$(( ))`, not `(( ))` — the latter returns
+            # exit status 1 when the result is 0 (moving to the top item), which
+            # under `set -e` would kill the whole script.
+            $'\e[A' | k) sel=$(( (sel - 1 + n) % n )) ;;
+            $'\e[B' | j) sel=$(( (sel + 1) % n )) ;;
             '' | $'\n') MENU_SEL=$sel; printf '\033[?25h'; return ;;
             q | Q | $'\e') MENU_SEL=-1; printf '\033[?25h'; return ;;
         esac
@@ -74,9 +77,20 @@ captures_dir() {
     printf '%s/scamper/captures' "${XDG_STATE_HOME:-$HOME/.local/state}"
 }
 
-# A capture name the engine will accept (single component; safe charset).
+# A capture name the engine will accept: any single filename component (spaces
+# welcome) — just no path separators and not '.'/'..'.
 valid_name() {
-    [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]]
+    [[ -n "$1" && "$1" != "." && "$1" != ".." && "$1" != */* ]]
+}
+
+# Read a line into REPLY_NAME with surrounding whitespace trimmed.
+read_name() {
+    local n
+    IFS= read -r n
+    # strip leading then trailing whitespace
+    n="${n#"${n%%[![:space:]]*}"}"
+    n="${n%"${n##*[![:space:]]}"}"
+    REPLY_NAME="$n"
 }
 
 # Prompt for a name (cursor shown), then record a run. `q` in-game finalizes it.
@@ -84,13 +98,13 @@ record_run() {
     local dir name c
     dir="$(captures_dir)"
     printf '\033[2J\033[H\n  \033[1mRecord a run\033[0m\n\n'
-    printf '  Name it (letters, digits, . _ -); blank cancels.\n  Then play — \033[1mq\033[0m stops and saves the capture.\n\n  name > '
+    printf '  Name it (spaces are fine); blank cancels.\n  Then play — \033[1mq\033[0m stops and saves the capture.\n\n  name > '
     printf '\033[?25h'
-    IFS= read -r name
+    read_name; name="$REPLY_NAME"
     printf '\033[?25l'
     [[ -z "$name" ]] && return
     if ! valid_name "$name"; then
-        printf '\n  invalid name. press a key…'; IFS= read -rsn1; return
+        printf '\n  invalid name (no "/", not "." or ".."). press a key…'; IFS= read -rsn1; return
     fi
     if [[ -e "$dir/$name.scap" ]]; then
         printf '\n  "%s" exists — overwrite? [y/N] ' "$name"
@@ -116,7 +130,7 @@ capture_actions() {
             1) printf '\033[2J\033[H'; "target/$profile_dir/scamp" replay "$name" --check; IFS= read -rsn1 -p $'\npress a key…' ;;
             2) printf '\033[2J\033[H'; "target/$profile_dir/scamp" replay "$name" --bless; IFS= read -rsn1 -p $'\npress a key…' ;;
             3) printf '\033[2J\033[H\n  rename "%s" to (blank cancels):\n  > ' "$name"
-               printf '\033[?25h'; IFS= read -r new; printf '\033[?25l'
+               printf '\033[?25h'; read_name; new="$REPLY_NAME"; printf '\033[?25l'
                if [[ -n "$new" ]] && valid_name "$new"; then
                    mv -f "$dir/$name.scap" "$dir/$new.scap"
                    [[ -e "$dir/$name.snap" ]] && mv -f "$dir/$name.snap" "$dir/$new.snap"
