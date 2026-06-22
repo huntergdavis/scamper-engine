@@ -742,9 +742,10 @@ fn run_live() {
         if player.grounded && !was_grounded {
             fx.spawn(&effects::DUST, feet_x, feet_y, now); // landing scuff
         }
-        // Continuous friction sparks at the wall-side foot while sliding.
+        // Continuous friction sparks straddling the wall-contact line (his box
+        // edge), so the burst is half on Munchii and half on the wall.
         if player.state == State::WallSliding && now.saturating_sub(last_spark_ns) >= NS_PER_SEC / 18 {
-            let sx = feet_x + player.wall_dir as f64 * player.w * 0.42;
+            let sx = feet_x + player.wall_dir as f64 * player.w / 2.0;
             let sy = player.pos.y + player.h * 0.6;
             fx.spawn(&effects::SPARK, sx, sy, now);
             last_spark_ns = now;
