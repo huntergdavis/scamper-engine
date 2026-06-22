@@ -173,6 +173,74 @@ impl Backend for TextBackend {
     }
 }
 
+// ---------------------------------------------------------------------------
+// ASCII backend — monochrome characters, retro 80s look
+// ---------------------------------------------------------------------------
+
+/// Brightness ramp, dark → bright. One ASCII glyph per cell stands in for the
+/// pixel under it. (Easy knob: swap this string for a different aesthetic.)
+const RAMP: &[u8] = b" .:-=+*#%@";
+
+/// Green phosphor foreground (truecolor) — the "old terminal" look.
+const PHOSPHOR: &str = "\x1b[38;2;120;255;130m";
+
+/// Pure-ASCII renderer: one character per cell chosen from a brightness ramp,
+/// drawn in monochrome green. No Unicode, no per-cell color — just glyphs, like
+/// an 80s terminal game. Full character resolution (cols × rows) and the
+/// lightest backend (~1 byte/cell: the color is set once and persists).
+pub struct AsciiBackend;
+
+impl AsciiBackend {
+    pub fn new() -> Self {
+        AsciiBackend
+    }
+}
+
+impl Default for AsciiBackend {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Rec.601 luma of an RGB triple, 0..=255.
+#[inline]
+fn luma((r, g, b): (u8, u8, u8)) -> u32 {
+    (r as u32 * 299 + g as u32 * 587 + b as u32 * 114) / 1000
+}
+
+impl Backend for AsciiBackend {
+    fn name(&self) -> &'static str {
+        "ascii"
+    }
+
+    fn present(&mut self, out: &mut Vec<u8>, fb: &Framebuffer, cols: u16, play_rows: u16, _full: bool) {
+        out.clear();
+        out.extend_from_slice(b"\x1b[H");
+        out.extend_from_slice(PHOSPHOR.as_bytes()); // set once; persists across the frame
+        let cw = cols as usize;
+        let ch = play_rows as usize;
+        if cw == 0 || ch == 0 || fb.width == 0 || fb.height == 0 {
+            return;
+        }
+        let last = RAMP.len() - 1;
+        for cy in 0..ch {
+            use std::io::Write;
+            let _ = write!(out, "\x1b[{};1H", cy + 1);
+            for cx in 0..cw {
+                let lum = luma(sample(fb, cx, cy, cw, ch));
+                let idx = (lum as usize * last) / 255;
+                out.push(RAMP[idx]);
+            }
+        }
+        out.extend_from_slice(b"\x1b[0m");
+    }
+
+    fn teardown(&mut self, out: &mut Vec<u8>) {
+        out.clear();
+        out.extend_from_slice(b"\x1b[0m\x1b[2J");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -225,5 +293,63 @@ mod tests {
         let mut out = Vec::new();
         TextBackend::new().present(&mut out, &fb, 40, 12, true);
         assert!(!out.is_empty());
+    }
+
+    #[test]
+    fn ascii_maps_brightness_to_ramp_ends() {
+        // All-black -> ramp[0] (space); all-white -> ramp[last] ('@').
+        let mut black = Framebuffer::new(4, 2);
+        black.clear(Rgba::rgb(0, 0, 0));
+        let mut out = Vec::new();
+        AsciiBackend::new().present(&mut out, &black, 4, 1, true);
+        let s = String::from_utf8(out).unwrap();
+        assert!(s.contains(PHOSPHOR), "should set the phosphor color once");
+        // strip escapes, the glyph row should be all spaces
+        let glyphs: String = s.chars().filter(|c| *c == ' ').collect();
+        assert_eq!(glyphs.len(), 4, "black -> 4 spaces");
+
+        let mut white = Framebuffer::new(4, 2);
+        white.clear(Rgba::rgb(255, 255, 255));
+        let mut out2 = Vec::new();
+        AsciiBackend::new().present(&mut out2, &white, 4, 1, true);
+        let s2 = String::from_utf8(out2).unwrap();
+        assert_eq!(s2.matches('@').count(), 4, "white -> 4 '@' (ramp max)");
+    }
+
+    #[test]
+    fn ascii_is_pure_ascii_glyphs() {
+        // Whatever the colors, the glyph stream must be ASCII (no Unicode).
+        let mut fb = Framebuffer::new(8, 8);
+        fb.clear(Rgba::rgb(90, 102, 140));
+        fb.fill_rect(2, 2, 3, 3, Rgba::rgb(240, 200, 80));
+        let mut out = Vec::new();
+        AsciiBackend::new().present(&mut out, &fb, 8, 4, true);
+        // Drop CSI sequences; the remaining glyph bytes must all be ASCII ramp chars.
+        let s = String::from_utf8(out).unwrap();
+        for ch in strip_csi(&s).chars() {
+            assert!(RAMP.contains(&(ch as u8)), "non-ramp glyph {ch:?}");
+        }
+    }
+
+    // crude CSI stripper for tests
+    fn strip_csi(s: &str) -> String {
+        let mut out = String::new();
+        let mut it = s.chars().peekable();
+        while let Some(c) = it.next() {
+            if c == '\x1b' {
+                if it.peek() == Some(&'[') {
+                    it.next();
+                    while let Some(&d) = it.peek() {
+                        it.next();
+                        if d.is_ascii_alphabetic() {
+                            break;
+                        }
+                    }
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        out
     }
 }
