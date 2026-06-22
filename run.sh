@@ -1,4 +1,4 @@
-#!/data/data/com.termux/files/usr/bin/bash
+#!/usr/bin/env bash
 # Build and launch Scamper.
 #   ./run.sh                   # play the game (default)
 #   ./run.sh -i                # interactive menu (game / sprite viewer / tools)
