@@ -390,6 +390,28 @@ fn render(fb: &mut Framebuffer, map: &TileMap, rpos: Vec2, player: &Player) {
     draw_player(fb, rpos, player, player.w, player.h);
 }
 
+/// Rasterize an effect clip into the framebuffer (the pixel tiers' version of an
+/// effect): each non-space glyph becomes a cell-sized block in the effect tint,
+/// so it matches the character tiers' look. `ax`/`ay` = clip anchor (center-x,
+/// top-y) in framebuffer px; `cpw`/`cph` = one cell's pixel size.
+fn draw_effect_pixels(fb: &mut Framebuffer, frame: &[&str], tint: (u8, u8, u8), ax: f64, ay: f64, cpw: f64, cph: f64) {
+    let w_cells = frame.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+    let left = ax - w_cells as f64 * cpw / 2.0;
+    let col = Rgba::rgb(tint.0, tint.1, tint.2);
+    let bw = cpw.ceil() as i32;
+    let bh = cph.ceil() as i32;
+    for (gr, line) in frame.iter().enumerate() {
+        for (gc, ch) in line.chars().enumerate() {
+            if ch == ' ' {
+                continue;
+            }
+            let px = (left + gc as f64 * cpw).round() as i32;
+            let py = (ay + gr as f64 * cph).round() as i32;
+            fb.fill_rect(px, py, bw, bh, col);
+        }
+    }
+}
+
 /// Mirror one sprite row horizontally (for a left-facing Munchii), swapping the
 /// directional glyphs so the drawing stays coherent.
 fn flip_line(s: &str) -> String {
@@ -784,7 +806,22 @@ fn run_live() {
                 }
                 backend.present(&mut out, &fb, arena.cols, disp_rows, full_redraw, &overlays);
             } else {
+                // Pixel tiers: rasterize effects into the framebuffer, z-ordered
+                // around the player box (behind first, then in front).
+                let cpw = arena.fb_w as f64 / arena.cols.max(1) as f64;
+                let cph = arena.fb_h as f64 / disp_rows.max(1) as f64;
+                let fxr = fx.render(now);
+                for &(frame, tint, z, x, y) in &fxr {
+                    if z < 0 {
+                        draw_effect_pixels(&mut fb, frame, tint, x, y, cpw, cph);
+                    }
+                }
                 draw_player(&mut fb, rpos, &player, player.w, player.h);
+                for &(frame, tint, z, x, y) in &fxr {
+                    if z >= 0 {
+                        draw_effect_pixels(&mut fb, frame, tint, x, y, cpw, cph);
+                    }
+                }
                 backend.present(&mut out, &fb, arena.cols, disp_rows, full_redraw, &[]);
             }
             full_redraw = false;
