@@ -36,12 +36,13 @@ pub static PUFF: Effect = Effect {
     ],
 };
 
-// Wall-slide friction — hot sparks that scatter up off his feet. Short and
-// re-emitted continuously while he slides, so it reads as a steady stream.
+// Wall-slide friction — hot white sparks that scatter up off his feet. Short and
+// re-emitted continuously while he slides, so it reads as a steady stream. White
+// (not yellow) so it reads as heat/friction against the wall, not a stain.
 pub static SPARK: Effect = Effect {
     name: "spark",
     fps: 20,
-    tint: (255, 212, 96),
+    tint: (250, 250, 255),
     z: 1, // pops in front
     frames: &[
         &[" * ", "* *"],
