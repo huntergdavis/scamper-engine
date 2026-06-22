@@ -99,6 +99,70 @@ fn wall_test_map() -> TileMap {
     m
 }
 
+/// The engine test arena: a solid box hugging the terminal window (minus the
+/// bottom status row), sized to whatever aspect ratio is open. Floor, ceiling
+/// and both walls are a one-tile-thick border so every movement function — run,
+/// jump, double-jump, wall-slide, wall-jump, fast-fall — is reachable inside it.
+struct Arena {
+    map: TileMap,
+    fb_w: usize,
+    fb_h: usize,
+    rows: u16, // terminal rows (status is drawn on the last one)
+    cols: u16,
+}
+
+fn build_arena(ws: terminal::WinSize) -> Arena {
+    let cols = ws.cols.max(20);
+    let rows = ws.rows.max(6);
+    // Pixel size, with a fallback for terminals that don't report it via TIOCGWINSZ.
+    let (xpix, ypix) = if ws.xpix > 0 && ws.ypix > 0 {
+        (ws.xpix as f64, ws.ypix as f64)
+    } else {
+        (cols as f64 * 8.0, rows as f64 * 16.0)
+    };
+    let cell_h = ypix / rows as f64;
+    let budget_h = (ypix - cell_h).max(cell_h); // reserve the bottom row for status
+    // Tiles spanning the playfield; the box is the outer ring. Clamp to a sane min.
+    let tiles_w = ((xpix / TILE).floor() as usize).max(6);
+    let tiles_h = ((budget_h / TILE).floor() as usize).max(6);
+
+    let mut map = TileMap::new(tiles_w, tiles_h);
+    for x in 0..tiles_w {
+        map.set(x, 0, true);
+        map.set(x, tiles_h - 1, true);
+    }
+    for y in 0..tiles_h {
+        map.set(0, y, true);
+        map.set(tiles_w - 1, y, true);
+    }
+    // Spawn on the floor, a little in from the left wall.
+    map.spawn = (2.0 * TILE, (tiles_h as f64 - 2.0) * TILE);
+
+    Arena {
+        map,
+        fb_w: tiles_w * TILE as usize,
+        fb_h: tiles_h * TILE as usize,
+        rows,
+        cols,
+    }
+}
+
+/// Keep the player inside the open interior of the box (between the border
+/// tiles). Used after a resize so a shrunk window never traps it in a wall.
+fn clamp_into_arena(p: &mut Player, arena: &Arena) {
+    let min_x = TILE;
+    let min_y = TILE;
+    let max_x = (arena.map.px_w() - TILE - p.w).max(min_x);
+    let max_y = (arena.map.px_h() - TILE - p.h).max(min_y);
+    let cx = p.pos.x.clamp(min_x, max_x);
+    let cy = p.pos.y.clamp(min_y, max_y);
+    if cx != p.pos.x || cy != p.pos.y {
+        p.pos.x = cx;
+        p.pos.y = cy;
+        p.vel = Vec2::ZERO;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Rendering
 // ---------------------------------------------------------------------------
@@ -157,7 +221,50 @@ fn render(fb: &mut Framebuffer, map: &TileMap, rpos: Vec2, player: &Player) {
 }
 
 // ---------------------------------------------------------------------------
-// Live loop
+// Status line (bottom terminal row): "Quit" hint + score + live engine readout
+// ---------------------------------------------------------------------------
+
+fn state_letter(s: State) -> &'static str {
+    match s {
+        State::Grounded => "GROUND",
+        State::Airborne => "AIR",
+        State::WallSliding => "WALL",
+    }
+}
+
+/// Build the bottom status row. Positions to the last row, clears it, and writes
+/// a single line (truncated to the terminal width so it never wraps/scrolls). The
+/// leading `Q` of "Quit" is underlined as the quit affordance.
+fn render_status(buf: &mut String, p: &Player, score: u32, fps: f64, rows: u16, cols: u16) {
+    use std::fmt::Write;
+    let mut plain = String::new();
+    let _ = write!(
+        plain,
+        "Quit  |  Score {score}  |  {}  vx {:>4.0} vy {:>4.0}  |  air {}  |  {fps:>3.0} fps",
+        state_letter(p.state),
+        p.vel.x,
+        p.vel.y,
+        p.air_jumps,
+    );
+    // Truncate to fit (leave 1 col of slack so the cursor never forces a wrap).
+    let maxw = (cols as usize).saturating_sub(1);
+    if plain.len() > maxw {
+        plain.truncate(maxw);
+    }
+
+    buf.clear();
+    let _ = write!(buf, "\x1b[{rows};1H\x1b[2K\x1b[2m", rows = rows); // go to last row, clear, dim
+    if let Some(rest) = plain.strip_prefix('Q') {
+        buf.push_str("\x1b[4mQ\x1b[24m"); // underlined quit affordance
+        buf.push_str(rest);
+    } else {
+        buf.push_str(&plain);
+    }
+    buf.push_str("\x1b[0m");
+}
+
+// ---------------------------------------------------------------------------
+// Live loop — the engine test app: a box arena that fills the terminal window.
 // ---------------------------------------------------------------------------
 
 fn run_live() {
@@ -170,21 +277,18 @@ fn run_live() {
         }
     };
     let kitty_kbd = terminal::probe_kitty_keyboard();
-    if !kitty_kbd {
-        // Not fatal, but variable-jump / clean release won't work well.
-        // (Message shown after teardown via the guard would be cleaner; keep simple.)
-    }
 
-    let map = build_sandbox();
     let fp = FeelParams::default();
-    let mut player = Player::new(map.spawn.0, map.spawn.1);
-    let rw = map.px_w() as usize;
-    let rh = map.px_h() as usize;
-    let mut fb = Framebuffer::new(rw, rh);
+    let mut arena = build_arena(terminal::query_winsize());
+    let mut fb = Framebuffer::new(arena.fb_w, arena.fb_h);
+    let mut player = Player::new(arena.map.spawn.0, arena.map.spawn.1);
     let mut input = Input::new(kitty_kbd);
 
     let mut out: Vec<u8> = Vec::new();
     let mut b64: Vec<u8> = Vec::new();
+    let mut status = String::new();
+    let score: u32 = 0;
+    let mut fps = 60.0_f64;
 
     let sim_dt = 1.0 / 60.0;
     let sim_dt_ns = NS_PER_SEC / 60;
@@ -204,11 +308,30 @@ fn run_live() {
             break;
         }
 
+        // Rebuild the arena to the new window size, keeping the player in bounds.
+        if terminal::take_resize() {
+            arena = build_arena(terminal::query_winsize());
+            fb.resize(arena.fb_w, arena.fb_h);
+            // The window may have shrunk under the player. Clamp it into the open
+            // interior so it's never left embedded in a wall (the axis sweep stops
+            // on contact but won't push out of a pre-existing overlap).
+            clamp_into_arena(&mut player, &arena);
+            prev_pos = player.pos;
+            // The image dimensions changed: drop the old placement and repaint clean.
+            let mut o = std::io::stdout().lock();
+            let _ = o.write_all(kitty::delete_image());
+            let _ = o.write_all(b"\x1b[2J");
+            let _ = o.flush();
+        }
+
         let now = now_ns();
         let mut elapsed = now - prev_t;
         prev_t = now;
         if elapsed > 8 * sim_dt_ns {
             elapsed = 8 * sim_dt_ns;
+        }
+        if elapsed > 0 {
+            fps = fps * 0.9 + (NS_PER_SEC as f64 / elapsed as f64) * 0.1;
         }
         acc += elapsed;
 
@@ -218,7 +341,7 @@ fn run_live() {
         while acc >= sim_dt_ns {
             prev_pos = player.pos;
             player.step(
-                &map,
+                &arena.map,
                 sim_dt,
                 input.axis_x(),
                 pending_jump,
@@ -228,26 +351,22 @@ fn run_live() {
             );
             pending_jump = false; // consumed by the first substep only (no double-fire)
             acc -= sim_dt_ns;
-            if player.pos.y > map.px_h() + 64.0 {
-                player = Player::new(map.spawn.0, map.spawn.1);
+            // Safety net (shouldn't happen in a closed box): respawn if it escapes.
+            if player.pos.y > arena.map.px_h() + 64.0 {
+                player = Player::new(arena.map.spawn.0, arena.map.spawn.1);
                 prev_pos = player.pos;
             }
         }
 
-        if terminal::take_resize() {
-            // We render at a fixed internal resolution; just repaint a clean bg.
-            let mut o = std::io::stdout().lock();
-            let _ = o.write_all(b"\x1b[2J");
-            let _ = o.flush();
-        }
-
         let alpha = acc as f64 / sim_dt_ns as f64;
         let rpos = prev_pos.lerp(player.pos, alpha);
-        render(&mut fb, &map, rpos, &player);
-        kitty::present_rgba(&mut out, rw, rh, &fb.px, &mut b64);
+        render(&mut fb, &arena.map, rpos, &player);
+        kitty::present_rgba(&mut out, arena.fb_w, arena.fb_h, &fb.px, &mut b64);
+        render_status(&mut status, &player, score, fps, arena.rows, arena.cols);
         {
             let mut o = std::io::stdout().lock();
             let _ = o.write_all(&out);
+            let _ = o.write_all(status.as_bytes());
             let _ = o.flush();
         }
 
@@ -380,5 +499,126 @@ fn run_verify(dir: &str) {
         dump_png(dir, "05_walljump", &fb);
     }
 
+    // Scenario 3: the box arena test app — verify a window-sized box is closed,
+    // the player can run the floor, hits a wall, and wall-jumps, all in bounds.
+    {
+        // Synthetic 80x24 window reporting pixels (like Kitty would).
+        let ws = terminal::WinSize { cols: 80, rows: 24, xpix: 800, ypix: 480 };
+        let arena = build_arena(ws);
+        let mut p = Player::new(arena.map.spawn.0, arena.map.spawn.1);
+        let mut fb = Framebuffer::new(arena.fb_w, arena.fb_h);
+        let dt = 1.0 / 60.0;
+        let interior_max_x = arena.map.px_w() - TILE - p.w;
+
+        // settle, then run right into the far wall.
+        for _ in 0..30 {
+            p.step(&arena.map, dt, 0.0, false, false, false, &fp);
+        }
+        let grounded_at_spawn = p.grounded;
+        let mut hit_right_wall = false;
+        let mut max_x: f64 = 0.0;
+        for _ in 0..400 {
+            p.step(&arena.map, dt, 1.0, false, false, false, &fp);
+            max_x = max_x.max(p.pos.x);
+            if p.wall_dir > 0 {
+                hit_right_wall = true;
+            }
+            // INVARIANT: never escapes the box.
+            assert!(
+                p.pos.x >= TILE - 1.0 && p.pos.x <= interior_max_x + 1.0,
+                "player left the arena horizontally: x={}",
+                p.pos.x
+            );
+            assert!(p.pos.y >= 0.0 && p.pos.y <= arena.map.px_h(), "player left vertically: y={}", p.pos.y);
+        }
+        render(&mut fb, &arena.map, p.pos, &p);
+        dump_png(dir, "06_arena_wall", &fb);
+        eprintln!(
+            "  arena {}x{} tiles, fb {}x{}px; grounded@spawn={grounded_at_spawn}, reached x={max_x:.0} (wall@{interior_max_x:.0}), hit_wall={hit_right_wall}",
+            arena.map.w, arena.map.h, arena.fb_w, arena.fb_h
+        );
+        assert!(grounded_at_spawn, "player should spawn standing on the arena floor");
+        assert!(hit_right_wall, "running right should reach the arena wall");
+    }
+
     eprintln!("== all scenarios passed ==");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn arena_is_a_closed_box_sized_to_window() {
+        let ws = terminal::WinSize { cols: 80, rows: 24, xpix: 800, ypix: 480 };
+        let a = build_arena(ws);
+        // reserves one text row: usable height < full height
+        assert!(a.fb_h <= 480 - (480 / 24));
+        // border is solid all the way round; interior corner is open
+        assert!(a.map.is_solid(0, 0));
+        assert!(a.map.is_solid(a.map.w as i32 - 1, a.map.h as i32 - 1));
+        assert!(a.map.is_solid(5, 0) && a.map.is_solid(5, a.map.h as i32 - 1));
+        assert!(a.map.is_solid(0, 3) && a.map.is_solid(a.map.w as i32 - 1, 3));
+        assert!(!a.map.is_solid(3, 3), "interior should be open");
+    }
+
+    #[test]
+    fn arena_falls_back_without_pixel_size() {
+        // Terminals that don't report pixels (xpix/ypix == 0) still get a sane box.
+        let a = build_arena(terminal::WinSize { cols: 80, rows: 24, xpix: 0, ypix: 0 });
+        assert!(a.map.w >= 6 && a.map.h >= 6);
+        assert!(a.fb_w > 0 && a.fb_h > 0);
+    }
+
+    #[test]
+    fn tiny_window_clamps_to_min_box() {
+        let a = build_arena(terminal::WinSize { cols: 1, rows: 1, xpix: 16, ypix: 16 });
+        assert!(a.map.w >= 6 && a.map.h >= 6, "must not produce a degenerate arena");
+    }
+
+    #[test]
+    fn clamp_into_arena_rescues_embedded_player() {
+        let a = build_arena(terminal::WinSize { cols: 40, rows: 12, xpix: 400, ypix: 240 });
+        let mut p = Player::new(0.0, 0.0); // jammed into the top-left corner walls
+        clamp_into_arena(&mut p, &a);
+        assert!(p.pos.x >= TILE && p.pos.y >= TILE, "should be pushed into the interior");
+        assert!(!a.map.overlaps(p.pos.x, p.pos.y, p.w, p.h), "clamped pos must be wall-free");
+        assert_eq!(p.vel, Vec2::ZERO, "clamping should kill leftover velocity");
+    }
+
+    #[test]
+    fn status_line_underlines_quit_and_never_overflows() {
+        let p = Player::new(10.0, 10.0);
+        let mut s = String::new();
+        // narrow terminal: must truncate well within the width, no wrap.
+        render_status(&mut s, &p, 0, 60.0, 24, 20);
+        assert!(s.contains("\x1b[4mQ\x1b[24m"), "Q should be underlined");
+        assert!(s.contains("\x1b[24;1H"), "should position to the last row");
+        // strip escapes; visible text must fit in cols-1.
+        let visible: String = strip_ansi(&s);
+        assert!(visible.len() <= 19, "visible status {:?} exceeds width", visible);
+    }
+
+    // crude ANSI stripper for the width assertion
+    fn strip_ansi(s: &str) -> String {
+        let mut out = String::new();
+        let mut chars = s.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '\x1b' {
+                // skip CSI: ESC [ ... <final letter>
+                if chars.peek() == Some(&'[') {
+                    chars.next();
+                    while let Some(&d) = chars.peek() {
+                        chars.next();
+                        if d.is_ascii_alphabetic() {
+                            break;
+                        }
+                    }
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    }
 }
