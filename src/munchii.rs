@@ -12,6 +12,26 @@ pub struct Anim {
     pub frames: &'static [&'static [&'static str]],
 }
 
+/// Nominal sprite cell size (the standing frames); used to scale the character
+/// consistently across backends.
+pub const W: usize = 19;
+pub const H: usize = 6;
+
+/// Look an animation up by name (falls back to idle).
+pub fn anim(name: &str) -> &'static Anim {
+    ALL.iter().find(|a| a.name == name).unwrap_or(&ALL[0])
+}
+
+/// Beagle palette for a sprite glyph: brown fur, white muzzle/belly, black
+/// nose + eyes. Used by the colored-ASCII backend.
+pub fn beagle_rgb(ch: char) -> (u8, u8, u8) {
+    match ch {
+        '@' | 'o' | '^' | 'x' | 'X' | '-' => (28, 22, 18), // nose / eye — near-black
+        '=' | '_' => (238, 230, 214),                       // muzzle / belly — white
+        _ => (156, 102, 58),                                // fur / ears / legs / tail — brown
+    }
+}
+
 // tail sways, one slow blink
 const IDLE: &[&[&str]] = &[
     &["             __    ", " )         (( o==@ ", " |         (\\_)    ", " /____________\\    ", " \\____________/    ", "  n  n      n  n   "],
@@ -112,9 +132,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_anim_is_a_6_frame_cycle_of_6_row_frames() {
+    fn every_anim_has_nonempty_6_row_frames() {
+        // Frame count is free (animations run their natural length); only the
+        // row height is fixed so frames composite consistently.
         for a in ALL {
-            assert_eq!(a.frames.len(), 6, "{} is not a 6-frame cycle", a.name);
+            assert!(!a.frames.is_empty(), "{} has no frames", a.name);
             for (i, f) in a.frames.iter().enumerate() {
                 assert_eq!(f.len(), 6, "{} frame {i} is not 6 rows", a.name);
             }

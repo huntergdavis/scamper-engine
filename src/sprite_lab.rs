@@ -69,9 +69,10 @@ fn main() {
         buf.push_str("\x1b[H\x1b[2J");
         let _ = write!(
             buf,
-            "\x1b[2;4H\x1b[1mSPRITE LAB\x1b[0m  ::  {}  /  {}  ({} fps)   [{}/{}]",
+            "\x1b[2;4H\x1b[1mSPRITE LAB\x1b[0m  ::  {} / {}   ({} frames @ {} fps)   anim {}/{}",
             set.name,
             anim.name,
+            anim.frames.len(),
             anim.fps,
             ai + 1,
             set.anims.len()

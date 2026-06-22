@@ -2,7 +2,8 @@
 //! rendered to a Kitty terminal. Also a headless `verify` mode that runs scripted
 //! scenarios and dumps PNGs (for development on a box without a Kitty terminal).
 
-use scamper::backend::{AsciiBackend, Backend, KittyBackend, MonoBackend, TextBackend};
+use scamper::backend::{AsciiBackend, Backend, KittyBackend, MonoBackend, Overlay, TextBackend};
+use scamper::munchii;
 use scamper::framebuffer::{Framebuffer, Rgba};
 use scamper::input::{Input, K_ESC, K_HELP, K_N, K_Q, K_TAB, K_Y};
 use scamper::math::Vec2;
@@ -275,8 +276,8 @@ fn state_color(s: State) -> Rgba {
     }
 }
 
-/// Render the whole map (no camera) plus the player at `rpos` (interpolated).
-fn render(fb: &mut Framebuffer, map: &TileMap, rpos: Vec2, player: &Player) {
+/// Render the tile map (no camera, no player) into the framebuffer.
+fn render_arena(fb: &mut Framebuffer, map: &TileMap) {
     fb.clear(SKY);
     let t = TILE as i32;
     for ty in 0..map.h {
@@ -292,28 +293,73 @@ fn render(fb: &mut Framebuffer, map: &TileMap, rpos: Vec2, player: &Player) {
             }
         }
     }
-    // player
-    let px = rpos.x.round() as i32;
-    let py = rpos.y.round() as i32;
-    let pw = player.w as i32;
-    let ph = player.h as i32;
+}
+
+/// Draw the player as a colored box at a *visual* size `vis_w × vis_h` (which may
+/// exceed the collision box), centered on the hitbox. Used by the pixel backends
+/// (kitty/text); the character backends draw the Munchii sprite instead.
+fn draw_player(fb: &mut Framebuffer, rpos: Vec2, player: &Player, vis_w: f64, vis_h: f64) {
+    let cx = rpos.x + player.w / 2.0;
+    let cy = rpos.y + player.h / 2.0;
+    let pw = vis_w.round().max(2.0) as i32;
+    let ph = vis_h.round().max(2.0) as i32;
+    let px = (cx - vis_w / 2.0).round() as i32;
+    let py = (cy - vis_h / 2.0).round() as i32;
     let col = state_color(player.state);
     fb.fill_rect(px, py, pw, ph, col);
     fb.stroke_rect(px, py, pw, ph, Rgba::rgb(255, 245, 210));
     // facing "eye"
-    let eye_x = if player.facing >= 0 { px + pw - 4 } else { px + 1 };
-    fb.fill_rect(eye_x, py + 4, 3, 3, Rgba::rgb(20, 20, 20));
+    let eye_x = if player.facing >= 0 { px + pw - 5 } else { px + 2 };
+    fb.fill_rect(eye_x, py + ph / 4, 3, 3, Rgba::rgb(20, 20, 20));
     // velocity vector (debug overlay)
-    let cx = px + pw / 2;
-    let cy = py + ph / 2;
+    let ccx = px + pw / 2;
+    let ccy = py + ph / 2;
     let vscale = 0.06;
     fb.line(
-        cx,
-        cy,
-        cx + (player.vel.x * vscale) as i32,
-        cy + (player.vel.y * vscale) as i32,
+        ccx,
+        ccy,
+        ccx + (player.vel.x * vscale) as i32,
+        ccy + (player.vel.y * vscale) as i32,
         Rgba::rgb(255, 80, 80),
     );
+}
+
+/// Convenience used by the headless verify harness: arena + player at hitbox size.
+fn render(fb: &mut Framebuffer, map: &TileMap, rpos: Vec2, player: &Player) {
+    render_arena(fb, map);
+    draw_player(fb, rpos, player, player.w, player.h);
+}
+
+/// Mirror one sprite row horizontally (for a left-facing Munchii), swapping the
+/// directional glyphs so the drawing stays coherent.
+fn flip_line(s: &str) -> String {
+    s.chars()
+        .rev()
+        .map(|c| match c {
+            '(' => ')',
+            ')' => '(',
+            '/' => '\\',
+            '\\' => '/',
+            '<' => '>',
+            '>' => '<',
+            other => other,
+        })
+        .collect()
+}
+
+/// Munchii's pose for his current movement state.
+fn pose_for(player: &Player, down_held: bool) -> &'static str {
+    if player.state == State::WallSliding {
+        "wall-slide"
+    } else if !player.grounded {
+        if player.did_double { "double-jump" } else { "jump" }
+    } else if down_held {
+        "crawl"
+    } else if player.vel.x.abs() > 8.0 {
+        "walk"
+    } else {
+        "idle"
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -607,12 +653,38 @@ fn run_live() {
         } else {
             let alpha = acc as f64 / sim_dt_ns as f64;
             let rpos = prev_pos.lerp(player.pos, alpha);
-            render(&mut fb, &arena.map, rpos, &player);
-            // Hand the framebuffer to the active backend, which fills `out` with a
-            // complete frame (scaled image, or text cells). Status/quit-prompt is
-            // appended and the whole thing flushed once.
             let disp_rows = arena.rows.saturating_sub(1);
-            backend.present(&mut out, &fb, arena.cols, disp_rows, full_redraw);
+            render_arena(&mut fb, &arena.map);
+
+            // Munchii's footprint mapped into framebuffer pixels, so the
+            // character is the same size in every backend.
+            let vis_w = munchii::W as f64 / arena.cols.max(1) as f64 * arena.fb_w as f64;
+            let vis_h = munchii::H as f64 / disp_rows.max(1) as f64 * arena.fb_h as f64;
+
+            // Pose by movement state, animate by wall-clock, flip by facing.
+            let anim = munchii::anim(pose_for(&player, input.down_held()));
+            let n = anim.frames.len().max(1);
+            let fi = (now_ns() / (NS_PER_SEC / anim.fps.max(1) as u64)) as usize % n;
+            let lines: Vec<String> = if player.facing < 0 {
+                anim.frames[fi].iter().map(|l| flip_line(l)).collect()
+            } else {
+                anim.frames[fi].iter().map(|s| s.to_string()).collect()
+            };
+
+            if backend.draws_overlay() {
+                // Character backends stamp Munchii, centered on the hitbox.
+                let fw = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0) as i32;
+                let fh = lines.len() as i32;
+                let ccx = rpos.x + player.w / 2.0;
+                let ccy = rpos.y + player.h / 2.0;
+                let col = (ccx / arena.fb_w as f64 * arena.cols as f64).round() as i32 - fw / 2;
+                let row = (ccy / arena.fb_h as f64 * disp_rows as f64).round() as i32 - fh / 2;
+                let ov = Overlay { lines: &lines, col, row };
+                backend.present(&mut out, &fb, arena.cols, disp_rows, full_redraw, Some(&ov));
+            } else {
+                draw_player(&mut fb, rpos, &player, vis_w, vis_h);
+                backend.present(&mut out, &fb, arena.cols, disp_rows, full_redraw, None);
+            }
             full_redraw = false;
             if ui == Ui::ConfirmQuit {
                 render_quit_prompt(&mut status, arena.rows, arena.cols);
