@@ -45,7 +45,17 @@ pub fn rgba_to_rgb_base64(rgba: &[u8], b64: &mut Vec<u8>) {
 }
 
 /// Append the full Kitty transmit+display command(s) for a base64 RGB payload.
-pub fn encode_frame(out: &mut Vec<u8>, width: usize, height: usize, b64: &[u8]) {
+///
+/// When `cols`/`rows` are nonzero, the image is *displayed* scaled to fit that
+/// many terminal cells (`c=`/`r=`), so we can transmit a small internal image and
+/// let the terminal upscale it to fill the window — slashing per-frame bandwidth.
+/// Pass `0, 0` to display at native pixel size.
+pub fn encode_frame(out: &mut Vec<u8>, width: usize, height: usize, cols: usize, rows: usize, b64: &[u8]) {
+    let disp = if cols > 0 && rows > 0 {
+        format!(",c={cols},r={rows}")
+    } else {
+        String::new()
+    };
     let mut off = 0;
     let mut first = true;
     // Always emit at least one command (handles empty/edge sizes gracefully).
@@ -57,7 +67,7 @@ pub fn encode_frame(out: &mut Vec<u8>, width: usize, height: usize, b64: &[u8]) 
         if first {
             out.extend_from_slice(
                 format!(
-                    "\x1b_Ga=T,f=24,i={IMAGE_ID},p={PLACEMENT_ID},s={width},v={height},q=2,C=1,m={m};"
+                    "\x1b_Ga=T,f=24,i={IMAGE_ID},p={PLACEMENT_ID},s={width},v={height}{disp},q=2,C=1,m={m};"
                 )
                 .as_bytes(),
             );
@@ -80,13 +90,15 @@ pub fn present_rgba(
     out: &mut Vec<u8>,
     width: usize,
     height: usize,
+    cols: usize,
+    rows: usize,
     rgba: &[u8],
     scratch: &mut Vec<u8>,
 ) {
     out.clear();
     out.extend_from_slice(b"\x1b[H"); // home cursor; image lands at a fixed anchor
     rgba_to_rgb_base64(rgba, scratch);
-    encode_frame(out, width, height, scratch);
+    encode_frame(out, width, height, cols, rows, scratch);
 }
 
 /// Delete image id=1 and its placements (use on resize/reconfigure).
@@ -124,7 +136,7 @@ mod tests {
         let mut b = Vec::new();
         rgba_to_rgb_base64(&[0xFF, 0x00, 0x00, 0xFF], &mut b);
         let mut out = Vec::new();
-        encode_frame(&mut out, 1, 1, &b);
+        encode_frame(&mut out, 1, 1, 0, 0, &b);
         assert_eq!(out, b"\x1b_Ga=T,f=24,i=1,p=1,s=1,v=1,q=2,C=1,m=0;/wAA\x1b\\");
     }
 
@@ -137,7 +149,7 @@ mod tests {
         rgba_to_rgb_base64(&rgba, &mut b);
         assert_eq!(b.len(), px * 4); // 4 chars/px
         let mut out = Vec::new();
-        encode_frame(&mut out, px, 1, &b);
+        encode_frame(&mut out, px, 1, 0, 0, &b);
         // first command has control keys + m=1, last has m=0
         let s = String::from_utf8_lossy(&out);
         assert!(s.contains("a=T,f=24,i=1,p=1"));

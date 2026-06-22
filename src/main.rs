@@ -78,7 +78,7 @@ fn run_gfxtest() {
 
     let mut out = Vec::new();
     let mut b64 = Vec::new();
-    kitty::present_rgba(&mut out, w, h, &fb.px, &mut b64);
+    kitty::present_rgba(&mut out, w, h, 0, 0, &fb.px, &mut b64);
     dlog!("gfxtest: image {w}x{h}px, encoded {} bytes (b64 {}), winsize={ws:?}", out.len(), b64.len());
     {
         let mut o = std::io::stdout().lock();
@@ -196,6 +196,12 @@ struct Arena {
     cols: u16,
 }
 
+/// Cap on the larger side of the *internal* render image, in pixels. The image
+/// is transmitted at this resolution and the terminal scales it up to fill the
+/// window — so per-frame bandwidth is bounded regardless of window size. (A
+/// full-window native image is megabytes/frame; this keeps it well under 1 MB.)
+const MAX_INTERNAL_DIM: f64 = 320.0;
+
 fn build_arena(ws: terminal::WinSize) -> Arena {
     let cols = ws.cols.max(20);
     let rows = ws.rows.max(6);
@@ -206,10 +212,14 @@ fn build_arena(ws: terminal::WinSize) -> Arena {
         (cols as f64 * 8.0, rows as f64 * 16.0)
     };
     let cell_h = ypix / rows as f64;
-    let budget_h = (ypix - cell_h).max(cell_h); // reserve the bottom row for status
-    // Tiles spanning the playfield; the box is the outer ring. Clamp to a sane min.
-    let tiles_w = ((xpix / TILE).floor() as usize).max(6);
-    let tiles_h = ((budget_h / TILE).floor() as usize).max(6);
+    // Play area in window pixels: full width, minus the reserved bottom status row.
+    let play_w = xpix;
+    let play_h = (ypix - cell_h).max(cell_h);
+    // Downscale to a modest internal resolution (aspect preserved), then snap to
+    // whole tiles. The terminal upscales the result back to the play area.
+    let scale = (play_w.max(play_h) / MAX_INTERNAL_DIM).max(1.0);
+    let tiles_w = ((play_w / scale / TILE).round() as usize).max(6);
+    let tiles_h = ((play_h / scale / TILE).round() as usize).max(6);
 
     let mut map = TileMap::new(tiles_w, tiles_h);
     for x in 0..tiles_w {
@@ -370,8 +380,8 @@ fn run_live() {
     let mut player = Player::new(arena.map.spawn.0, arena.map.spawn.1);
     let mut input = Input::new(kitty_kbd);
     dlog!(
-        "live: kitty_kbd={kitty_kbd} winsize={ws0:?} -> arena {}x{} tiles, image {}x{}px (px buf {} bytes), spawn=({:.0},{:.0})",
-        arena.map.w, arena.map.h, arena.fb_w, arena.fb_h, fb.px.len(), arena.map.spawn.0, arena.map.spawn.1
+        "live: kitty_kbd={kitty_kbd} winsize={ws0:?} -> arena {}x{} tiles, internal image {}x{}px scaled across {}x{} cells, spawn=({:.0},{:.0})",
+        arena.map.w, arena.map.h, arena.fb_w, arena.fb_h, arena.cols, arena.rows.saturating_sub(1), arena.map.spawn.0, arena.map.spawn.1
     );
 
     let mut out: Vec<u8> = Vec::new();
@@ -454,7 +464,18 @@ fn run_live() {
         let alpha = acc as f64 / sim_dt_ns as f64;
         let rpos = prev_pos.lerp(player.pos, alpha);
         render(&mut fb, &arena.map, rpos, &player);
-        kitty::present_rgba(&mut out, arena.fb_w, arena.fb_h, &fb.px, &mut b64);
+        // Display the small internal image scaled across the play area (all rows
+        // but the status row), so the terminal upscales it to fill the window.
+        let disp_rows = arena.rows.saturating_sub(1) as usize;
+        kitty::present_rgba(
+            &mut out,
+            arena.fb_w,
+            arena.fb_h,
+            arena.cols as usize,
+            disp_rows,
+            &fb.px,
+            &mut b64,
+        );
         render_status(&mut status, &player, score, fps, arena.rows, arena.cols);
         {
             let mut o = std::io::stdout().lock();
