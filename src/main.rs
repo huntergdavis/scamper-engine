@@ -78,7 +78,7 @@ fn run_gfxtest() {
 
     let mut out = Vec::new();
     let mut b64 = Vec::new();
-    kitty::present_rgba(&mut out, w, h, 0, 0, &fb.px, &mut b64);
+    kitty::present_rgba(&mut out, kitty::BUF_A, w, h, 0, 0, &fb.px, &mut b64);
     dlog!("gfxtest: image {w}x{h}px, encoded {} bytes (b64 {}), winsize={ws:?}", out.len(), b64.len());
     {
         let mut o = std::io::stdout().lock();
@@ -399,6 +399,7 @@ fn run_live() {
     let mut prev_pos = player.pos;
     let mut pending_jump = false; // latch a press until a sim substep consumes it
     let mut frame: u64 = 0;
+    let mut draw_id = kitty::BUF_A; // double-buffer toggle (BUF_A/BUF_B)
 
     loop {
         if terminal::quit_requested() {
@@ -420,9 +421,9 @@ fn run_live() {
             // on contact but won't push out of a pre-existing overlap).
             clamp_into_arena(&mut player, &arena);
             prev_pos = player.pos;
-            // The image dimensions changed: drop the old placement and repaint clean.
+            // The image dimensions changed: drop both buffers and repaint clean.
             let mut o = std::io::stdout().lock();
-            let _ = o.write_all(kitty::delete_image());
+            let _ = o.write_all(kitty::delete_all());
             let _ = o.write_all(b"\x1b[2J");
             let _ = o.flush();
         }
@@ -466,9 +467,11 @@ fn run_live() {
         render(&mut fb, &arena.map, rpos, &player);
         // Display the small internal image scaled across the play area (all rows
         // but the status row), so the terminal upscales it to fill the window.
+        // Double-buffer the image id so swapping frames never shows a blank.
         let disp_rows = arena.rows.saturating_sub(1) as usize;
         kitty::present_rgba(
             &mut out,
+            draw_id,
             arena.fb_w,
             arena.fb_h,
             arena.cols as usize,
@@ -476,6 +479,7 @@ fn run_live() {
             &fb.px,
             &mut b64,
         );
+        kitty::append_delete(&mut out, kitty::BUF_A + kitty::BUF_B - draw_id); // remove the other buffer
         render_status(&mut status, &player, score, fps, arena.rows, arena.cols);
         {
             let mut o = std::io::stdout().lock();
@@ -483,6 +487,7 @@ fn run_live() {
             let _ = o.write_all(status.as_bytes());
             let _ = o.flush();
         }
+        draw_id = kitty::BUF_A + kitty::BUF_B - draw_id; // ping-pong for the next frame
 
         // Log the first frame's encoded size (the bandwidth tell) and a periodic
         // heartbeat so a hang/stall is visible in the log.

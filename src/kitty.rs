@@ -1,9 +1,11 @@
 //! Kitty graphics protocol frame encoder (PROJECT_PLAN.md §4.4).
 //!
 //! - Transmit+display (`a=T`) RGB24 (`f=24`), alpha stripped after compositing.
-//! - Pinned image id `i=1`, placement `p=1` → same-id re-transmit is self-cleaning
-//!   (terminal frees the prior image+placement) so there's no leak and no flicker;
-//!   we never send a per-frame delete.
+//! - Double-buffered animation: alternate image id `BUF_A`/`BUF_B` each frame and
+//!   delete the previous id *after* transmitting the new one. Re-transmitting a
+//!   single id leaves it momentarily blank during the swap, which the terminal can
+//!   render as an every-other-frame black flash; ping-ponging keeps a complete
+//!   image on screen at all times.
 //! - `q=2` suppresses *failure* responses (NOT all — `q=1` suppresses OK); we also
 //!   never solicit an OK, and the input parser discards stray `_G` replies.
 //! - `C=1` keeps the cursor put.
@@ -14,6 +16,10 @@
 pub const IMAGE_ID: u32 = 1;
 pub const PLACEMENT_ID: u32 = 1;
 const CHUNK: usize = 4096;
+
+/// The two image ids used for double-buffered animation (see `present_rgba`).
+pub const BUF_A: u32 = 1;
+pub const BUF_B: u32 = 2;
 
 const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
@@ -50,7 +56,15 @@ pub fn rgba_to_rgb_base64(rgba: &[u8], b64: &mut Vec<u8>) {
 /// many terminal cells (`c=`/`r=`), so we can transmit a small internal image and
 /// let the terminal upscale it to fill the window — slashing per-frame bandwidth.
 /// Pass `0, 0` to display at native pixel size.
-pub fn encode_frame(out: &mut Vec<u8>, width: usize, height: usize, cols: usize, rows: usize, b64: &[u8]) {
+pub fn encode_frame(
+    out: &mut Vec<u8>,
+    image_id: u32,
+    width: usize,
+    height: usize,
+    cols: usize,
+    rows: usize,
+    b64: &[u8],
+) {
     let disp = if cols > 0 && rows > 0 {
         format!(",c={cols},r={rows}")
     } else {
@@ -67,7 +81,7 @@ pub fn encode_frame(out: &mut Vec<u8>, width: usize, height: usize, cols: usize,
         if first {
             out.extend_from_slice(
                 format!(
-                    "\x1b_Ga=T,f=24,i={IMAGE_ID},p={PLACEMENT_ID},s={width},v={height}{disp},q=2,C=1,m={m};"
+                    "\x1b_Ga=T,f=24,i={image_id},p={image_id},s={width},v={height}{disp},q=2,C=1,m={m};"
                 )
                 .as_bytes(),
             );
@@ -84,10 +98,17 @@ pub fn encode_frame(out: &mut Vec<u8>, width: usize, height: usize, cols: usize,
     }
 }
 
-/// Convenience: home the cursor and encode a full RGBA frame into `out`,
-/// using `scratch` as the reusable base64 buffer.
+/// Convenience: home the cursor and encode a full RGBA frame into `out` under
+/// `image_id`, using `scratch` as the reusable base64 buffer.
+///
+/// For flicker-free animation, alternate `image_id` between `BUF_A`/`BUF_B` each
+/// frame and `append_delete(out, other_id)` afterward: the new image is fully
+/// transmitted before the previous one is removed, so the terminal always has a
+/// complete image to show (re-transmitting a single id leaves it momentarily
+/// blank mid-swap → every-other-frame black flicker).
 pub fn present_rgba(
     out: &mut Vec<u8>,
+    image_id: u32,
     width: usize,
     height: usize,
     cols: usize,
@@ -98,7 +119,12 @@ pub fn present_rgba(
     out.clear();
     out.extend_from_slice(b"\x1b[H"); // home cursor; image lands at a fixed anchor
     rgba_to_rgb_base64(rgba, scratch);
-    encode_frame(out, width, height, cols, rows, scratch);
+    encode_frame(out, image_id, width, height, cols, rows, scratch);
+}
+
+/// Append a delete of `image_id` (and its placements) to `out`.
+pub fn append_delete(out: &mut Vec<u8>, image_id: u32) {
+    out.extend_from_slice(format!("\x1b_Ga=d,d=i,i={image_id}\x1b\\").as_bytes());
 }
 
 /// Delete image id=1 and its placements (use on resize/reconfigure).
@@ -136,8 +162,30 @@ mod tests {
         let mut b = Vec::new();
         rgba_to_rgb_base64(&[0xFF, 0x00, 0x00, 0xFF], &mut b);
         let mut out = Vec::new();
-        encode_frame(&mut out, 1, 1, 0, 0, &b);
+        encode_frame(&mut out, 1, 1, 1, 0, 0, &b);
         assert_eq!(out, b"\x1b_Ga=T,f=24,i=1,p=1,s=1,v=1,q=2,C=1,m=0;/wAA\x1b\\");
+    }
+
+    #[test]
+    fn second_buffer_uses_its_own_id_and_scaled_placement() {
+        // Frame on BUF_B, scaled to 40x12 cells — must address i=2,p=2 and carry c/r.
+        let mut b = Vec::new();
+        rgba_to_rgb_base64(&[0x10, 0x20, 0x30, 0xFF], &mut b);
+        let mut out = Vec::new();
+        encode_frame(&mut out, BUF_B, 1, 1, 40, 12, &b);
+        let s = String::from_utf8_lossy(&out);
+        assert!(s.contains("i=2,p=2"), "should use the second buffer id: {s:?}");
+        assert!(s.contains("c=40,r=12"), "should carry scaled placement: {s:?}");
+    }
+
+    #[test]
+    fn append_delete_targets_the_given_id() {
+        let mut out = Vec::new();
+        append_delete(&mut out, BUF_A);
+        assert_eq!(out, b"\x1b_Ga=d,d=i,i=1\x1b\\");
+        // the ping-pong "other buffer" identity: A+B-id flips 1<->2
+        assert_eq!(BUF_A + BUF_B - BUF_A, BUF_B);
+        assert_eq!(BUF_A + BUF_B - BUF_B, BUF_A);
     }
 
     #[test]
@@ -149,7 +197,7 @@ mod tests {
         rgba_to_rgb_base64(&rgba, &mut b);
         assert_eq!(b.len(), px * 4); // 4 chars/px
         let mut out = Vec::new();
-        encode_frame(&mut out, px, 1, 0, 0, &b);
+        encode_frame(&mut out, 1, px, 1, 0, 0, &b);
         // first command has control keys + m=1, last has m=0
         let s = String::from_utf8_lossy(&out);
         assert!(s.contains("a=T,f=24,i=1,p=1"));
