@@ -1,19 +1,19 @@
 # Scamper
 
 ```
-     .-""-.            .-""-.
-    /      \          /      \
-   |        |   /\   |        |
-   |        |  /o o\ |        |
-   |        | ( -- ) |        |
-   |        |  \__/  |        |
-    \       |        |       /
-     \      |        |      /
-      '.    |        |    .'
-        '-._|        |_.-'
-            '--------'
-         m u n c h i i
+         .--.             .---.
+        /:.  '.         .' ..  '._.---.
+       /:::-.  \.-"""-;` .-:::.     .::\
+      /::'|  `\/  _ _  \'   `\:'   ::::|
+  __.'    |   /  (o|o)  \     `'.   ':/
+ /    .:. /   |   ___   |        '---'
+|    ::::'   /:  (._.) .:\          m u n c h i i
+\    .='    |:'        :::|
+ `""`       \     .-.   ':/
+             '---`|I|`---'
+                  '-'
 ```
+<sub>beagle by Joan Stark (jgs), via <a href="https://www.asciiart.eu/animals/dogs">asciiart.eu</a></sub>
 
 A local-first **2D platformer engine for the terminal**, with tight,
 N++-flavored movement and a **swappable graphics stack** — from crisp Kitty
