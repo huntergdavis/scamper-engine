@@ -1,13 +1,13 @@
 #!/data/data/com.termux/files/usr/bin/bash
-# Build and launch Scamper. Pass-through args go to the game binary, so:
-#   ./run.sh                 # play (the box-arena test app)
+# Build and launch Scamper.
+#   ./run.sh                   # play the game (default)
+#   ./run.sh -i                # interactive menu (game / sprite viewer / tools)
+#   ./run.sh sprites           # sprite-lab: view sprite animations
 #   ./run.sh verify ./scratch  # headless: scripted scenarios + PNG dumps
-#   ./run.sh info            # print the detected terminal size and exit
-#   ./run.sh sprites         # sprite-lab: view sprite animations
+#   ./run.sh info | gfxtest | shot
 #
-# Needs a terminal speaking the Kitty graphics + keyboard protocols
-# (Kitty, Ghostty, or foot). Not tmux, not Konsole. (The text backends and the
-# sprite-lab run in any terminal.)
+# The kitty backend needs a terminal speaking the Kitty graphics + keyboard
+# protocols (Kitty, Ghostty, foot); the text backends run anywhere. Not tmux.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -21,24 +21,62 @@ if [[ "${SCAMP_DEBUG:-0}" == "1" ]]; then
     profile_dir=debug
 fi
 
-# `./run.sh sprites` launches the standalone sprite-lab tool instead of the game.
-if [[ "${1:-}" == "sprites" || "${1:-}" == "lab" || "${1:-}" == "sprite-lab" ]]; then
-    cargo build "${profile_args[@]}" --bin sprite-lab
-    exec "target/$profile_dir/sprite-lab"
-fi
+tmux_warn() {
+    [[ -n "${TMUX:-}" ]] && echo "warning: running under tmux — Kitty graphics won't pass through." >&2
+    return 0
+}
 
-cargo build "${profile_args[@]}" --bin scamp
+# The game with the dev --debug log flag (unless SCAMP_NODEBUG=1).
+run_game() {
+    local extra=()
+    [[ "${SCAMP_NODEBUG:-0}" != "1" ]] && extra+=(--debug)
+    tmux_warn
+    "target/$profile_dir/scamp" "${extra[@]}"
+}
 
-# A heads-up (non-fatal) if we're somewhere graphics won't work.
-if [[ -n "${TMUX:-}" ]]; then
-    echo "warning: running under tmux — Kitty graphics won't pass through." >&2
-fi
+interactive_menu() {
+    cargo build "${profile_args[@]}"
+    while true; do
+        printf '\n  \033[1mSCAMPER\033[0m  \033[2m(munchii)\033[0m\n\n'
+        printf '    1  play the game\n'
+        printf '    2  sprite viewer  (Tab cycles backends)\n'
+        printf '    3  headless verify  (PNG dumps -> ./scratch)\n'
+        printf '    4  graphics probe  (gfxtest)\n'
+        printf '    5  screenshot to text  (shot)\n'
+        printf '    q  quit\n\n'
+        read -rp '  > ' choice
+        case "$choice" in
+            1 | g | game | "") run_game ;;
+            2 | s | sprites) "target/$profile_dir/sprite-lab" ;;
+            3 | v | verify) "target/$profile_dir/scamp" verify ./scratch ;;
+            4 | x | gfxtest) "target/$profile_dir/scamp" gfxtest ;;
+            5 | shot) "target/$profile_dir/scamp" shot ;;
+            q | Q | quit) break ;;
+            *) echo "  ? unknown choice: $choice" ;;
+        esac
+    done
+}
 
-# Default to --debug logging (to ./scamp.log) during development. Drop this once
-# we cut a release. Skip auto-adding it if the caller already passed --debug.
-extra=()
-if [[ "${SCAMP_NODEBUG:-0}" != "1" ]] && [[ ! " $* " == *" --debug "* ]]; then
-    extra+=(--debug)
-fi
-
-exec "target/$profile_dir/scamp" "$@" "${extra[@]}"
+# -i / --interactive: the menu. Otherwise dispatch directly (back-compatible).
+case "${1:-}" in
+    -i | --interactive | -interactive)
+        interactive_menu
+        ;;
+    sprites | lab | sprite-lab)
+        cargo build "${profile_args[@]}" --bin sprite-lab
+        exec "target/$profile_dir/sprite-lab"
+        ;;
+    "")
+        cargo build "${profile_args[@]}" --bin scamp
+        run_game
+        ;;
+    *)
+        cargo build "${profile_args[@]}" --bin scamp
+        tmux_warn
+        extra=()
+        if [[ "${SCAMP_NODEBUG:-0}" != "1" ]] && [[ ! " $* " == *" --debug "* ]]; then
+            extra+=(--debug)
+        fi
+        exec "target/$profile_dir/scamp" "$@" "${extra[@]}"
+        ;;
+esac
