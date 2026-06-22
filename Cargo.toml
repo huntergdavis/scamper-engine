@@ -1,0 +1,21 @@
+[package]
+name = "scamper"
+version = "0.1.0"
+edition = "2021"
+description = "A terminal 2D platformer engine rendering via the Kitty graphics protocol"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "scamper"
+path = "src/lib.rs"
+
+[[bin]]
+name = "scamp"
+path = "src/main.rs"
+
+[dependencies]
+libc = "0.2"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
