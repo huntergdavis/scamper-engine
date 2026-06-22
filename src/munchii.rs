@@ -42,6 +42,16 @@ const JUMP: &[&[&str]] = &[
     &["           \\| |/   ", "           ( o==@  ", "           (\\_)    ", "   \\______/        ", "    \\____/         ", "   n      n        "],
 ];
 
+// double jump: the second jump fires a subtle fart puff below that propels him
+const DBLJUMP: &[&[&str]] = &[
+    &["    \\(   )/  ", "    ( o==@   ", "    (\\_)     ", "   \\_____/   ", "    u   u    ", "   (° °)     "],
+    &["    /(   )\\  ", "    ( o==@   ", "    (\\_)     ", "   \\_____/   ", "    u   u    ", "   ~ o ~     "],
+    &["    \\(   )/  ", "    ( o==@   ", "    (\\_)     ", "   \\_____/   ", "    u   u    ", "    ' '      "],
+    &["    /(   )\\  ", "    ( o==@   ", "    (\\_)     ", "   \\_____/   ", "    u   u    ", "     .       "],
+    &["    \\(   )/  ", "    ( o==@   ", "    (\\_)     ", "   \\_____/   ", "    u   u    ", "             "],
+    &["     \\| |/   ", "    ( o==@   ", "    (\\_)     ", "   \\_____/   ", "    u   u    ", "             "],
+];
+
 // low + compact: head out front, short body, back feet + front feet + tail
 const CRAWL: &[&[&str]] = &[
     &["                   ", "                   ", "            __     ", " )    ___(( o==@   ", " |       (\\_)      ", "   w  w    n  n    "],
@@ -53,14 +63,15 @@ const CRAWL: &[&[&str]] = &[
 ];
 
 // upright, pressed to the wall (renderer flips him to face it); scuff/spark
-// puffs fly off his feet and rise as he slides down — no rotation needed
+// puffs fly off his feet on the back (wall) side and rise as he slides — the
+// sprite faces right, so sparks sit on the left and flip with him. No rotation.
 const WALLSLIDE: &[&[&str]] = &[
     &["             __    ", "           (( o==@ ", "           (\\_)    ", "  /__________\\     ", "  \\__________/     ", "   n  n     n  n   "],
-    &["             __    ", "           (( o==@ ", "           (\\_)    ", "  /__________\\     ", "  \\__________/     ", "   n  n     n  n*  "],
-    &["             __    ", "           (( o==@ ", "           (\\_)    ", "  /__________\\     ", "  \\__________/   * ", "   n  n     n  n.  "],
-    &["             __    ", "           (( o==@ ", "           (\\_)    ", "  /__________\\   ° ", "  \\__________/  '  ", "   n  n     n  n   "],
-    &["             __    ", "           (( o==@ ", "           (\\_)    ", "  /__________\\  '  ", "  \\__________/   , ", "   n  n     n  n   "],
-    &["             __    ", "           (( o==@ ", "           (\\_)    ", "  /__________\\     ", "  \\__________/     ", "   n  n     n  n . "],
+    &["             __    ", "           (( o==@ ", "           (\\_)    ", "  /__________\\     ", "  \\__________/     ", " * n  n     n  n   "],
+    &["             __    ", "           (( o==@ ", "           (\\_)    ", "  /__________\\     ", "* \\__________/     ", " . n  n     n  n   "],
+    &["             __    ", "           (( o==@ ", "           (\\_)    ", "° /__________\\     ", " '\\__________/     ", "   n  n     n  n   "],
+    &["             __    ", "           (( o==@ ", "           (\\_)    ", " '/__________\\     ", ", \\__________/     ", "   n  n     n  n   "],
+    &["             __    ", "           (( o==@ ", "           (\\_)    ", "  /__________\\     ", "  \\__________/     ", ".  n  n     n  n   "],
 ];
 
 // big fast tail wag, steady eye (no blink)
@@ -89,6 +100,7 @@ pub const ALL: &[Anim] = &[
     Anim { name: "idle", fps: 4, frames: IDLE },
     Anim { name: "walk", fps: 9, frames: WALK },
     Anim { name: "jump", fps: 9, frames: JUMP },
+    Anim { name: "double-jump", fps: 8, frames: DBLJUMP },
     Anim { name: "crawl", fps: 7, frames: CRAWL },
     Anim { name: "wall-slide", fps: 6, frames: WALLSLIDE },
     Anim { name: "happy", fps: 14, frames: HAPPY },
