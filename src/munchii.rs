@@ -3,8 +3,8 @@
 //! Each frame is 6 text rows on a fixed grid (built bottom-up: feet, two body
 //! rows, head+tail, ears+tail-tip), so frames swap without jumping. Posing a
 //! behaviour is just nudging rows — the tail's first column carries mood, the
-//! ears carry health. The `ascii`/`mono` backends draw these directly; the
-//! higher tiers (8-bit, cartoon) are separate, sharper assets.
+//! parachute ears carry health. The `ascii`/`mono` backends draw these directly;
+//! the higher tiers (8-bit, cartoon) are separate, sharper assets.
 
 pub struct Anim {
     pub name: &'static str,
@@ -12,147 +12,177 @@ pub struct Anim {
     pub frames: &'static [&'static [&'static str]],
 }
 
-// moving right: legs shuffle, tail wags
+// moving right: legs shuffle, tail wags, parachute ears
 const WALK: &[&[&str]] = &[
     &[
-        "             __   ",
-        " )          ( o==@",
-        " |          (_,   ",
-        " /____________\\   ",
-        " \\____________/   ",
-        "  n  n      n  n  ",
+        "             __    ",
+        " )         (( o==@ ",
+        " |         (\\_)    ",
+        " /____________\\    ",
+        " \\____________/    ",
+        "  n  n      n  n   ",
     ],
     &[
-        "             __   ",
-        " |          ( o==@",
-        " |          (_,   ",
-        " /____________\\   ",
-        " \\____________/   ",
-        "   n  n    n  n   ",
+        "             __    ",
+        " |         (( o==@ ",
+        " |         (\\_)    ",
+        " /____________\\    ",
+        " \\____________/    ",
+        "   n  n    n  n    ",
     ],
     &[
-        "             __   ",
-        " /          ( o==@",
-        " |          (_,   ",
-        " /____________\\   ",
-        " \\____________/   ",
-        "  n   n    n   n  ",
+        "             __    ",
+        " /         (( o==@ ",
+        " |         (\\_)    ",
+        " /____________\\    ",
+        " \\____________/    ",
+        "  n   n    n   n   ",
     ],
     &[
-        "             __   ",
-        " |          ( o==@",
-        " |          (_,   ",
-        " /____________\\   ",
-        " \\____________/   ",
-        " n  n      n  n   ",
+        "             __    ",
+        " |         (( o==@ ",
+        " |         (\\_)    ",
+        " /____________\\    ",
+        " \\____________/    ",
+        " n  n      n  n    ",
     ],
 ];
 
 // tail sways, slow blink
 const IDLE: &[&[&str]] = &[
     &[
-        "             __   ",
-        " )          ( o==@",
-        " |          (_,   ",
-        " /____________\\   ",
-        " \\____________/   ",
-        "  n  n      n  n  ",
+        "             __    ",
+        " )         (( o==@ ",
+        " |         (\\_)    ",
+        " /____________\\    ",
+        " \\____________/    ",
+        "  n  n      n  n   ",
     ],
     &[
-        "             __   ",
-        " \\          ( o==@",
-        "  \\         (_,   ",
-        " /____________\\   ",
-        " \\____________/   ",
-        "  n  n      n  n  ",
+        "             __    ",
+        " \\         (( o==@ ",
+        "  \\        (\\_)    ",
+        " /____________\\    ",
+        " \\____________/    ",
+        "  n  n      n  n   ",
     ],
     &[
-        "             __   ",
-        " )          ( -==@",
-        " |          (_,   ",
-        " /____________\\   ",
-        " \\____________/   ",
-        "  n  n      n  n  ",
+        "             __    ",
+        " )         (( -==@ ",
+        " |         (\\_)    ",
+        " /____________\\    ",
+        " \\____________/    ",
+        "  n  n      n  n   ",
     ],
 ];
 
-// ears up, tail straight up, eye wide, feet tucked
-const JUMP: &[&[&str]] = &[&[
-    " |          \\\\ // ",
-    " |          ( O==@",
-    "            (_,   ",
-    "  \\________/      ",
-    "   \\______/       ",
-    "   u      u       ",
-]];
+// ears fling up like a parachute catching air, head forward, feet tucked
+const JUMP: &[&[&str]] = &[
+    &[
+        "          \\(   )/  ",
+        "           ( o==@  ",
+        "           (\\_)    ",
+        "   \\______/        ",
+        "    \\____/         ",
+        "    u    u         ",
+    ],
+    &[
+        "          /(   )\\  ",
+        "           ( o==@  ",
+        "           (\\_)    ",
+        "   \\______/        ",
+        "    \\____/         ",
+        "    u    u         ",
+    ],
+];
 
-// head sinks into a flat wide body, phat + low, tiny feet shuffle
+// head tucked low into a flat body — phat and low — feet shuffle
 const CRAWL: &[&[&str]] = &[
     &[
-        "                 ",
-        "        ____     ",
-        " )    _( o==@_   ",
-        " |   /  (_,    \\ ",
-        "     \\_________/ ",
-        "      w  w   w w ",
+        "                   ",
+        "      ____         ",
+        " )  _(o==@_        ",
+        " | / (\\_)  \\       ",
+        "   \\_______/       ",
+        "    w w  w w       ",
     ],
     &[
-        "                 ",
-        "        ____     ",
-        " )    _( o==@_   ",
-        " |   /  (_,    \\ ",
-        "     \\_________/ ",
-        "     w   w  w  w ",
+        "                   ",
+        "      ____         ",
+        " )  _(o==@_        ",
+        " | / (\\_)  \\       ",
+        "   \\_______/       ",
+        "     w  w w w      ",
     ],
 ];
 
-// pressed to a wall (right), ears + tail streaming up in the slide
+// turned SIDEWAYS, splatted against the right wall, feet splayed
 const WALLSLIDE: &[&[&str]] = &[
     &[
-        "        __    |",
-        "     ( o==@   |",
-        "     (_,`     |",
-        "   /________  |",
-        "   \\________  |",
-        "    n    n    |",
+        "                  |",
+        "        n  n      |",
+        "    ___           |",
+        "   (o=======@_____|",
+        "    (\\_)          |",
+        "        n  n      |",
     ],
     &[
-        "        __   ~|",
-        "     ( o==@   |",
-        "     (_,`    ~|",
-        "   /________  |",
-        "   \\________ ~|",
-        "    n   n     |",
+        "                 ~|",
+        "        n n       |",
+        "    ___          ~|",
+        "   (o=======@_____|",
+        "    (\\_)         ~|",
+        "        n n      ~|",
     ],
 ];
 
-// emotions (ears = health)
-const HAPPY: &[&[&str]] = &[&[
-    "            __   ",
-    " /         ((o==@",
-    " |         ((_,  ",
-    " /____________\\  ",
-    " \\____________/  ",
-    "  n  n      n  n ",
-]];
+// happy: big fast tail wag (and an excited eye on the up-beat)
+const HAPPY: &[&[&str]] = &[
+    &[
+        "             __    ",
+        " /         (( o==@ ",
+        "  /        (\\_)    ",
+        " /____________\\    ",
+        " \\____________/    ",
+        "  n  n      n  n   ",
+    ],
+    &[
+        "             __    ",
+        " |         (( ^==@ ",
+        " |         (\\_)    ",
+        " /____________\\    ",
+        " \\____________/    ",
+        "  n  n      n  n   ",
+    ],
+    &[
+        "             __    ",
+        " \\         (( o==@ ",
+        "  \\        (\\_)    ",
+        " /____________\\    ",
+        " \\____________/    ",
+        "  n  n      n  n   ",
+    ],
+];
 
+// hurt: short droopy ears, sad eye, tail dead-still (no wag)
 const HURT: &[&[&str]] = &[&[
-    "            __   ",
-    " ,         ( x==@",
-    "           (.    ",
-    " /____________\\  ",
-    " \\____________/  ",
-    "  n  n      n  n ",
+    "            __     ",
+    " ,         ( x==@  ",
+    "           (.      ",
+    " /____________\\    ",
+    " \\____________/    ",
+    "  n  n      n  n   ",
 ]];
 
-/// All animations, in preview order.
+/// All animations, in preview order. fps doubles as personality: happy wags
+/// fast, hurt holds dead-still.
 pub const ALL: &[Anim] = &[
     Anim { name: "idle", fps: 2, frames: IDLE },
     Anim { name: "walk", fps: 6, frames: WALK },
-    Anim { name: "jump", fps: 3, frames: JUMP },
+    Anim { name: "jump", fps: 4, frames: JUMP },
     Anim { name: "crawl", fps: 4, frames: CRAWL },
     Anim { name: "wall-slide", fps: 5, frames: WALLSLIDE },
-    Anim { name: "happy", fps: 1, frames: HAPPY },
+    Anim { name: "happy", fps: 8, frames: HAPPY },
     Anim { name: "hurt", fps: 1, frames: HURT },
 ];
 
@@ -172,7 +202,6 @@ mod tests {
 
     #[test]
     fn frames_within_an_anim_share_width() {
-        // equal-width rows keep the animation from jittering horizontally.
         for a in ALL {
             let w = a.frames[0].iter().map(|l| l.chars().count()).max().unwrap();
             for f in a.frames {
