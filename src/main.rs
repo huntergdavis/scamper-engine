@@ -260,6 +260,25 @@ fn clamp_into_arena(p: &mut Player, arena: &Arena) {
     }
 }
 
+/// Munchii's on-screen footprint in framebuffer pixels (his sprite-cell size
+/// mapped through the current arena's cell↔pixel scale). The player's collision
+/// box is set to this so the hitbox matches the drawn dog at every backend.
+fn munchii_box(arena: &Arena) -> (f64, f64) {
+    let disp_rows = arena.rows.saturating_sub(1).max(1) as f64;
+    let w = munchii::W as f64 / arena.cols.max(1) as f64 * arena.fb_w as f64;
+    let h = munchii::H as f64 / disp_rows * arena.fb_h as f64;
+    (w.max(8.0), h.max(8.0))
+}
+
+/// Resize the player's hitbox to Munchii's footprint and reseat it onto the
+/// floor / inside the box.
+fn fit_player_to_munchii(p: &mut Player, arena: &Arena) {
+    let (w, h) = munchii_box(arena);
+    p.w = w;
+    p.h = h;
+    clamp_into_arena(p, arena);
+}
+
 // ---------------------------------------------------------------------------
 // Rendering
 // ---------------------------------------------------------------------------
@@ -491,6 +510,7 @@ fn run_live() {
     let mut arena = build_arena(ws0);
     let mut fb = Framebuffer::new(arena.fb_w, arena.fb_h);
     let mut player = Player::new(arena.map.spawn.0, arena.map.spawn.1);
+    fit_player_to_munchii(&mut player, &arena);
     let mut input = Input::new(kitty_kbd);
     dlog!(
         "live: kitty_kbd={kitty_kbd} winsize={ws0:?} -> arena {}x{} tiles, internal image {}x{}px scaled across {}x{} cells, spawn=({:.0},{:.0})",
@@ -588,10 +608,10 @@ fn run_live() {
             arena = build_arena(ws);
             fb.resize(arena.fb_w, arena.fb_h);
             dlog!("resize: winsize={ws:?} -> arena {}x{} tiles, image {}x{}px", arena.map.w, arena.map.h, arena.fb_w, arena.fb_h);
-            // The window may have shrunk under the player. Clamp it into the open
-            // interior so it's never left embedded in a wall (the axis sweep stops
-            // on contact but won't push out of a pre-existing overlap).
-            clamp_into_arena(&mut player, &arena);
+            // Footprint depends on the window, so refit Munchii's hitbox to the
+            // new arena and reseat him inside it (also rescues a shrink that would
+            // otherwise trap him in a wall).
+            fit_player_to_munchii(&mut player, &arena);
             prev_pos = player.pos;
             // Dimensions changed: clear the backend's artifacts + screen, then
             // force a full repaint next frame.
@@ -656,33 +676,36 @@ fn run_live() {
             let disp_rows = arena.rows.saturating_sub(1);
             render_arena(&mut fb, &arena.map);
 
-            // Munchii's footprint mapped into framebuffer pixels, so the
-            // character is the same size in every backend.
-            let vis_w = munchii::W as f64 / arena.cols.max(1) as f64 * arena.fb_w as f64;
-            let vis_h = munchii::H as f64 / disp_rows.max(1) as f64 * arena.fb_h as f64;
-
-            // Pose by movement state, animate by wall-clock, flip by facing.
+            // Pose by movement state, animate by wall-clock. During a wall-slide
+            // Munchii faces AWAY from the wall (press left → on the left wall →
+            // faces right), so the whole sprite mirrors and the sparks land on
+            // the wall side.
             let anim = munchii::anim(pose_for(&player, input.down_held()));
             let n = anim.frames.len().max(1);
             let fi = (now_ns() / (NS_PER_SEC / anim.fps.max(1) as u64)) as usize % n;
-            let lines: Vec<String> = if player.facing < 0 {
+            let face_left = if player.state == State::WallSliding {
+                player.facing > 0
+            } else {
+                player.facing < 0
+            };
+            let lines: Vec<String> = if face_left {
                 anim.frames[fi].iter().map(|l| flip_line(l)).collect()
             } else {
                 anim.frames[fi].iter().map(|s| s.to_string()).collect()
             };
 
             if backend.draws_overlay() {
-                // Character backends stamp Munchii, centered on the hitbox.
+                // The hitbox spans Munchii::W × H cells; align the sprite to the
+                // box (top-aligned so his feet sit on the box bottom, centered
+                // across its width).
                 let fw = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0) as i32;
-                let fh = lines.len() as i32;
-                let ccx = rpos.x + player.w / 2.0;
-                let ccy = rpos.y + player.h / 2.0;
-                let col = (ccx / arena.fb_w as f64 * arena.cols as f64).round() as i32 - fw / 2;
-                let row = (ccy / arena.fb_h as f64 * disp_rows as f64).round() as i32 - fh / 2;
-                let ov = Overlay { lines: &lines, col, row };
+                let box_left = (rpos.x / arena.fb_w as f64 * arena.cols as f64).round() as i32;
+                let box_top = (rpos.y / arena.fb_h as f64 * disp_rows as f64).round() as i32;
+                let col = box_left + (munchii::W as i32 - fw) / 2;
+                let ov = Overlay { lines: &lines, col, row: box_top };
                 backend.present(&mut out, &fb, arena.cols, disp_rows, full_redraw, Some(&ov));
             } else {
-                draw_player(&mut fb, rpos, &player, vis_w, vis_h);
+                draw_player(&mut fb, rpos, &player, player.w, player.h);
                 backend.present(&mut out, &fb, arena.cols, disp_rows, full_redraw, None);
             }
             full_redraw = false;
