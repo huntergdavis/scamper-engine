@@ -35,9 +35,9 @@ the abstractions into the right shape; we do not gold-plate seams before the gam
 | D5 | kitty keyboard | **Hand-roll the codec** (termwiz as reference); `rustix` for raw mode + `TIOCGWINSZ`. crossterm's event model is too shallow for clean release events. |
 | D6 | server-auth for SP | **No.** Local-first, in-process, authority off. Streaming is a mode. |
 | Lang | language | Rust, **Cargo workspace**, hand-rolled engine + focused crates. |
-
-Open sub-decision (recommendation pending user veto): **collision model** = swept
-circle-vs-tile-segment (faithful N++) vs slope-aware AABB (lighter). Default = faithful.
+| Collision | model | **Faithful: swept circle-vs-tile-segment** (the real N++ model). |
+| Runtime | default | **Local Kitty/Ghostty terminal is the default runtime.** Streaming is opt-in. |
+| Streaming | reach | **LAN-only.** No WAN target (would only worsen feel for no gain). |
 
 ## 3. Verified platform reality (re-check before relitigating)
 
@@ -143,7 +143,7 @@ an **`arc-swap`** table (rebindable, hot-reloadable).
 
 ### 4.6 Physics & feel — N++-class
 
-- **Collision (default: faithful):** swept **circle-vs-tile-segment** continuous collision
+- **Collision (faithful, locked):** swept **circle-vs-tile-segment** continuous collision
   — the actual N++ model (momentum + slopes + curves). Sub-pixel fixed-point. Must handle:
   slopes/angled surfaces, **internal-edge merging** (no ghost-collision snags), one-way
   platforms (direction + prev-frame-feet aware), moving platforms (move solids → carry
@@ -267,11 +267,12 @@ socket-to-socket.
 - **Phase 4 — Transport seam hardening.** FrameSink/InputSource/AudioSink as pull/credit +
   control channel + frame-id PTS. **Validate against a hostile in-process sink** (latency/
   jitter/drop). *Exit:* decoupling proven under adversarial timing, local sink unchanged.
-- **Phase 5 — Streaming "lite" (good-enough, terminal-native).** Kitty graphics over SSH to
-  a remote Kitty terminal (graphics + keyboard). Measure glass-to-glass; document it as
-  *not* frame-perfect. Optional QUIC-datagram transport for a leaner remote path. *Exit:*
-  playable from a remote terminal on the LAN with measured, honestly-labeled latency.
-- **Phase 6+ — Deferred.** Audio (mixer + `cpal` + `rtrb` + jitter/clock-sync); richer
+- **Phase 5 — Streaming "lite" (good-enough, terminal-native, LAN-only).** Kitty graphics
+  over SSH to a remote Kitty terminal on the LAN (graphics + keyboard). No WAN target.
+  Measure glass-to-glass; document it as *not* frame-perfect. Optional QUIC-datagram
+  transport for a leaner remote path. *Exit:* playable from a remote terminal on the LAN
+  with measured, honestly-labeled latency.
+- **Phase 6+ — Deferred (much later).** Audio (mixer + `cpal` + `rtrb` + jitter/clock-sync); richer
   clients (custom/native or browser+WebRTC) to carry sound+controller remotely; codec/
   compression + dirty-rect for bandwidth; a future fat/predicting client for WAN tightness
   (determinism already in place). Each behind its own feature/crate.
@@ -291,8 +292,9 @@ socket-to-socket.
 6. **Termux-only blind spots** — graphical/gamepad paths can't run on the dev box; rely on
    PNG-dump + headless replay/golden tests as the primary CI signal; verify feel on desktop.
 
-## 11. Still-open / to-confirm
+## 11. Resolved (was open)
 
-- Collision model: faithful swept circle-vs-segment (default) vs lighter slope-aware AABB.
-- Target streaming reach for "lite" mode: LAN-only, or also WAN (accept worse feel)?
-- When (if ever) to build a richer client for remote sound+controller (Phase 6 trigger).
+- **Collision model:** faithful swept circle-vs-tile-segment. ✔
+- **Streaming "lite" reach:** LAN-only; no WAN target. ✔
+- **Default runtime:** local Kitty/Ghostty terminal; streaming is opt-in and deferred. ✔
+- **Richer client** (remote sound+controller): Phase 6, much later. ✔
