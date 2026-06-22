@@ -193,6 +193,7 @@ fn run_live() {
     let mut prev_t = now_ns();
     let mut next = now_ns();
     let mut prev_pos = player.pos;
+    let mut pending_jump = false; // latch a press until a sim substep consumes it
 
     loop {
         if terminal::quit_requested() {
@@ -211,19 +212,21 @@ fn run_live() {
         }
         acc += elapsed;
 
-        let mut jp = input.jump_pressed();
+        if input.jump_pressed() {
+            pending_jump = true;
+        }
         while acc >= sim_dt_ns {
             prev_pos = player.pos;
             player.step(
                 &map,
                 sim_dt,
                 input.axis_x(),
-                jp,
+                pending_jump,
                 input.jump_held(),
                 input.down_held(),
                 &fp,
             );
-            jp = false;
+            pending_jump = false; // consumed by the first substep only (no double-fire)
             acc -= sim_dt_ns;
             if player.pos.y > map.px_h() + 64.0 {
                 player = Player::new(map.spawn.0, map.spawn.1);

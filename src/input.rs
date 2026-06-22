@@ -13,6 +13,7 @@ pub const K_A: u32 = 97;
 pub const K_D: u32 = 100;
 pub const K_W: u32 = 119;
 pub const K_S: u32 = 115;
+pub const K_C: u32 = 99;
 pub const K_Z: u32 = 122;
 pub const K_K: u32 = 107;
 pub const K_Q: u32 = 113;
@@ -235,6 +236,14 @@ impl Input {
             e
         };
 
+        // modifiers from field1's 1st subfield (encoded as 1 + bitmask; ctrl bit = 4)
+        let mods = if fields.len() >= 2 {
+            fields[1].split(':').next().and_then(|x| x.parse::<u32>().ok()).unwrap_or(1)
+        } else {
+            1
+        };
+        let ctrl = mods >= 1 && ((mods - 1) & 4) != 0;
+
         let code = match final_byte {
             b'u' => {
                 let kc = if fields.is_empty() { 0 } else { first_sub(fields[0]) };
@@ -250,6 +259,11 @@ impl Input {
             b'D' => K_LEFT,
             _ => return, // other finals (e.g. 'c','R','~') ignored
         };
+        // Ctrl-C in Kitty mode arrives as CSI 99;5u (keycode 'c' + ctrl), since flag 8
+        // means it no longer generates SIGINT or byte 0x03.
+        if ctrl && code == K_C && ev != Ev::Release {
+            self.quit = true;
+        }
         if code != 0 {
             self.emit(code, ev);
         }
@@ -357,5 +371,18 @@ mod tests {
         let mut inp = Input::new(true);
         feed(&mut inp, &[0x03]);
         assert!(inp.quit);
+    }
+
+    #[test]
+    fn ctrl_c_quits_kitty_protocol() {
+        // With the kitty protocol active, Ctrl-C arrives as CSI 99;5u (keycode 'c' + ctrl),
+        // not byte 0x03.
+        let mut inp = Input::new(true);
+        feed(&mut inp, b"\x1b[99;5u");
+        assert!(inp.quit);
+        // plain 'c' (no ctrl) must NOT quit
+        let mut inp2 = Input::new(true);
+        feed(&mut inp2, b"\x1b[99u");
+        assert!(!inp2.quit);
     }
 }

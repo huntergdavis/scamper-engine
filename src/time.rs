@@ -27,24 +27,22 @@ pub fn sleep_until_ns(target_ns: u64, spin_margin_ns: u64) {
     let sleep_target = target_ns.saturating_sub(spin_margin_ns);
     if now_ns() < sleep_target {
         let ts = timespec_from_ns(sleep_target);
-        loop {
-            let r = unsafe {
-                libc::clock_nanosleep(
-                    libc::CLOCK_MONOTONIC,
-                    libc::TIMER_ABSTIME,
-                    &ts,
-                    std::ptr::null_mut(),
-                )
-            };
-            if r == 0 {
-                break;
-            }
-            // r is the errno value (clock_nanosleep returns it directly).
-            // On EINTR, return so the loop can react to the signal.
-            break;
+        // clock_nanosleep returns the errno value directly (0 on success).
+        let r = unsafe {
+            libc::clock_nanosleep(
+                libc::CLOCK_MONOTONIC,
+                libc::TIMER_ABSTIME,
+                &ts,
+                std::ptr::null_mut(),
+            )
+        };
+        // On EINTR (a signal like SIGWINCH/SIGTERM, since we don't set SA_RESTART),
+        // bail immediately — skip the spin tail so the loop reacts to the signal now.
+        if r == libc::EINTR {
+            return;
         }
     }
-    // Spin the tail.
+    // Spin the short tail for sub-ms deadline accuracy.
     while now_ns() < target_ns {
         std::hint::spin_loop();
     }

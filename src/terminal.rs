@@ -40,6 +40,20 @@ extern "C" fn on_winch(_sig: libc::c_int) {
     RESIZE.store(true, Ordering::Relaxed);
 }
 
+/// Fatal/crash signals: restore the terminal (async-signal-safe write+tcsetattr),
+/// then re-raise with the default disposition so the crash proceeds normally.
+extern "C" fn on_fatal(sig: libc::c_int) {
+    teardown_global();
+    unsafe {
+        let mut sa: libc::sigaction = std::mem::zeroed();
+        sa.sa_sigaction = libc::SIG_DFL;
+        libc::sigemptyset(&mut sa.sa_mask);
+        sa.sa_flags = 0;
+        libc::sigaction(sig, &sa, std::ptr::null_mut());
+        libc::raise(sig);
+    }
+}
+
 unsafe fn set_handler(sig: libc::c_int, handler: extern "C" fn(libc::c_int)) {
     let mut sa: libc::sigaction = std::mem::zeroed();
     sa.sa_sigaction = handler as usize;
@@ -122,6 +136,17 @@ impl TerminalGuard {
             set_handler(libc::SIGTERM, on_quit_signal);
             set_handler(libc::SIGHUP, on_quit_signal);
             set_handler(libc::SIGWINCH, on_winch);
+            // Crash signals: restore the terminal before dying.
+            for &s in &[
+                libc::SIGSEGV,
+                libc::SIGBUS,
+                libc::SIGABRT,
+                libc::SIGQUIT,
+                libc::SIGILL,
+                libc::SIGFPE,
+            ] {
+                set_handler(s, on_fatal);
+            }
         }
 
         TORN_DOWN.store(false, Ordering::SeqCst);

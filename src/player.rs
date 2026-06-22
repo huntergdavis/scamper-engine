@@ -47,9 +47,9 @@ impl Default for FeelParams {
             max_fall: 760.0,
             run_accel: 1800.0,
             air_accel: 1500.0,
-            ground_friction: 2400.0,
+            ground_friction: 1600.0,
             air_friction: 400.0,
-            max_run: 215.0,
+            max_run: 230.0,
             jump_speed: 360.0,
             coyote_time: 0.09,
             jump_buffer: 0.10,
@@ -79,6 +79,7 @@ pub struct Player {
     pub wall_lock: f64,
     pub jumping: bool, // in a held jump rise (controls dual gravity)
     pub did_double: bool,
+    pub was_engaged: bool, // was engaging a wall last frame (for rising-edge regrant)
 }
 
 const PROBE: f64 = 1.0;
@@ -101,6 +102,7 @@ impl Player {
             wall_lock: 0.0,
             jumping: false,
             did_double: false,
+            was_engaged: false,
         }
     }
 
@@ -143,11 +145,19 @@ impl Player {
         } else {
             self.coyote = (self.coyote - dt).max(0.0);
         }
-        if self.wall_dir != 0 && !self.grounded {
-            // touching a wall refreshes the air jump (lets you wall-climb + still double)
+        // Wall engagement: pressing toward the wall, or already wall-sliding last frame.
+        let pressing_wall =
+            (in_x > 0.0 && self.wall_dir > 0) || (in_x < 0.0 && self.wall_dir < 0);
+        let engaged = self.wall_dir != 0
+            && !self.grounded
+            && (pressing_wall || self.state == State::WallSliding);
+        // Regrant the air jump only on a FRESH engagement (rising edge) — never every
+        // frame, or merely scraping a wall would grant infinite air jumps.
+        if engaged && !self.was_engaged {
             self.air_jumps = fp.max_air_jumps;
             self.did_double = false;
         }
+        self.was_engaged = engaged;
         self.buffer = (self.buffer - dt).max(0.0);
         self.wall_lock = (self.wall_lock - dt).max(0.0);
         if jump_pressed {
@@ -163,7 +173,7 @@ impl Player {
                 self.grounded = false;
                 self.jumping = true;
                 self.air_jumps = fp.max_air_jumps;
-            } else if self.wall_dir != 0 {
+            } else if engaged {
                 self.vel.y = -fp.wall_jump_vy;
                 self.vel.x = -(self.wall_dir as f64) * fp.wall_jump_vx;
                 self.wall_lock = fp.wall_jump_lock;
