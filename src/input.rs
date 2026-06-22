@@ -20,7 +20,7 @@ pub const K_Q: u32 = 113;
 pub const K_Y: u32 = 121;
 pub const K_N: u32 = 110;
 pub const K_TAB: u32 = 9;
-pub const K_HELP: u32 = 63; // '?'
+pub const K_HELP: u32 = 104; // 'h'
 pub const K_LEFT: u32 = 1_000;
 pub const K_DOWN: u32 = 1_001;
 pub const K_UP: u32 = 1_002;
@@ -379,7 +379,7 @@ mod tests {
     #[test]
     fn help_key_registers() {
         let mut inp = Input::new(true);
-        feed(&mut inp, b"\x1b[63u"); // '?'
+        feed(&mut inp, b"\x1b[104u"); // 'h'
         assert!(inp.pressed(K_HELP));
         assert!(!inp.quit);
     }

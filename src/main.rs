@@ -330,14 +330,14 @@ fn state_letter(s: State) -> &'static str {
 
 /// Build the bottom status row. Positions to the last row, clears it, and writes
 /// a single line (truncated to terminal width so it never wraps/scrolls). The
-/// leading `?` (the help affordance) is underlined; full controls + quit live in
+/// leading `h` (the help affordance) is underlined; full controls + quit live in
 /// the help menu.
 fn render_status(buf: &mut String, p: &Player, score: u32, fps: f64, backend: &str, rows: u16, cols: u16) {
     use std::fmt::Write;
     let mut plain = String::new();
     let _ = write!(
         plain,
-        "? Help  |  Tab gfx:{backend}  |  Score {score}  |  {}  vx {:>4.0} vy {:>4.0}  |  {fps:>3.0} fps",
+        "h Help  |  Tab gfx:{backend}  |  Score {score}  |  {}  vx {:>4.0} vy {:>4.0}  |  {fps:>3.0} fps",
         state_letter(p.state),
         p.vel.x,
         p.vel.y,
@@ -350,8 +350,8 @@ fn render_status(buf: &mut String, p: &Player, score: u32, fps: f64, backend: &s
 
     buf.clear();
     let _ = write!(buf, "\x1b[{rows};1H\x1b[2K\x1b[2m", rows = rows); // go to last row, clear, dim
-    if let Some(rest) = plain.strip_prefix('?') {
-        buf.push_str("\x1b[4m?\x1b[24m"); // underlined help affordance
+    if let Some(rest) = plain.strip_prefix('h') {
+        buf.push_str("\x1b[4mh\x1b[24m"); // underlined help affordance
         buf.push_str(rest);
     } else {
         buf.push_str(&plain);
@@ -408,7 +408,7 @@ fn render_help(out: &mut Vec<u8>, active_backend: &str) {
     r += 2;
     hline(out, r, &format!("Tab               switch graphics backend   [now: {active_backend}]"));
     r += 1;
-    hline(out, r, "?                 toggle this help");
+    hline(out, r, "h                 toggle this help");
     r += 1;
     hline(out, r, "Q / Esc           quit (confirm with Y / N)");
     r += 2;
@@ -422,7 +422,7 @@ fn render_help(out: &mut Vec<u8>, active_backend: &str) {
     r += 1;
     hline(out, r, "  mono    plain black & white ASCII (bare minimum)");
     r += 2;
-    hline(out, r, "\x1b[2mpress ? or Esc to resume\x1b[0m");
+    hline(out, r, "\x1b[2mpress h or Esc to resume\x1b[0m");
 }
 
 // ---------------------------------------------------------------------------
@@ -857,7 +857,7 @@ mod tests {
         let mut s = String::new();
         // narrow terminal: must truncate well within the width, no wrap.
         render_status(&mut s, &p, 0, 60.0, "kitty", 24, 20);
-        assert!(s.contains("\x1b[4m?\x1b[24m"), "? help affordance should be underlined");
+        assert!(s.contains("\x1b[4mh\x1b[24m"), "h help affordance should be underlined");
         assert!(s.contains("\x1b[24;1H"), "should position to the last row");
         // strip escapes; visible text must fit in cols-1.
         let visible: String = strip_ansi(&s);
