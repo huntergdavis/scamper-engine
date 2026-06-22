@@ -404,12 +404,13 @@ fn flip_line(s: &str) -> String {
         .collect()
 }
 
-/// Munchii's pose for his current movement state.
+/// Munchii's looping pose for his current movement state. The double-jump burst
+/// is handled separately (it's a one-shot, not a loop).
 fn pose_for(player: &Player, down_held: bool) -> &'static str {
     if player.state == State::WallSliding {
         "wall-slide"
     } else if !player.grounded {
-        if player.did_double { "double-jump" } else { "jump" }
+        "jump"
     } else if down_held {
         "crawl"
     } else if player.vel.x.abs() > 8.0 {
@@ -571,6 +572,8 @@ fn run_live() {
     let mut prev_pos = player.pos;
     let mut pending_jump = false; // latch a press until a sim substep consumes it
     let mut frame: u64 = 0;
+    let mut was_double = false; // rising edge of did_double = the double-jump fires
+    let mut dbl_start_ns: u64 = 0; // when the one-shot double-jump burst began
 
     let mut ui = Ui::Play;
     // Switch the active backend (kitty <-> text), clearing the old one's output.
@@ -702,6 +705,13 @@ fn run_live() {
             acc = 0;
         }
 
+        // The double-jump burst is a one-shot: start it the instant the second
+        // jump fires (did_double rising edge).
+        if player.did_double && !was_double {
+            dbl_start_ns = now_ns();
+        }
+        was_double = player.did_double;
+
         // --- present (modal-aware) ---
         if ui == Ui::Help {
             render_help(&mut out, backend.name());
@@ -714,13 +724,27 @@ fn run_live() {
             let disp_rows = arena.rows.saturating_sub(1);
             render_arena(&mut fb, &arena.map);
 
-            // Pose by movement state, animate by wall-clock. During a wall-slide
-            // Munchii faces AWAY from the wall (press left → on the left wall →
-            // faces right), so the whole sprite mirrors and the sparks land on
-            // the wall side.
-            let anim = munchii::anim(pose_for(&player, input.down_held()));
-            let n = anim.frames.len().max(1);
-            let fi = (now_ns() / (NS_PER_SEC / anim.fps.max(1) as u64)) as usize % n;
+            // Pose by movement state. Most poses loop on wall-clock; the
+            // double-jump plays once from the moment it fired (explode → arc →
+            // hold the last frame), then falls back to the plain jump pose.
+            let now = now_ns();
+            let dbl = munchii::anim("double-jump");
+            let dbl_step = NS_PER_SEC / dbl.fps.max(1) as u64;
+            let dbl_elapsed = now.saturating_sub(dbl_start_ns);
+            let in_dbl = !player.grounded
+                && player.did_double
+                && player.state != State::WallSliding
+                && dbl_elapsed < dbl.frames.len() as u64 * dbl_step;
+            let (anim, fi) = if in_dbl {
+                (dbl, ((dbl_elapsed / dbl_step) as usize).min(dbl.frames.len() - 1))
+            } else {
+                let a = munchii::anim(pose_for(&player, input.down_held()));
+                let n = a.frames.len().max(1);
+                (a, (now / (NS_PER_SEC / a.fps.max(1) as u64)) as usize % n)
+            };
+            // (during a wall-slide Munchii faces AWAY from the wall: press left →
+            // on the left wall → faces right, so the sprite mirrors and the
+            // sparks land on the wall side.)
             let face_left = if player.state == State::WallSliding {
                 player.facing > 0
             } else {

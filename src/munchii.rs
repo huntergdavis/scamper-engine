@@ -62,12 +62,14 @@ const JUMP: &[&[&str]] = &[
     &["           \\| |/   ", "           ( o==@  ", "           (\\_)    ", "   \\______/        ", "    \\____/         ", "   n      n        "],
 ];
 
-// double jump: the second jump fires a subtle fart puff below that propels him
+// double jump: frame 0 is the propellant burst right under his feet; it
+// dissipates over the next few frames as he rides the arc up. Played once,
+// triggered the instant the second jump fires (not looped).
 const DBLJUMP: &[&[&str]] = &[
-    &["    \\(   )/  ", "    ( o==@   ", "    (\\_)     ", "   \\_____/   ", "    u   u    ", "   (° °)     "],
-    &["    /(   )\\  ", "    ( o==@   ", "    (\\_)     ", "   \\_____/   ", "    u   u    ", "   ~ o ~     "],
-    &["    \\(   )/  ", "    ( o==@   ", "    (\\_)     ", "   \\_____/   ", "    u   u    ", "    ' '      "],
-    &["    /(   )\\  ", "    ( o==@   ", "    (\\_)     ", "   \\_____/   ", "    u   u    ", "     .       "],
+    &["    \\(   )/  ", "    ( O==@   ", "    (\\_)     ", "   \\_____/   ", "   *u   u*   ", "  (*°O°*)    "],
+    &["    /(   )\\  ", "    ( o==@   ", "    (\\_)     ", "   \\_____/   ", "    u   u    ", "   °o   o°   "],
+    &["    \\(   )/  ", "    ( o==@   ", "    (\\_)     ", "   \\_____/   ", "    u   u    ", "    '   '    "],
+    &["    /(   )\\  ", "    ( o==@   ", "    (\\_)     ", "   \\_____/   ", "    u   u    ", "     . .     "],
     &["    \\(   )/  ", "    ( o==@   ", "    (\\_)     ", "   \\_____/   ", "    u   u    ", "             "],
     &["     \\| |/   ", "    ( o==@   ", "    (\\_)     ", "   \\_____/   ", "    u   u    ", "             "],
 ];
