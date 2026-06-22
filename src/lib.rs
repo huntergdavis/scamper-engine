@@ -3,6 +3,7 @@
 
 pub mod backend;
 pub mod dbg;
+pub mod effects;
 pub mod framebuffer;
 pub mod input;
 pub mod kitty;

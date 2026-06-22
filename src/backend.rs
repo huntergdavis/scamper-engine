@@ -16,12 +16,18 @@
 use crate::framebuffer::Framebuffer;
 use crate::kitty;
 
-/// A character sprite (e.g. Munchii) stamped over the cell grid by the
-/// character backends. `col`/`row` are the top-left cell; spaces are transparent.
+/// A character layer (the player sprite, or an effect clip) stamped over the
+/// cell grid by the character backends. `col`/`row` are the top-left cell;
+/// spaces are transparent. `tint` is the uniform color the colored backends use
+/// (`None` = per-glyph palette, i.e. Munchii's beagle colors). `z` is the draw
+/// depth: higher `z` wins where layers overlap, so an effect can be authored to
+/// sit behind or in front of the player and other sprites.
 pub struct Overlay<'a> {
     pub lines: &'a [String],
     pub col: i32,
     pub row: i32,
+    pub tint: Option<(u8, u8, u8)>,
+    pub z: i32,
 }
 
 impl Overlay<'_> {
@@ -41,6 +47,17 @@ impl Overlay<'_> {
     }
 }
 
+/// Highest-z glyph (+ its layer tint) covering cell (cx, cy), or None. Layers
+/// always cover the framebuffer scene, so any overlay draws over walls; `z`
+/// only orders the overlays against each other.
+fn top_glyph(overlays: &[Overlay], cx: usize, cy: usize) -> Option<(char, Option<(u8, u8, u8)>)> {
+    overlays
+        .iter()
+        .filter_map(|o| o.at(cx, cy).map(|g| (o.z, g, o.tint)))
+        .max_by_key(|(z, _, _)| *z)
+        .map(|(_, g, t)| (g, t))
+}
+
 pub trait Backend {
     /// Human-readable name (shown in the help menu / status).
     fn name(&self) -> &'static str;
@@ -52,8 +69,9 @@ pub trait Backend {
     }
 
     /// Encode `fb` into `out` for display. `cols`/`play_rows` are the terminal
-    /// cell area the image fills. `full` requests a complete repaint. `overlay`,
-    /// when present, is the player sprite the character backends stamp on top.
+    /// cell area the image fills. `full` requests a complete repaint. `overlays`
+    /// are the character layers (player + effects) the character backends stamp
+    /// on top, ordered by each layer's `z`.
     fn present(
         &mut self,
         out: &mut Vec<u8>,
@@ -61,7 +79,7 @@ pub trait Backend {
         cols: u16,
         play_rows: u16,
         full: bool,
-        overlay: Option<&Overlay>,
+        overlays: &[Overlay],
     );
 
     /// Erase this backend's output before another backend takes over.
@@ -91,7 +109,7 @@ impl Backend for KittyBackend {
         "kitty"
     }
 
-    fn present(&mut self, out: &mut Vec<u8>, fb: &Framebuffer, cols: u16, play_rows: u16, _full: bool, _overlay: Option<&Overlay>) {
+    fn present(&mut self, out: &mut Vec<u8>, fb: &Framebuffer, cols: u16, play_rows: u16, _full: bool, _overlays: &[Overlay]) {
         // Transmit+display the new buffer, then delete the previous one — so the
         // terminal always has one complete image (no swap flicker).
         kitty::present_rgba(
@@ -164,7 +182,7 @@ impl Backend for TextBackend {
         "text"
     }
 
-    fn present(&mut self, out: &mut Vec<u8>, fb: &Framebuffer, cols: u16, play_rows: u16, _full: bool, _overlay: Option<&Overlay>) {
+    fn present(&mut self, out: &mut Vec<u8>, fb: &Framebuffer, cols: u16, play_rows: u16, _full: bool, _overlays: &[Overlay]) {
         out.clear();
         out.extend_from_slice(b"\x1b[H");
         let cw = cols as usize;
@@ -221,15 +239,15 @@ fn luma((r, g, b): (u8, u8, u8)) -> u32 {
 
 /// Render the framebuffer (+ optional sprite overlay) to plain text rows — no
 /// escape codes, no color — for screenshots and docs (the mono tier's look).
-pub fn mono_text(fb: &Framebuffer, cols: usize, play_rows: usize, overlay: Option<&Overlay>) -> String {
+pub fn mono_text(fb: &Framebuffer, cols: usize, play_rows: usize, overlays: &[Overlay]) -> String {
     let mut s = String::with_capacity((cols + 1) * play_rows);
     if cols == 0 || play_rows == 0 || fb.width == 0 || fb.height == 0 {
         return s;
     }
     for cy in 0..play_rows {
         for cx in 0..cols {
-            let ch = match overlay.and_then(|o| o.at(cx, cy)) {
-                Some(g) => g,
+            let ch = match top_glyph(overlays, cx, cy) {
+                Some((g, _)) => g,
                 None => ramp_glyph(RAMP_COARSE, luma(sample(fb, cx, cy, cols, play_rows))) as char,
             };
             s.push(ch);
@@ -270,7 +288,7 @@ impl Backend for AsciiBackend {
         true
     }
 
-    fn present(&mut self, out: &mut Vec<u8>, fb: &Framebuffer, cols: u16, play_rows: u16, _full: bool, overlay: Option<&Overlay>) {
+    fn present(&mut self, out: &mut Vec<u8>, fb: &Framebuffer, cols: u16, play_rows: u16, _full: bool, overlays: &[Overlay]) {
         out.clear();
         out.extend_from_slice(b"\x1b[H");
         let cw = cols as usize;
@@ -284,10 +302,12 @@ impl Backend for AsciiBackend {
             use std::io::Write;
             let _ = write!(out, "\x1b[{};1H", cy + 1);
             for cx in 0..cw {
-                // Munchii's sprite overrides the scene where it covers a cell,
-                // drawn in beagle colors; otherwise the brightness-ramped scene.
-                let (glyph, col): (char, (u8, u8, u8)) = match overlay.and_then(|o| o.at(cx, cy)) {
-                    Some(g) => (g, crate::munchii::beagle_rgb(g)),
+                // A character layer (player or effect) overrides the scene where
+                // it covers a cell: effects use their tint, Munchii his beagle
+                // palette; otherwise the brightness-ramped scene.
+                let (glyph, col): (char, (u8, u8, u8)) = match top_glyph(overlays, cx, cy) {
+                    Some((g, Some(t))) => (g, t),
+                    Some((g, None)) => (g, crate::munchii::beagle_rgb(g)),
                     None => {
                         let c = sample(fb, cx, cy, cw, ch);
                         (ramp_glyph(RAMP_FINE, luma(c)) as char, c)
@@ -335,7 +355,7 @@ impl Backend for MonoBackend {
         true
     }
 
-    fn present(&mut self, out: &mut Vec<u8>, fb: &Framebuffer, cols: u16, play_rows: u16, _full: bool, overlay: Option<&Overlay>) {
+    fn present(&mut self, out: &mut Vec<u8>, fb: &Framebuffer, cols: u16, play_rows: u16, _full: bool, overlays: &[Overlay]) {
         out.clear();
         out.extend_from_slice(b"\x1b[H\x1b[0m"); // default colors, no SGR per cell
         let cw = cols as usize;
@@ -348,9 +368,9 @@ impl Backend for MonoBackend {
             use std::io::Write;
             let _ = write!(out, "\x1b[{};1H", cy + 1);
             for cx in 0..cw {
-                // Munchii (B&W) where he covers a cell, else the ramped scene.
-                match overlay.and_then(|o| o.at(cx, cy)) {
-                    Some(g) => out.extend_from_slice(g.encode_utf8(&mut tmp).as_bytes()),
+                // Character layers (B&W) where they cover a cell, else the scene.
+                match top_glyph(overlays, cx, cy) {
+                    Some((g, _)) => out.extend_from_slice(g.encode_utf8(&mut tmp).as_bytes()),
                     None => out.push(ramp_glyph(RAMP_COARSE, luma(sample(fb, cx, cy, cw, ch)))),
                 }
             }
@@ -382,7 +402,7 @@ mod tests {
     fn text_cell_maps_top_to_fg_and_bottom_to_bg() {
         // 2x2 fb -> 2 cols x 1 row, grid 2x2 maps 1:1.
         let mut out = Vec::new();
-        TextBackend::new().present(&mut out, &fb_2x2(), 2, 1, true, None);
+        TextBackend::new().present(&mut out, &fb_2x2(), 2, 1, true, &[]);
         let s = String::from_utf8(out).unwrap();
         // cell 0: fg=red(top), bg=blue(bottom); cell 1: fg=green, bg=white
         assert!(s.contains("\x1b[38;2;255;0;0m"), "cell0 fg red missing: {s:?}");
@@ -399,7 +419,7 @@ mod tests {
         let mut fb = Framebuffer::new(4, 2);
         fb.clear(Rgba::rgb(10, 20, 30));
         let mut out = Vec::new();
-        TextBackend::new().present(&mut out, &fb, 4, 1, true, None);
+        TextBackend::new().present(&mut out, &fb, 4, 1, true, &[]);
         let s = String::from_utf8(out).unwrap();
         // Only one fg and one bg SGR for the whole flat row of 4 cells.
         assert_eq!(s.matches("38;2;10;20;30m").count(), 1, "fg should be set once");
@@ -413,7 +433,7 @@ mod tests {
         let mut fb = Framebuffer::new(3, 5);
         fb.clear(Rgba::rgb(1, 2, 3));
         let mut out = Vec::new();
-        TextBackend::new().present(&mut out, &fb, 40, 12, true, None);
+        TextBackend::new().present(&mut out, &fb, 40, 12, true, &[]);
         assert!(!out.is_empty());
     }
 
@@ -423,7 +443,7 @@ mod tests {
         let mut white = Framebuffer::new(4, 2);
         white.clear(Rgba::rgb(255, 255, 255));
         let mut out = Vec::new();
-        AsciiBackend::new().present(&mut out, &white, 4, 1, true, None);
+        AsciiBackend::new().present(&mut out, &white, 4, 1, true, &[]);
         let s = String::from_utf8(out).unwrap();
         assert!(s.contains("\x1b[38;2;255;255;255m"), "glyph should be colored by pixel");
         assert_eq!(s.matches('@').count(), 4, "white -> 4 '@' (fine ramp max)");
@@ -432,7 +452,7 @@ mod tests {
         let mut black = Framebuffer::new(4, 2);
         black.clear(Rgba::rgb(0, 0, 0));
         let mut out2 = Vec::new();
-        AsciiBackend::new().present(&mut out2, &black, 4, 1, true, None);
+        AsciiBackend::new().present(&mut out2, &black, 4, 1, true, &[]);
         let g: String = strip_csi(&String::from_utf8(out2).unwrap());
         assert_eq!(g.matches(' ').count(), 4, "black -> 4 spaces");
     }
@@ -443,7 +463,7 @@ mod tests {
         fb.clear(Rgba::rgb(90, 102, 140));
         fb.fill_rect(2, 2, 3, 3, Rgba::rgb(240, 200, 80));
         let mut out = Vec::new();
-        AsciiBackend::new().present(&mut out, &fb, 8, 4, true, None);
+        AsciiBackend::new().present(&mut out, &fb, 8, 4, true, &[]);
         let s = String::from_utf8(out).unwrap();
         for ch in strip_csi(&s).chars() {
             assert!(RAMP_FINE.contains(&(ch as u8)), "non-ramp glyph {ch:?}");
@@ -453,20 +473,38 @@ mod tests {
     #[test]
     fn overlay_stamps_munchii_over_the_scene() {
         let lines = ["@b".to_string(), "c .".to_string()];
-        let ov = Overlay { lines: &lines, col: 1, row: 0 };
+        let ov = [Overlay { lines: &lines, col: 1, row: 0, tint: None, z: 0 }];
         let mut fb = Framebuffer::new(8, 8);
         fb.clear(Rgba::rgb(0, 0, 0));
         // mono: the sprite glyphs appear (transparent spaces don't erase)
         let mut out = Vec::new();
-        MonoBackend::new().present(&mut out, &fb, 8, 2, true, Some(&ov));
+        MonoBackend::new().present(&mut out, &fb, 8, 2, true, &ov);
         let s = strip_csi(&String::from_utf8(out).unwrap());
         assert!(s.contains('@') && s.contains('b') && s.contains('c'), "stamped: {s:?}");
-        // ascii: the nose '@' is drawn in the beagle near-black color
+        // ascii: the nose '@' is drawn in the beagle near-black color (tint None)
         let mut out2 = Vec::new();
-        AsciiBackend::new().present(&mut out2, &fb, 8, 2, true, Some(&ov));
+        AsciiBackend::new().present(&mut out2, &fb, 8, 2, true, &ov);
         let raw = String::from_utf8(out2).unwrap();
         let (r, g, b) = crate::munchii::beagle_rgb('@');
         assert!(raw.contains(&format!("38;2;{r};{g};{b}m")), "nose should be beagle-colored");
+    }
+
+    #[test]
+    fn effect_tint_and_z_win_over_player() {
+        // A tinted effect layer at higher z overrides a Munchii layer beneath it.
+        let player = ["X".to_string()];
+        let fx = ["E".to_string()];
+        let ovs = [
+            Overlay { lines: &player, col: 0, row: 0, tint: None, z: 0 },
+            Overlay { lines: &fx, col: 0, row: 0, tint: Some((9, 8, 7)), z: 5 },
+        ];
+        let mut fb = Framebuffer::new(4, 4);
+        fb.clear(Rgba::rgb(0, 0, 0));
+        let mut out = Vec::new();
+        AsciiBackend::new().present(&mut out, &fb, 4, 2, true, &ovs);
+        let raw = String::from_utf8(out).unwrap();
+        assert!(raw.contains("38;2;9;8;7m"), "higher-z effect tint should win");
+        assert!(raw.contains('E') && !raw.contains('X'), "effect glyph on top");
     }
 
     #[test]
@@ -474,7 +512,7 @@ mod tests {
         let mut fb = Framebuffer::new(4, 2);
         fb.clear(Rgba::rgb(255, 255, 255));
         let mut out = Vec::new();
-        MonoBackend::new().present(&mut out, &fb, 4, 1, true, None);
+        MonoBackend::new().present(&mut out, &fb, 4, 1, true, &[]);
         let s = String::from_utf8(out).unwrap();
         // No truecolor SGR anywhere — it's plain black & white.
         assert!(!s.contains("38;2;"), "mono must not set fg color: {s:?}");

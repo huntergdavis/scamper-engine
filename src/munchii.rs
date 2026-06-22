@@ -62,18 +62,6 @@ const JUMP: &[&[&str]] = &[
     &["           \\| |/   ", "           ( o==@  ", "           (\\_)    ", "   \\______/        ", "    \\____/         ", "   n      n        "],
 ];
 
-// double jump: frame 0 is the propellant burst right under his feet; it
-// dissipates over the next few frames as he rides the arc up. Played once,
-// triggered the instant the second jump fires (not looped).
-const DBLJUMP: &[&[&str]] = &[
-    &["    \\(   )/  ", "    ( O==@   ", "    (\\_)     ", "   \\_____/   ", "   *u   u*   ", "  (*°O°*)    "],
-    &["    /(   )\\  ", "    ( o==@   ", "    (\\_)     ", "   \\_____/   ", "    u   u    ", "   °o   o°   "],
-    &["    \\(   )/  ", "    ( o==@   ", "    (\\_)     ", "   \\_____/   ", "    u   u    ", "    '   '    "],
-    &["    /(   )\\  ", "    ( o==@   ", "    (\\_)     ", "   \\_____/   ", "    u   u    ", "     . .     "],
-    &["    \\(   )/  ", "    ( o==@   ", "    (\\_)     ", "   \\_____/   ", "    u   u    ", "             "],
-    &["     \\| |/   ", "    ( o==@   ", "    (\\_)     ", "   \\_____/   ", "    u   u    ", "             "],
-];
-
 // low + compact: head out front, short body, back feet + front feet + tail
 const CRAWL: &[&[&str]] = &[
     &["                   ", "                   ", "            __     ", " )    ___(( o==@   ", " |       (\\_)      ", "   w  w    n  n    "],
@@ -122,7 +110,6 @@ pub const ALL: &[Anim] = &[
     Anim { name: "idle", fps: 4, frames: IDLE },
     Anim { name: "walk", fps: 9, frames: WALK },
     Anim { name: "jump", fps: 9, frames: JUMP },
-    Anim { name: "double-jump", fps: 8, frames: DBLJUMP },
     Anim { name: "crawl", fps: 7, frames: CRAWL },
     Anim { name: "wall-slide", fps: 6, frames: WALLSLIDE },
     Anim { name: "happy", fps: 14, frames: HAPPY },

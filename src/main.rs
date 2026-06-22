@@ -3,6 +3,7 @@
 //! scenarios and dumps PNGs (for development on a box without a Kitty terminal).
 
 use scamper::backend::{AsciiBackend, Backend, KittyBackend, MonoBackend, Overlay, TextBackend};
+use scamper::effects::{self, Effects};
 use scamper::munchii;
 use scamper::framebuffer::{Framebuffer, Rgba};
 use scamper::input::{Input, K_ESC, K_HELP, K_N, K_Q, K_TAB, K_Y};
@@ -143,12 +144,14 @@ fn run_shot() {
     let fw = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0) as i32;
     let box_left = (player.pos.x / arena.fb_w as f64 * arena.cols as f64).round() as i32;
     let box_top = (player.pos.y / arena.fb_h as f64 * disp_rows as f64).round() as i32;
-    let ov = Overlay {
+    let ov = [Overlay {
         lines: &lines,
         col: box_left + (munchii::W as i32 - fw) / 2,
         row: box_top,
-    };
-    print!("{}", scamper::backend::mono_text(&fb, cols, disp_rows, Some(&ov)));
+        tint: None,
+        z: 0,
+    }];
+    print!("{}", scamper::backend::mono_text(&fb, cols, disp_rows, &ov));
 }
 
 // ---------------------------------------------------------------------------
@@ -572,8 +575,9 @@ fn run_live() {
     let mut prev_pos = player.pos;
     let mut pending_jump = false; // latch a press until a sim substep consumes it
     let mut frame: u64 = 0;
+    let mut fx = Effects::new();
     let mut was_double = false; // rising edge of did_double = the double-jump fires
-    let mut dbl_start_ns: u64 = 0; // when the one-shot double-jump burst began
+    let mut was_grounded = true; // falling edge of grounded = a landing
 
     let mut ui = Ui::Play;
     // Switch the active backend (kitty <-> text), clearing the old one's output.
@@ -705,12 +709,19 @@ fn run_live() {
             acc = 0;
         }
 
-        // The double-jump burst is a one-shot: start it the instant the second
-        // jump fires (did_double rising edge).
+        // Event-triggered effects (spawned at the player's feet in world px).
+        let now = now_ns();
+        let feet_x = player.pos.x + player.w / 2.0;
+        let feet_y = player.pos.y + player.h;
         if player.did_double && !was_double {
-            dbl_start_ns = now_ns();
+            fx.spawn(&effects::PUFF, feet_x, feet_y, now); // double-jump burst
+        }
+        if player.grounded && !was_grounded {
+            fx.spawn(&effects::DUST, feet_x, feet_y, now); // landing scuff
         }
         was_double = player.did_double;
+        was_grounded = player.grounded;
+        fx.update(now);
 
         // --- present (modal-aware) ---
         if ui == Ui::Help {
@@ -724,27 +735,12 @@ fn run_live() {
             let disp_rows = arena.rows.saturating_sub(1);
             render_arena(&mut fb, &arena.map);
 
-            // Pose by movement state. Most poses loop on wall-clock; the
-            // double-jump plays once from the moment it fired (explode → arc →
-            // hold the last frame), then falls back to the plain jump pose.
-            let now = now_ns();
-            let dbl = munchii::anim("double-jump");
-            let dbl_step = NS_PER_SEC / dbl.fps.max(1) as u64;
-            let dbl_elapsed = now.saturating_sub(dbl_start_ns);
-            let in_dbl = !player.grounded
-                && player.did_double
-                && player.state != State::WallSliding
-                && dbl_elapsed < dbl.frames.len() as u64 * dbl_step;
-            let (anim, fi) = if in_dbl {
-                (dbl, ((dbl_elapsed / dbl_step) as usize).min(dbl.frames.len() - 1))
-            } else {
-                let a = munchii::anim(pose_for(&player, input.down_held()));
-                let n = a.frames.len().max(1);
-                (a, (now / (NS_PER_SEC / a.fps.max(1) as u64)) as usize % n)
-            };
-            // (during a wall-slide Munchii faces AWAY from the wall: press left →
-            // on the left wall → faces right, so the sprite mirrors and the
-            // sparks land on the wall side.)
+            // Pose by movement state (loops on wall-clock). During a wall-slide
+            // Munchii faces AWAY from the wall (press left → on the left wall →
+            // faces right), so the whole sprite mirrors.
+            let anim = munchii::anim(pose_for(&player, input.down_held()));
+            let n = anim.frames.len().max(1);
+            let fi = (now / (NS_PER_SEC / anim.fps.max(1) as u64)) as usize % n;
             let face_left = if player.state == State::WallSliding {
                 player.facing > 0
             } else {
@@ -755,20 +751,41 @@ fn run_live() {
             } else {
                 anim.frames[fi].iter().map(|s| s.to_string()).collect()
             };
+            let to_cells = |x: f64, y: f64| -> (i32, i32) {
+                (
+                    (x / arena.fb_w as f64 * arena.cols as f64).round() as i32,
+                    (y / arena.fb_h as f64 * disp_rows as f64).round() as i32,
+                )
+            };
 
             if backend.draws_overlay() {
-                // The hitbox spans Munchii::W × H cells; align the sprite to the
-                // box (top-aligned so his feet sit on the box bottom, centered
-                // across its width).
+                // Munchii sprite, aligned to his hitbox (feet on the box bottom,
+                // centered across its width). Effects are world-anchored layers.
                 let fw = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0) as i32;
-                let box_left = (rpos.x / arena.fb_w as f64 * arena.cols as f64).round() as i32;
-                let box_top = (rpos.y / arena.fb_h as f64 * disp_rows as f64).round() as i32;
-                let col = box_left + (munchii::W as i32 - fw) / 2;
-                let ov = Overlay { lines: &lines, col, row: box_top };
-                backend.present(&mut out, &fb, arena.cols, disp_rows, full_redraw, Some(&ov));
+                let (box_left, box_top) = to_cells(rpos.x, rpos.y);
+                let pcol = box_left + (munchii::W as i32 - fw) / 2;
+
+                // Effect layers own their text so the overlays can borrow it.
+                let fx_render: Vec<(Vec<String>, (u8, u8, u8), i32, i32, i32)> = fx
+                    .render(now)
+                    .into_iter()
+                    .map(|(frame, tint, z, x, y)| {
+                        let fl: Vec<String> = frame.iter().map(|s| s.to_string()).collect();
+                        let w = fl.iter().map(|l| l.chars().count()).max().unwrap_or(0) as i32;
+                        let (cx, cy) = to_cells(x, y);
+                        (fl, tint, z, cx - w / 2, cy)
+                    })
+                    .collect();
+
+                let mut overlays: Vec<Overlay> = Vec::with_capacity(1 + fx_render.len());
+                overlays.push(Overlay { lines: &lines, col: pcol, row: box_top, tint: None, z: 0 });
+                for (fl, tint, z, col, row) in &fx_render {
+                    overlays.push(Overlay { lines: fl, col: *col, row: *row, tint: Some(*tint), z: *z });
+                }
+                backend.present(&mut out, &fb, arena.cols, disp_rows, full_redraw, &overlays);
             } else {
                 draw_player(&mut fb, rpos, &player, player.w, player.h);
-                backend.present(&mut out, &fb, arena.cols, disp_rows, full_redraw, None);
+                backend.present(&mut out, &fb, arena.cols, disp_rows, full_redraw, &[]);
             }
             full_redraw = false;
             if ui == Ui::ConfirmQuit {
