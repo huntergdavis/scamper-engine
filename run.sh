@@ -26,4 +26,11 @@ if [[ -n "${TMUX:-}" ]]; then
     echo "warning: running under tmux — Kitty graphics won't pass through." >&2
 fi
 
-exec "$bin" "$@"
+# Default to --debug logging (to ./scamp.log) during development. Drop this once
+# we cut a release. Skip auto-adding it if the caller already passed --debug.
+extra=()
+if [[ "${SCAMP_NODEBUG:-0}" != "1" ]] && [[ ! " $* " == *" --debug "* ]]; then
+    extra+=(--debug)
+fi
+
+exec "$bin" "$@" "${extra[@]}"

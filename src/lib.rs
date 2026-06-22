@@ -1,6 +1,7 @@
 //! Scamper — a terminal 2D platformer engine that renders via the Kitty graphics
 //! protocol. Local-first, single-player, keyboard-only. See PROJECT_PLAN.md.
 
+pub mod dbg;
 pub mod framebuffer;
 pub mod input;
 pub mod kitty;

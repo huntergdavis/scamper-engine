@@ -8,21 +8,106 @@ use scamper::math::Vec2;
 use scamper::player::{FeelParams, Player, State};
 use scamper::time::{now_ns, sleep_until_ns, NS_PER_SEC};
 use scamper::world::{TileMap, TILE};
-use scamper::{kitty, terminal};
+use scamper::{dlog, kitty, terminal};
 use std::io::Write;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    match args.get(1).map(|s| s.as_str()) {
+    // `--debug` (anywhere) turns on file logging to scamp.log (override path with
+    // SCAMP_LOG). Kept on by default during development via run.sh.
+    let debug = args.iter().any(|a| a == "--debug");
+    let log_path = std::env::var("SCAMP_LOG").unwrap_or_else(|_| "scamp.log".into());
+    scamper::dbg::init(debug, &log_path);
+    dlog!("scamp start: args={:?} TERM={:?}", &args[1..], std::env::var("TERM").ok());
+
+    // The first non-flag argument is the subcommand.
+    let cmd = args.iter().skip(1).find(|a| !a.starts_with("--")).map(|s| s.as_str());
+    match cmd {
         Some("verify") => {
-            let dir = args.get(2).map(|s| s.as_str()).unwrap_or(".");
+            // dir = first non-flag arg after the subcommand
+            let dir = args
+                .iter()
+                .skip(1)
+                .filter(|a| !a.starts_with("--"))
+                .nth(1)
+                .map(|s| s.as_str())
+                .unwrap_or(".");
             run_verify(dir);
         }
         Some("info") => {
             let ws = terminal::query_winsize();
             println!("winsize: {ws:?}");
         }
+        Some("gfxtest") => run_gfxtest(),
         _ => run_live(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Graphics probe — isolate "can this terminal draw a Kitty image" from the loop
+// ---------------------------------------------------------------------------
+
+/// Display one static image (a bordered box with a red square + color bars) and
+/// wait for a key. Prints winsize / TERM / keyboard-protocol support AFTER
+/// teardown so it's readable on the normal screen even if the image never shows.
+fn run_gfxtest() {
+    let ws = terminal::query_winsize();
+    let term = std::env::var("TERM").unwrap_or_else(|_| "<unset>".into());
+
+    let guard = match terminal::TerminalGuard::enter() {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln!("gfxtest needs an interactive terminal: {e}");
+            return;
+        }
+    };
+    let kitty_kbd = terminal::probe_kitty_keyboard();
+
+    // A fixed, modest image — independent of the reported pixel size.
+    let (w, h) = (320usize, 200usize);
+    let mut fb = Framebuffer::new(w, h);
+    fb.clear(Rgba::rgb(30, 32, 46));
+    fb.stroke_rect(0, 0, w as i32, h as i32, Rgba::rgb(255, 255, 255));
+    // RGB bars so a partial/odd render is still diagnosable.
+    fb.fill_rect(20, 20, 60, 40, Rgba::rgb(230, 60, 60));
+    fb.fill_rect(90, 20, 60, 40, Rgba::rgb(60, 220, 80));
+    fb.fill_rect(160, 20, 60, 40, Rgba::rgb(80, 120, 240));
+    // center red square (the "sprite")
+    fb.fill_rect(w as i32 / 2 - 24, h as i32 / 2 - 24, 48, 48, Rgba::rgb(244, 180, 60));
+    fb.stroke_rect(w as i32 / 2 - 24, h as i32 / 2 - 24, 48, 48, Rgba::rgb(255, 245, 210));
+
+    let mut out = Vec::new();
+    let mut b64 = Vec::new();
+    kitty::present_rgba(&mut out, w, h, &fb.px, &mut b64);
+    dlog!("gfxtest: image {w}x{h}px, encoded {} bytes (b64 {}), winsize={ws:?}", out.len(), b64.len());
+    {
+        let mut o = std::io::stdout().lock();
+        let _ = o.write_all(&out);
+        // status hint on the bottom-ish; keep it simple (row 25).
+        let _ = o.write_all(b"\x1b[25;1H\x1b[2Kgfxtest: see a 320x200 box w/ RGB bars + orange square? press q to quit.");
+        let _ = o.flush();
+    }
+
+    let mut input = Input::new(kitty_kbd);
+    loop {
+        if terminal::quit_requested() {
+            break;
+        }
+        input.poll();
+        if input.quit {
+            break;
+        }
+        sleep_until_ns(now_ns() + NS_PER_SEC / 30, 1_000_000);
+    }
+    drop(guard);
+
+    println!("gfxtest done.");
+    println!("  TERM           = {term}");
+    println!("  winsize        = {ws:?}");
+    println!("  kitty keyboard = {kitty_kbd}");
+    if ws.xpix == 0 || ws.ypix == 0 {
+        println!("  NOTE: terminal did not report pixel size (xpix/ypix=0) — the game");
+        println!("        falls back to an 8x16 cell guess, which can mis-size the arena.");
     }
 }
 
@@ -279,10 +364,15 @@ fn run_live() {
     let kitty_kbd = terminal::probe_kitty_keyboard();
 
     let fp = FeelParams::default();
-    let mut arena = build_arena(terminal::query_winsize());
+    let ws0 = terminal::query_winsize();
+    let mut arena = build_arena(ws0);
     let mut fb = Framebuffer::new(arena.fb_w, arena.fb_h);
     let mut player = Player::new(arena.map.spawn.0, arena.map.spawn.1);
     let mut input = Input::new(kitty_kbd);
+    dlog!(
+        "live: kitty_kbd={kitty_kbd} winsize={ws0:?} -> arena {}x{} tiles, image {}x{}px (px buf {} bytes), spawn=({:.0},{:.0})",
+        arena.map.w, arena.map.h, arena.fb_w, arena.fb_h, fb.px.len(), arena.map.spawn.0, arena.map.spawn.1
+    );
 
     let mut out: Vec<u8> = Vec::new();
     let mut b64: Vec<u8> = Vec::new();
@@ -298,6 +388,7 @@ fn run_live() {
     let mut next = now_ns();
     let mut prev_pos = player.pos;
     let mut pending_jump = false; // latch a press until a sim substep consumes it
+    let mut frame: u64 = 0;
 
     loop {
         if terminal::quit_requested() {
@@ -310,8 +401,10 @@ fn run_live() {
 
         // Rebuild the arena to the new window size, keeping the player in bounds.
         if terminal::take_resize() {
-            arena = build_arena(terminal::query_winsize());
+            let ws = terminal::query_winsize();
+            arena = build_arena(ws);
             fb.resize(arena.fb_w, arena.fb_h);
+            dlog!("resize: winsize={ws:?} -> arena {}x{} tiles, image {}x{}px", arena.map.w, arena.map.h, arena.fb_w, arena.fb_h);
             // The window may have shrunk under the player. Clamp it into the open
             // interior so it's never left embedded in a wall (the axis sweep stops
             // on contact but won't push out of a pre-existing overlap).
@@ -368,6 +461,16 @@ fn run_live() {
             let _ = o.write_all(&out);
             let _ = o.write_all(status.as_bytes());
             let _ = o.flush();
+        }
+
+        // Log the first frame's encoded size (the bandwidth tell) and a periodic
+        // heartbeat so a hang/stall is visible in the log.
+        frame += 1;
+        if frame == 1 || frame % 120 == 0 {
+            dlog!(
+                "frame {frame}: encoded {} bytes (b64 {}), fps={fps:.0}, pos=({:.0},{:.0}) state={}",
+                out.len(), b64.len(), player.pos.x, player.pos.y, state_letter(player.state)
+            );
         }
 
         next += sim_dt_ns;
