@@ -4,7 +4,7 @@
 
 use scamper::backend::{AsciiBackend, Backend, KittyBackend, MonoBackend, TextBackend};
 use scamper::framebuffer::{Framebuffer, Rgba};
-use scamper::input::{Input, K_ESC, K_HELP, K_N, K_Q, K_TAB, K_Y};
+use scamper::input::{Input, K_ESC, K_HELP, K_N, K_Q, K_SPACE, K_TAB, K_Y};
 use scamper::math::Vec2;
 use scamper::player::{FeelParams, Player, State};
 use scamper::time::{now_ns, sleep_until_ns, NS_PER_SEC};
@@ -40,6 +40,7 @@ fn main() {
             println!("winsize: {ws:?}");
         }
         Some("gfxtest") => run_gfxtest(),
+        Some("munchii") => run_munchii(),
         _ => run_live(),
     }
 }
@@ -110,6 +111,74 @@ fn run_gfxtest() {
         println!("  NOTE: terminal did not report pixel size (xpix/ypix=0) — the game");
         println!("        falls back to an 8x16 cell guess, which can mis-size the arena.");
     }
+}
+
+// ---------------------------------------------------------------------------
+// Munchii preview — watch the sprite animate in the terminal (any terminal)
+// ---------------------------------------------------------------------------
+
+fn run_munchii() {
+    let guard = match terminal::TerminalGuard::enter() {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln!("munchii preview needs an interactive terminal: {e}");
+            return;
+        }
+    };
+    let kitty_kbd = terminal::probe_kitty_keyboard();
+    let mut input = Input::new(kitty_kbd);
+
+    let anims = scamper::munchii::ALL;
+    let mut ai = 0usize; // current animation
+    let mut fi = 0usize; // current frame
+    let mut last = now_ns();
+    let mut buf = String::new();
+    use std::fmt::Write as _;
+
+    loop {
+        if terminal::quit_requested() || input.quit {
+            break;
+        }
+        input.poll();
+        if input.pressed(K_Q) || input.pressed(K_ESC) {
+            break;
+        }
+        if input.pressed(K_SPACE) || input.pressed(K_TAB) {
+            ai = (ai + 1) % anims.len();
+            fi = 0;
+            last = now_ns();
+        }
+
+        let anim = &anims[ai];
+        let now = now_ns();
+        if anim.frames.len() > 1 && now - last >= NS_PER_SEC / anim.fps.max(1) as u64 {
+            fi = (fi + 1) % anim.frames.len();
+            last = now;
+        }
+
+        buf.clear();
+        buf.push_str("\x1b[H\x1b[2J");
+        let _ = write!(
+            buf,
+            "\x1b[2;4H\x1b[1mMUNCHII\x1b[0m  ::  {}  ({} fps)   [{}/{}]",
+            anim.name,
+            anim.fps,
+            ai + 1,
+            anims.len()
+        );
+        for (i, line) in anim.frames[fi].iter().enumerate() {
+            let _ = write!(buf, "\x1b[{};6H{}", 5 + i, line);
+        }
+        let _ = write!(buf, "\x1b[13;4Hspace / Tab: next move      q: quit");
+        {
+            let mut o = std::io::stdout().lock();
+            let _ = o.write_all(buf.as_bytes());
+            let _ = o.flush();
+        }
+        sleep_until_ns(now_ns() + NS_PER_SEC / 60, 1_000_000);
+    }
+    drop(guard);
+    eprintln!("scamp: bye.");
 }
 
 // ---------------------------------------------------------------------------
