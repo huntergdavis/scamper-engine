@@ -120,12 +120,27 @@ pub fn import_tscn(text: &str, id: &str, theme: &str) -> io::Result<Imported> {
             continue;
         }
         if let Some(scene) = n.instance_scene {
-            let ty = map_scene(&scene);
-            if ty.starts_with("unknown:") {
-                warnings.push(format!("unmapped scene {scene:?} -> {ty}"));
+            let (tx, ty) = px_to_tile(pos.unwrap_or((0.0, 0.0)));
+            match classify_scene(&scene) {
+                SceneClass::Drop => {}
+                SceneClass::Warp => entities.push(Entity { kind: "warp".into(), x: tx, y: ty, props: vec![] }),
+                SceneClass::Exit => {
+                    // First exit becomes the goal; any extra is kept as an entity.
+                    if goal.is_none() {
+                        goal = Some(Goal { kind: "exit".into(), x: tx, y: ty });
+                    } else {
+                        entities.push(Entity { kind: "exit".into(), x: tx, y: ty, props: vec![] });
+                    }
+                }
+                SceneClass::Entity(t, props) => {
+                    let props = props.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+                    entities.push(Entity { kind: t.into(), x: tx, y: ty, props });
+                }
+                SceneClass::Unknown => {
+                    warnings.push(format!("unmapped scene {scene:?}"));
+                    entities.push(Entity { kind: format!("unknown:{scene}"), x: tx, y: ty, props: vec![] });
+                }
             }
-            let (tx, ty_) = px_to_tile(pos.unwrap_or((0.0, 0.0)));
-            entities.push(Entity { kind: ty, x: tx, y: ty_, props: vec![] });
         }
     }
 
@@ -201,34 +216,132 @@ fn atlas_kind(_source_id: u16, _atlas_x: u16, _atlas_y: u16) -> TileKind {
     TileKind::Ground
 }
 
-/// Instanced scene basename → our entity type id. Unmapped → `unknown:<Name>`
-/// (kept and reported, never dropped). Names are the Munchii bestiary
-/// (CAMPAIGN_PLAN.md §7–§8); behaviors come later.
-fn map_scene(scene: &str) -> String {
-    let mapped = match scene {
-        "Goomba" => "boneling",
-        "GreenKoopaTroopa" => "rollo",
-        "RedKoopaTroopa" => "rollo_sun",
-        "GreenParatroopa" | "RedParatroopa" => "flutterbug",
-        "PiranhaPlant" => "dandi",
-        "BuzzyBeetle" => "hardhat",
-        "HammerBro" => "stick_squirrel",
-        "BulletBill" | "BulletBillLauncher" => "zoomdisc",
-        "CheepCheep" | "GreenCheepCheep" => "sudsfish",
-        "Blooper" | "Bloober" => "moppet",
-        "Podoboo" => "pop",
-        "Firebar" => "sprinkler_bar",
-        "Bowser" => "baron_whiskers",
-        "QuestionBlock" | "InvisibleQuestionBlock" => "question",
-        "CoinBrickBlock" | "BrickBlock" => "brick",
-        "Mushroom" | "SuperMushroom" => "big_kibble",
-        "FireFlower" => "bubble_bone",
-        "Starman" | "Star" => "zoomies_treat",
-        "OneUpMushroom" | "1UpMushroom" => "lucky_squeaky",
-        "Coin" | "RedCoin" | "SpinningRedCoin" => "kibble",
-        _ => return format!("unknown:{scene}"),
-    };
-    mapped.to_string()
+/// How an instanced scene maps into our IR.
+enum SceneClass {
+    /// Emit as an entity of this type with these default props.
+    Entity(&'static str, &'static [(&'static str, &'static str)]),
+    /// A pipe/warp trigger → entity `warp`.
+    Warp,
+    /// A level-exit → the goal (or a spare `exit` entity).
+    Exit,
+    /// Engine plumbing / pure visual / sub-area link → skip entirely.
+    Drop,
+    /// Unrecognized → kept as `unknown:<Name>` and reported.
+    Unknown,
+}
+
+/// Instanced scene basename → its role in our IR. Creature/item/block names are
+/// the original Munchii bestiary (CAMPAIGN_PLAN.md §7–§8) — the Mario names here
+/// are only input identifiers we translate away from. Behaviors/art come later.
+fn classify_scene(scene: &str) -> SceneClass {
+    use SceneClass::*;
+    // Block props: `breakable` (Munchii can smash it from below/while big) and a
+    // default `contains` so the runtime has something to release.
+    const C_KIBBLE: &[(&str, &str)] = &[("contains", "kibble")];
+    const C_POWER: &[(&str, &str)] = &[("contains", "big_kibble")];
+    const C_POWER_HID: &[(&str, &str)] = &[("contains", "big_kibble"), ("hidden", "1")];
+    const C_1UP_HID: &[(&str, &str)] = &[("contains", "lucky_squeaky"), ("hidden", "1")];
+    const C_POISON: &[(&str, &str)] = &[("contains", "poison")];
+    const BRICK: &[(&str, &str)] = &[("breakable", "1")];
+    const BRICK_POW: &[(&str, &str)] = &[("breakable", "1"), ("contains", "big_kibble")];
+    const BRICK_COIN: &[(&str, &str)] = &[("breakable", "1"), ("contains", "kibble")];
+    const NONE: &[(&str, &str)] = &[];
+
+    match scene {
+        // ---- creatures ----
+        "Goomba" => Entity("boneling", NONE),
+        "GreenKoopaTroopa" => Entity("rollo", NONE),
+        "RedKoopaTroopa" => Entity("rollo_sun", NONE),
+        "GreenParatroopa" | "RedParatroopa" | "GreenKoopaParaTroopa" | "RedKoopaParaTroopa"
+        | "GreenParaKoopaHori" => Entity("flutterbug", NONE),
+        "FighterFly" => Entity("hoppa", NONE),
+        "SideStepper" => Entity("pincher", NONE),
+        "PiranhaPlant" => Entity("dandi", NONE),
+        "RedPiranhaPlant" => Entity("dandi_sun", NONE),
+        "BuzzyBeetle" => Entity("hardhat", NONE),
+        "HammerBro" | "BowsersBro" => Entity("stick_squirrel", NONE),
+        "Sigebou" => Entity("sticker", NONE),
+        "BulletBill" => Entity("zoomdisc", NONE),
+        "BulletBillCannon" | "BulletBillLauncher" => Entity("zoomdisc_launcher", NONE),
+        "CheepCheep" | "GreenCheepCheep" => Entity("sudsfish", NONE),
+        "RedCheepCheep" => Entity("sudsfish_sun", NONE),
+        "Blooper" | "Bloober" => Entity("moppet", NONE),
+        "Lakitu" => Entity("puffer", NONE),
+        "DryBones" => Entity("rattle", NONE),
+        "Podoboo" => Entity("pop", NONE),
+        "Firebar" => Entity("sprinkler_bar", NONE),
+        "Icicle" => Entity("drip", NONE),
+        "Barrel" => Entity("log", NONE),
+        "Burner" => Entity("blowdryer", NONE),
+        "OnOffFanRed" => Entity("fan", &[("color", "red")]),
+        "OnOffFanBlue" => Entity("fan", &[("color", "blue")]),
+        "Bowser" | "TrueBowser" => Entity("baron_whiskers", NONE),
+        // generators (spawn streams of a critter)
+        "CheepCheepGenerator" | "CheepCheepSideGenerator" | "LeapingCheepCheepArea" => {
+            Entity("spawner", &[("of", "sudsfish")])
+        }
+        "BulletBillGenerator" => Entity("spawner", &[("of", "zoomdisc")]),
+        "BowserFlameGenerator" => Entity("spawner", &[("of", "ember")]),
+
+        // ---- items / power-ups ----
+        "Mushroom" | "SuperMushroom" => Entity("big_kibble", NONE),
+        "FireFlower" => Entity("bubble_bone", NONE),
+        "Starman" | "Star" => Entity("zoomies_treat", NONE),
+        "OneUpMushroom" | "1UpMushroom" => Entity("lucky_squeaky", NONE),
+        "WingItem" => Entity("flutter_collar", NONE),
+        "Coin" | "RedCoin" | "SpinningRedCoin" => Entity("kibble", NONE),
+
+        // ---- blocks (breakable bricks + treat-blocks) ----
+        "QuestionBlock" => Entity("question", C_KIBBLE),
+        "PowerUpQuestionBlock" => Entity("question", C_POWER),
+        "InvisibleQuestionBlock" | "InvisiblePowerUpQuestionBlock" => Entity("question", C_POWER_HID),
+        "InvisibleOneUpQuestionBlock" => Entity("question", C_1UP_HID),
+        "PoisonQuestionBlock" => Entity("question", C_POISON),
+        "BrickBlock" => Entity("brick", BRICK),
+        "CoinBrickBlock" => Entity("brick", BRICK_COIN),
+        "PowerUpBrickBlock" => Entity("brick", BRICK_POW),
+        "PSwitch" | "PSwitchBlock" => Entity("pswitch", NONE),
+        "Vine" => Entity("ivy", NONE),
+
+        // ---- moving platforms ----
+        "FallingPlatform" | "LargeFallingPlatform" => Entity("platform", &[("move", "falling")]),
+        "Trampoline" => Entity("trampoline", NONE),
+        "SuperTrampoline" => Entity("trampoline", &[("power", "super")]),
+        "ElevatorPlatform" | "SmallElevatorPlatform" | "MediumElevatorPlatform"
+        | "RopeElevatorPlatform" | "SmallRopeElevatorPlatform" => Entity("platform", &[("move", "lift")]),
+        "SidewaysPlatform" | "SmallSidewaysPlatform" | "OnOffSidewaysPlatform" | "OnOffSidewaysPlatformBlue" => {
+            Entity("platform", &[("move", "sideways")])
+        }
+        "VerticalPlatform" | "SmallVerticalPlatform" | "OnOffVerticalPlatform" | "OnOffVerticalPlatformBlue" => {
+            Entity("platform", &[("move", "vertical")])
+        }
+        "TravellingPlatform" => Entity("platform", &[("move", "travel")]),
+        "CloudPlatform" => Entity("platform", &[("move", "cloud")]),
+
+        // ---- boss-room / castle features ----
+        "CastleBridge" => Entity("bath_plug", NONE), // the "axe": pull it to win
+        "CastleToad" | "CastlePeach" | "CastlePeachSP" => Entity("rescued_pup", NONE),
+
+        // ---- warps & exits ----
+        "PipeArea" | "TeleportPipeArea" | "AutoExitPipeArea" | "WarpZone" => Warp,
+        "UndergroundExit" | "UnderwaterExit" | "LostLevelsEndingDoor" => Exit,
+
+        // ---- engine plumbing / pure visual / logic → drop ----
+        "LevelBG" | "DropShadowRenderer" | "EntityGeneratorStopper" | "BooRaceHandler" | "RaceBoo"
+        | "ChallengeModeNodes" | "CastleChallengeEnd" | "PickAPathTeleport" | "PickAPathPoint"
+        | "LargeSPCastleDeco" | "Deco1" | "Deco2" | "SmallCastleVisual" | "CoinHeavenAllCoinsBonus"
+        | "PipeCutscene" | "LostLevelsEnding" | "StartCastle" | "LargeStartCastle"
+        | "BowserFlame" | "BulletBillGeneratorStopper" | "WindGenerator" => Drop,
+
+        // camera/zone markers (we clamp to level bounds; zones handled later)
+        s if s.ends_with("Limit") => Drop, // HardCameraRightLimit / WarpZoneCameraLimit
+        s if s.ends_with("Area") => Drop, // WaterArea/WindArea/FireWindArea/UpsideDownGravityArea/…
+
+        // sub-area level links are instanced scenes named like "1-1a" / "8-4" / "2".
+        s if s.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) => Drop,
+
+        _ => Unknown,
+    }
 }
 
 // ---- node accumulation ------------------------------------------------------

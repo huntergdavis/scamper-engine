@@ -179,6 +179,38 @@ C 24 11
   a scene→type table; unmapped → `unknown:<Name>` (kept, flagged, never silently
   dropped). `Player`→spawn, `EndFlagpole`→goal, `Checkpoint`→`C`.
 
+### 4b. Import coverage (validated against all 305 levels, local)
+
+The importer's classifier (`classify_scene`) was run over every level in all four
+games (SMB1 / SMBANN / SMBLL / SMBS): **22k tile-spans, ~4.7k entity placements,
+145 distinct source types → 0 unmapped.** Each source scene resolves to one of:
+
+- **Entity** — a creature/item/block/platform in our vocabulary (below).
+- **Warp** — pipe/teleport/warp triggers → an entity of type `warp`.
+- **Exit** — underground/underwater/ending doors → the `goal` (or a spare `exit`).
+- **Drop** — engine plumbing kept out of the IR: backgrounds, drop-shadow
+  renderers, generator-stoppers, race/challenge logic, pick-a-path nodes, camera
+  `*Limit` markers, `*Area` zones (water/wind/gravity — revisited as features
+  later), pure-visual castle decos, and sub-area level links (scenes named like
+  `1-1a` / `8-4`).
+
+**Our entity vocabulary** (original Munchii designs; the source names are only
+translation keys). Creatures: `boneling`, `rollo`/`rollo_sun`, `flutterbug`,
+`hoppa`, `pincher`, `dandi`/`dandi_sun`, `hardhat`, `stick_squirrel`, `sticker`,
+`zoomdisc`/`zoomdisc_launcher`, `sudsfish`/`sudsfish_sun`, `moppet`, `puffer`,
+`rattle`, `pop`, `sprinkler_bar`, `drip`, `log`, `blowdryer`, `fan`,
+`baron_whiskers`, `spawner`. Items: `kibble`, `big_kibble`, `bubble_bone`,
+`zoomies_treat`, `lucky_squeaky`, `flutter_collar`. Blocks: `question`, `brick`,
+`pswitch`, `ivy`. Platforms: `platform` (`move=falling|lift|sideways|vertical|
+travel|cloud`), `trampoline`. Features: `warp`, `bath_plug`, `rescued_pup`.
+
+**Breakable blocks (per your note).** Block entities carry the props the runtime
+needs: `brick` → `breakable=1` (+ a `contains` for coin/power bricks); `question`
+→ `contains=<item>` and `hidden=1` for invisible ones; poison blocks →
+`contains=poison`. The actual smash-from-below / smash-while-big behavior is a
+**runtime** milestone (§10 step 3) — the IR now records *what's breakable and
+what it holds* so wiring it up is just behavior, not re-derivation.
+
 ## 5. Physics & feel retune (the "make the jump make sense" work)
 
 The demo blows Munchii up to a 19-cell-wide sprite filling the box. Tile
