@@ -2,3 +2,8 @@ target/
 *.png
 *.log
 /scratch/
+
+# Imported third-party level sources/outputs are dev-only and never committed
+# (see CAMPAIGN_PLAN.md, IP decision A). We ship only our own authored levels.
+*.tscn
+/imported/

@@ -1,0 +1,41 @@
+scamper-level v1
+id yard-romp-1
+theme overworld
+size 64 15
+spawn 2 12
+goal flag 62 3
+# --- ground: two tiles thick, with a 4-wide pit at x28..31 ---
+R 0 13 28 ground
+R 0 14 28 ground
+R 32 13 32 ground
+R 32 14 32 ground
+# --- a brick shelf and a couple of treat-blocks (entities carry contents) ---
+R 9 9 3 brick
+E question 6 9 contains=kibble
+E question 12 9 contains=big_kibble
+# --- a pipe (2x2) ---
+R 20 11 2 pipe
+R 20 12 2 pipe
+# --- a grassy ledge with a critter and a treat on it ---
+R 40 9 6 ground
+E rollo 42 8
+E zoomies_treat 45 8
+# --- end staircase up to the flag ---
+T 56 12 ground
+T 57 11 ground
+T 57 12 ground
+T 58 10 ground
+T 58 11 ground
+T 58 12 ground
+T 59 9 ground
+T 59 10 ground
+T 59 11 ground
+T 59 12 ground
+# --- critters + a few kibble to grab ---
+E boneling 16 12
+E boneling 24 12
+E kibble 10 8
+E kibble 14 8
+E kibble 41 8
+# --- mid-level checkpoint past the pit ---
+C 33 12

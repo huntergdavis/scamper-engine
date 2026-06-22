@@ -134,6 +134,22 @@ check / bless / rename / delete). Captures live in `~/.local/state/scamper/
 captures`. A committed fixture (`fixtures/captures/ci-smoke.*`) is replayed by
 `cargo test` as a regression guard.
 
+## Levels (importer + IR)
+
+The campaign uses an engine-native, line-oriented level format (`*.lvl`) — readable
+and hand-authorable (see `levels/yard-romp-1.lvl`). An **offline** dev tool imports
+Godot `.tscn` tile levels into it:
+
+```sh
+scamp import <in.tscn> <out.lvl>   # decode a Godot scene to our Level IR
+scamp level-info <file.lvl>        # stats + an ascii map of a level
+```
+
+The importer is for **local** use only: imported third-party layouts are
+gitignored (`*.tscn`, `imported/`) and never shipped — we ship our own authored
+levels. The full design (bestiary, power-ups, runtime, camera) lives in
+`CAMPAIGN_PLAN.md`.
+
 ## Test
 
 ```sh

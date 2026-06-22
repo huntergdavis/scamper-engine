@@ -76,8 +76,100 @@ fn main() {
             }
         }
         Some("captures") => run_captures(),
+        Some("import") => run_import(&args),
+        Some("level-info") => run_level_info(&args),
         _ => run_live(None),
     }
+}
+
+/// `scamp import <in.tscn> <out.lvl> [--theme <t>] [--id <id>]` — offline dev tool:
+/// convert a Godot scene to our Level IR. (CAMPAIGN_PLAN.md §4.)
+fn run_import(args: &[String]) {
+    let (input, output) = match (nth_nonflag(args, 1), nth_nonflag(args, 2)) {
+        (Some(i), Some(o)) => (i, o),
+        _ => {
+            eprintln!("usage: scamp import <in.tscn> <out.lvl> [--theme <t>] [--id <id>]");
+            std::process::exit(2);
+        }
+    };
+    let theme = flag_value(args, "--theme").unwrap_or("overworld");
+    // Default id from the output filename stem.
+    let default_id = std::path::Path::new(output).file_stem().and_then(|s| s.to_str()).unwrap_or("level");
+    let id = flag_value(args, "--id").unwrap_or(default_id);
+
+    let text = match std::fs::read_to_string(input) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("import: cannot read {input}: {e}");
+            std::process::exit(2);
+        }
+    };
+    let imp = match scamper::level::import_tscn(&text, id, theme) {
+        Ok(i) => i,
+        Err(e) => {
+            eprintln!("import: {input}: {e}");
+            std::process::exit(1);
+        }
+    };
+    if let Err(e) = std::fs::write(output, imp.level.to_text()) {
+        eprintln!("import: cannot write {output}: {e}");
+        std::process::exit(2);
+    }
+    let l = &imp.level;
+    eprintln!(
+        "imported {input} -> {output}: {}x{} tiles, {} tile-spans, {} entities, spawn {:?}, goal {}",
+        l.w, l.h, l.tiles.len(), l.entities.len(), l.spawn,
+        l.goal.as_ref().map(|g| format!("({},{})", g.x, g.y)).unwrap_or_else(|| "none".into()),
+    );
+    for w in &imp.warnings {
+        eprintln!("  warning: {w}");
+    }
+}
+
+/// `scamp level-info <file.lvl>` — print stats + an ascii map of a level.
+fn run_level_info(args: &[String]) {
+    let path = match nth_nonflag(args, 1) {
+        Some(p) => p,
+        None => {
+            eprintln!("usage: scamp level-info <file.lvl>");
+            std::process::exit(2);
+        }
+    };
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("level-info: cannot read {path}: {e}");
+            std::process::exit(2);
+        }
+    };
+    let lvl = match scamper::level::Level::from_text(&text) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("level-info: {path}: {e}");
+            std::process::exit(1);
+        }
+    };
+    println!(
+        "{}  theme={}  {}x{} tiles  spawn={:?}  entities={}  checkpoints={}",
+        lvl.id, lvl.theme, lvl.w, lvl.h, lvl.spawn, lvl.entities.len(), lvl.checkpoints.len()
+    );
+    if let Some(g) = &lvl.goal {
+        println!("goal: {} at ({},{})", g.kind, g.x, g.y);
+    }
+    let mut counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    for e in &lvl.entities {
+        *counts.entry(e.kind.as_str()).or_insert(0) += 1;
+    }
+    if !counts.is_empty() {
+        let summary: Vec<String> = counts.iter().map(|(k, n)| format!("{k}×{n}")).collect();
+        println!("entities: {}", summary.join(", "));
+    }
+    println!("\n{}", lvl.ascii_preview());
+}
+
+/// Value of a `--flag <value>` pair in `args`, if present.
+fn flag_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
+    args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).map(|s| s.as_str())
 }
 
 /// The `n`-th non-flag argument after the program name (0 = the subcommand).

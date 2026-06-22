@@ -8,6 +8,7 @@ pub mod effects;
 pub mod framebuffer;
 pub mod input;
 pub mod kitty;
+pub mod level;
 pub mod math;
 pub mod munchii;
 pub mod player;
