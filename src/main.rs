@@ -3,12 +3,13 @@
 //! scenarios and dumps PNGs (for development on a box without a Kitty terminal).
 
 use scamper::backend::{AsciiBackend, Backend, KittyBackend, MonoBackend, Overlay, TextBackend};
-use scamper::effects::{self, Effects};
+use scamper::capture::{self, InputFrame, Recording, Snapshots};
 use scamper::munchii;
 use scamper::framebuffer::{Framebuffer, Rgba};
 use scamper::input::{Input, K_ESC, K_HELP, K_N, K_Q, K_TAB, K_Y};
 use scamper::math::Vec2;
 use scamper::player::{FeelParams, Player, State};
+use scamper::sim::{Sim, SIM_DT_NS};
 use scamper::time::{now_ns, sleep_until_ns, NS_PER_SEC};
 use scamper::world::{TileMap, TILE};
 use scamper::{dlog, kitty, terminal};
@@ -43,8 +44,45 @@ fn main() {
         }
         Some("gfxtest") => run_gfxtest(),
         Some("shot") => run_shot(),
-        _ => run_live(),
+        Some("record") => {
+            // `record <name>`: live play, capturing per-tick inputs; the gated quit
+            // (Q→Y) finalizes and writes the capture.
+            match nth_nonflag(&args, 1) {
+                Some(name) if capture::valid_name(name) => run_live(Some(name.to_string())),
+                Some(name) => {
+                    eprintln!("record: invalid capture name {name:?} (use letters, digits, . _ -)");
+                    std::process::exit(2);
+                }
+                None => {
+                    eprintln!("usage: scamp record <name>");
+                    std::process::exit(2);
+                }
+            }
+        }
+        Some("replay") => {
+            let mode = if args.iter().any(|a| a == "--bless") {
+                ReplayMode::Bless
+            } else if args.iter().any(|a| a == "--check") {
+                ReplayMode::Check
+            } else {
+                ReplayMode::Play
+            };
+            match nth_nonflag(&args, 1) {
+                Some(name) => run_replay(name, mode),
+                None => {
+                    eprintln!("usage: scamp replay <name> [--check|--bless]");
+                    std::process::exit(2);
+                }
+            }
+        }
+        Some("captures") => run_captures(),
+        _ => run_live(None),
     }
+}
+
+/// The `n`-th non-flag argument after the program name (0 = the subcommand).
+fn nth_nonflag(args: &[String], n: usize) -> Option<&str> {
+    args.iter().skip(1).filter(|a| !a.starts_with("--")).nth(n).map(|s| s.as_str())
 }
 
 // ---------------------------------------------------------------------------
@@ -477,6 +515,123 @@ fn pose_for(player: &Player, down_held: bool) -> &'static str {
     }
 }
 
+/// Framebuffer-px → terminal-cell mapping for the current arena (round to nearest).
+fn to_cells(arena: &Arena, x: f64, y: f64) -> (i32, i32) {
+    let disp_rows = arena.rows.saturating_sub(1);
+    (
+        (x / arena.fb_w as f64 * arena.cols as f64).round() as i32,
+        (y / arena.fb_h as f64 * disp_rows as f64).round() as i32,
+    )
+}
+
+/// Munchii's sprite lines + cell placement (col, row) for a render position, with
+/// the animation frame selected off the **tick clock** (so it's identical live and
+/// on replay). Shared by the live present and the snapshot renderer.
+fn munchii_overlay(arena: &Arena, sim: &Sim, pos: Vec2, clock: u64) -> (Vec<String>, i32, i32) {
+    let player = &sim.player;
+    let anim = munchii::anim(pose_for(player, sim.last_input.down_held));
+    let n = anim.frames.len().max(1);
+    let fi = (clock / (NS_PER_SEC / anim.fps.max(1) as u64)) as usize % n;
+    // During a wall-slide Munchii faces AWAY from the wall, so the sprite mirrors.
+    let face_left = if player.state == State::WallSliding {
+        player.facing > 0
+    } else {
+        player.facing < 0
+    };
+    let lines: Vec<String> = if face_left {
+        anim.frames[fi].iter().map(|l| flip_line(l)).collect()
+    } else {
+        anim.frames[fi].iter().map(|s| s.to_string()).collect()
+    };
+    let fw = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0) as i32;
+    let (box_left, box_top) = to_cells(arena, pos.x, pos.y);
+    let pcol = box_left + (munchii::W as i32 - fw) / 2;
+    (lines, pcol, box_top)
+}
+
+/// Live effects as character-tier overlays (owned lines, tint, z, and cell col/row),
+/// for the character backends and the `mono_text` snapshot.
+type FxOverlay = (Vec<String>, (u8, u8, u8), i32, i32, i32);
+fn fx_overlays_cells(arena: &Arena, sim: &Sim, clock: u64) -> Vec<FxOverlay> {
+    sim.fx
+        .render(clock)
+        .into_iter()
+        .map(|(frame, tint, z, x, y)| {
+            let fl: Vec<String> = frame.iter().map(|s| s.to_string()).collect();
+            let w = fl.iter().map(|l| l.chars().count()).max().unwrap_or(0) as i32;
+            let (cx, cy) = to_cells(arena, x, y);
+            (fl, tint, z, cx - w / 2, cy)
+        })
+        .collect()
+}
+
+/// Render the full scene (arena + Munchii + effects) into `out` via `backend`. The
+/// single present path for both live play and visual replay: character tiers stamp
+/// overlays, pixel tiers rasterize into the framebuffer, z-ordered around Munchii.
+fn present_scene(
+    out: &mut Vec<u8>,
+    fb: &mut Framebuffer,
+    arena: &Arena,
+    sim: &Sim,
+    backend: &mut Box<dyn Backend>,
+    full_redraw: bool,
+    alpha: f64,
+) {
+    let clock = sim.clock();
+    let rpos = sim.prev_pos.lerp(sim.player.pos, alpha);
+    let disp_rows = arena.rows.saturating_sub(1);
+    render_arena(fb, &arena.map);
+    let (lines, pcol, prow) = munchii_overlay(arena, sim, rpos, clock);
+
+    if backend.draws_overlay() {
+        let fxr = fx_overlays_cells(arena, sim, clock);
+        let mut overlays: Vec<Overlay> = Vec::with_capacity(1 + fxr.len());
+        overlays.push(Overlay { lines: &lines, col: pcol, row: prow, tint: None, z: 0 });
+        for (fl, tint, z, col, row) in &fxr {
+            overlays.push(Overlay { lines: fl, col: *col, row: *row, tint: Some(*tint), z: *z });
+        }
+        backend.present(out, fb, arena.cols, disp_rows, full_redraw, &overlays);
+    } else {
+        let cpw = arena.fb_w as f64 / arena.cols.max(1) as f64;
+        let cph = arena.fb_h as f64 / disp_rows.max(1) as f64;
+        let fxr = sim.fx.render(clock);
+        for &(frame, tint, z, x, y) in &fxr {
+            if z < 0 {
+                draw_effect_pixels(fb, frame, tint, x, y, cpw, cph);
+            }
+        }
+        draw_sprite_pixels(fb, &lines, pcol as f64 * cpw, prow as f64 * cph, cpw, cph);
+        for &(frame, tint, z, x, y) in &fxr {
+            if z >= 0 {
+                draw_effect_pixels(fb, frame, tint, x, y, cpw, cph);
+            }
+        }
+        backend.present(out, fb, arena.cols, disp_rows, full_redraw, &[]);
+    }
+}
+
+/// Render the current scene to plain text via `backend::mono_text` — the keyframe
+/// snapshot used for deterministic regression testing. Tick-clock driven, so two
+/// replays of the same capture produce byte-identical text.
+fn snapshot_text(fb: &mut Framebuffer, arena: &Arena, sim: &Sim) -> String {
+    let clock = sim.clock();
+    render_arena(fb, &arena.map);
+    let (lines, pcol, prow) = munchii_overlay(arena, sim, sim.player.pos, clock);
+    let fxr = fx_overlays_cells(arena, sim, clock);
+    let mut overlays: Vec<Overlay> = Vec::with_capacity(1 + fxr.len());
+    overlays.push(Overlay { lines: &lines, col: pcol, row: prow, tint: None, z: 0 });
+    for (fl, tint, z, col, row) in &fxr {
+        overlays.push(Overlay { lines: fl, col: *col, row: *row, tint: Some(*tint), z: *z });
+    }
+    let cols = arena.cols as usize;
+    let disp_rows = arena.rows.saturating_sub(1) as usize;
+    // Canonical form: rows joined by '\n' with no trailing newline, matching the
+    // snapshot file's line-oriented round-trip (`Snapshots::{to,from}_text`).
+    scamper::backend::mono_text(fb, cols, disp_rows, &overlays)
+        .trim_end_matches('\n')
+        .to_string()
+}
+
 // ---------------------------------------------------------------------------
 // Status line (bottom terminal row): help hint + backend + live engine readout
 // ---------------------------------------------------------------------------
@@ -493,12 +648,13 @@ fn state_letter(s: State) -> &'static str {
 /// a single line (truncated to terminal width so it never wraps/scrolls). The
 /// leading `h` (the help affordance) is underlined; full controls + quit live in
 /// the help menu.
-fn render_status(buf: &mut String, p: &Player, score: u32, fps: f64, backend: &str, rows: u16, cols: u16) {
+fn render_status(buf: &mut String, p: &Player, score: u32, fps: f64, backend: &str, rows: u16, cols: u16, recording: bool) {
     use std::fmt::Write;
     let mut plain = String::new();
+    let rec = if recording { "REC  " } else { "" };
     let _ = write!(
         plain,
-        "h Help  |  Tab gfx:{backend}  |  Score {score}  |  {}  vx {:>4.0} vy {:>4.0}  |  {fps:>3.0} fps",
+        "{rec}h Help  |  Tab gfx:{backend}  |  Score {score}  |  {}  vx {:>4.0} vy {:>4.0}  |  {fps:>3.0} fps",
         state_letter(p.state),
         p.vel.x,
         p.vel.y,
@@ -590,7 +746,7 @@ fn render_help(out: &mut Vec<u8>, active_backend: &str) {
 // Live loop — the engine test app: a box arena that fills the terminal window.
 // ---------------------------------------------------------------------------
 
-fn run_live() {
+fn run_live(record_name: Option<String>) {
     let guard = match terminal::TerminalGuard::enter() {
         Ok(g) => g,
         Err(e) => {
@@ -601,16 +757,21 @@ fn run_live() {
     };
     let kitty_kbd = terminal::probe_kitty_keyboard();
 
-    let fp = FeelParams::default();
     let ws0 = terminal::query_winsize();
     let mut arena = build_arena(ws0);
     let mut fb = Framebuffer::new(arena.fb_w, arena.fb_h);
     let mut player = Player::new(arena.map.spawn.0, arena.map.spawn.1);
     fit_player_to_munchii(&mut player, &arena);
+    let mut sim = Sim::new(player, arena.map.spawn);
     let mut input = Input::new(kitty_kbd);
+
+    // Recording: capture the originating window + every per-tick InputFrame. While
+    // recording the arena is frozen (resizes ignored) so the capture has a single
+    // geometry — the load-bearing requirement for faithful replay.
+    let mut recorder: Option<Recording> = record_name.as_ref().map(|n| Recording::new(n.clone(), ws0));
     dlog!(
-        "live: kitty_kbd={kitty_kbd} winsize={ws0:?} -> arena {}x{} tiles, internal image {}x{}px scaled across {}x{} cells, spawn=({:.0},{:.0})",
-        arena.map.w, arena.map.h, arena.fb_w, arena.fb_h, arena.cols, arena.rows.saturating_sub(1), arena.map.spawn.0, arena.map.spawn.1
+        "live: kitty_kbd={kitty_kbd} winsize={ws0:?} record={:?} -> arena {}x{} tiles, internal image {}x{}px scaled across {}x{} cells, spawn=({:.0},{:.0})",
+        record_name, arena.map.w, arena.map.h, arena.fb_w, arena.fb_h, arena.cols, arena.rows.saturating_sub(1), arena.map.spawn.0, arena.map.spawn.1
     );
 
     let mut out: Vec<u8> = Vec::new();
@@ -620,40 +781,15 @@ fn run_live() {
     let mut backend: Box<dyn Backend> = Box::new(KittyBackend::new());
     let mut full_redraw = true; // force a complete repaint after switch/resize
 
-    let sim_dt = 1.0 / 60.0;
-    let sim_dt_ns = NS_PER_SEC / 60;
     let spin_margin = 1_000_000u64; // 1ms
     let mut acc: u64 = 0;
     let mut prev_t = now_ns();
     let mut next = now_ns();
-    let mut prev_pos = player.pos;
-    let mut pending_jump = false; // latch a press until a sim substep consumes it
+    let mut pending_jump = false; // latch a press until a sim tick consumes it
     let mut frame: u64 = 0;
-    let mut fx = Effects::new();
-    let mut was_double = false; // rising edge of did_double = the double-jump fires
-    let mut was_grounded = true; // falling edge of grounded = a landing
-    let mut last_spark_ns: u64 = 0; // throttles the continuous wall-slide sparks
 
     let mut ui = Ui::Play;
-    // Switch the active backend (kitty <-> text), clearing the old one's output.
-    let switch_backend = |backend: &mut Box<dyn Backend>| {
-        let mut o2: Vec<u8> = Vec::new();
-        backend.teardown(&mut o2);
-        {
-            let mut o = std::io::stdout().lock();
-            let _ = o.write_all(&o2);
-            let _ = o.write_all(b"\x1b[2J");
-            let _ = o.flush();
-        }
-        // Cycle: kitty -> text -> ascii -> mono -> kitty.
-        *backend = match backend.name() {
-            "kitty" => Box::new(TextBackend::new()) as Box<dyn Backend>,
-            "text" => Box::new(AsciiBackend::new()) as Box<dyn Backend>,
-            "ascii" => Box::new(MonoBackend::new()) as Box<dyn Backend>,
-            _ => Box::new(KittyBackend::new()) as Box<dyn Backend>,
-        };
-        dlog!("backend -> {}", backend.name());
-    };
+    let switch_backend = make_switch_backend();
 
     loop {
         if terminal::quit_requested() || input.quit {
@@ -703,7 +839,8 @@ fn run_live() {
         }
 
         // Rebuild the arena to the new window size, keeping the player in bounds.
-        if terminal::take_resize() {
+        // Skipped while recording (the capture keeps one fixed geometry).
+        if terminal::take_resize() && recorder.is_none() {
             let ws = terminal::query_winsize();
             arena = build_arena(ws);
             fb.resize(arena.fb_w, arena.fb_h);
@@ -711,8 +848,8 @@ fn run_live() {
             // Footprint depends on the window, so refit Munchii's hitbox to the
             // new arena and reseat him inside it (also rescues a shrink that would
             // otherwise trap him in a wall).
-            fit_player_to_munchii(&mut player, &arena);
-            prev_pos = player.pos;
+            fit_player_to_munchii(&mut sim.player, &arena);
+            sim.prev_pos = sim.player.pos;
             // Dimensions changed: clear the backend's artifacts + screen, then
             // force a full repaint next frame.
             out.clear();
@@ -727,8 +864,8 @@ fn run_live() {
         let now = now_ns();
         let mut elapsed = now - prev_t;
         prev_t = now;
-        if elapsed > 8 * sim_dt_ns {
-            elapsed = 8 * sim_dt_ns;
+        if elapsed > 8 * SIM_DT_NS {
+            elapsed = 8 * SIM_DT_NS;
         }
         if elapsed > 0 {
             fps = fps * 0.9 + (NS_PER_SEC as f64 / elapsed as f64) * 0.1;
@@ -741,49 +878,25 @@ fn run_live() {
             if input.jump_pressed() {
                 pending_jump = true;
             }
-            while acc >= sim_dt_ns {
-                prev_pos = player.pos;
-                player.step(
-                    &arena.map,
-                    sim_dt,
-                    input.axis_x(),
-                    pending_jump,
-                    input.jump_held(),
-                    input.down_held(),
-                    &fp,
-                );
-                pending_jump = false; // consumed by the first substep only (no double-fire)
-                acc -= sim_dt_ns;
-                // Event-triggered effects — detected per substep so a jump-and-land
-                // within one render frame still fires (did_double resets on landing).
-                if player.did_double && !was_double {
-                    fx.spawn(&effects::PUFF, player.pos.x + player.w / 2.0, player.pos.y + player.h, now);
+            while acc >= SIM_DT_NS {
+                // One tick = one InputFrame = one Player::step. jump_pressed is
+                // consumed by the first tick of the frame only (no double-fire).
+                let inp = InputFrame {
+                    axis_x: input.axis_x() as i8,
+                    jump_pressed: pending_jump,
+                    jump_held: input.jump_held(),
+                    down_held: input.down_held(),
+                };
+                pending_jump = false;
+                if let Some(rec) = recorder.as_mut() {
+                    rec.frames.push(inp);
                 }
-                if player.grounded && !was_grounded {
-                    fx.spawn(&effects::DUST, player.pos.x + player.w / 2.0, player.pos.y + player.h, now);
-                }
-                was_double = player.did_double;
-                was_grounded = player.grounded;
-                // Safety net (shouldn't happen in a closed box): respawn if it escapes.
-                if player.pos.y > arena.map.px_h() + 64.0 {
-                    player = Player::new(arena.map.spawn.0, arena.map.spawn.1);
-                    prev_pos = player.pos;
-                }
+                sim.step(&arena.map, inp);
+                acc -= SIM_DT_NS;
             }
         } else {
             acc = 0;
-            last_spark_ns = now; // don't burst sparks on resume from a modal
         }
-
-        // Continuous friction sparks straddling the wall-contact line (his box
-        // edge), so the burst is half on Munchii and half on the wall.
-        if player.state == State::WallSliding && now.saturating_sub(last_spark_ns) >= NS_PER_SEC / 18 {
-            let sx = player.pos.x + player.w / 2.0 + player.wall_dir as f64 * player.w / 2.0;
-            let sy = player.pos.y + player.h * 0.6;
-            fx.spawn(&effects::SPARK, sx, sy, now);
-            last_spark_ns = now;
-        }
-        fx.update(now);
 
         // --- present (modal-aware) ---
         if ui == Ui::Help {
@@ -792,83 +905,13 @@ fn run_live() {
             let _ = o.write_all(&out);
             let _ = o.flush();
         } else {
-            let alpha = acc as f64 / sim_dt_ns as f64;
-            let rpos = prev_pos.lerp(player.pos, alpha);
-            let disp_rows = arena.rows.saturating_sub(1);
-            render_arena(&mut fb, &arena.map);
-
-            // Pose by movement state (loops on wall-clock). During a wall-slide
-            // Munchii faces AWAY from the wall (press left → on the left wall →
-            // faces right), so the whole sprite mirrors.
-            let anim = munchii::anim(pose_for(&player, input.down_held()));
-            let n = anim.frames.len().max(1);
-            let fi = (now / (NS_PER_SEC / anim.fps.max(1) as u64)) as usize % n;
-            let face_left = if player.state == State::WallSliding {
-                player.facing > 0
-            } else {
-                player.facing < 0
-            };
-            let lines: Vec<String> = if face_left {
-                anim.frames[fi].iter().map(|l| flip_line(l)).collect()
-            } else {
-                anim.frames[fi].iter().map(|s| s.to_string()).collect()
-            };
-            let to_cells = |x: f64, y: f64| -> (i32, i32) {
-                (
-                    (x / arena.fb_w as f64 * arena.cols as f64).round() as i32,
-                    (y / arena.fb_h as f64 * disp_rows as f64).round() as i32,
-                )
-            };
-
-            // Munchii sprite aligned to his hitbox (feet on the box bottom,
-            // centered across its width); same placement in every tier.
-            let fw = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0) as i32;
-            let (box_left, box_top) = to_cells(rpos.x, rpos.y);
-            let pcol = box_left + (munchii::W as i32 - fw) / 2;
-
-            if backend.draws_overlay() {
-                // Character tiers stamp Munchii + effects as overlays.
-                let fx_render: Vec<(Vec<String>, (u8, u8, u8), i32, i32, i32)> = fx
-                    .render(now)
-                    .into_iter()
-                    .map(|(frame, tint, z, x, y)| {
-                        let fl: Vec<String> = frame.iter().map(|s| s.to_string()).collect();
-                        let w = fl.iter().map(|l| l.chars().count()).max().unwrap_or(0) as i32;
-                        let (cx, cy) = to_cells(x, y);
-                        (fl, tint, z, cx - w / 2, cy)
-                    })
-                    .collect();
-
-                let mut overlays: Vec<Overlay> = Vec::with_capacity(1 + fx_render.len());
-                overlays.push(Overlay { lines: &lines, col: pcol, row: box_top, tint: None, z: 0 });
-                for (fl, tint, z, col, row) in &fx_render {
-                    overlays.push(Overlay { lines: fl, col: *col, row: *row, tint: Some(*tint), z: *z });
-                }
-                backend.present(&mut out, &fb, arena.cols, disp_rows, full_redraw, &overlays);
-            } else {
-                // Pixel tiers: rasterize Munchii + effects into the framebuffer,
-                // z-ordered around him (behind first, then in front).
-                let cpw = arena.fb_w as f64 / arena.cols.max(1) as f64;
-                let cph = arena.fb_h as f64 / disp_rows.max(1) as f64;
-                let fxr = fx.render(now);
-                for &(frame, tint, z, x, y) in &fxr {
-                    if z < 0 {
-                        draw_effect_pixels(&mut fb, frame, tint, x, y, cpw, cph);
-                    }
-                }
-                draw_sprite_pixels(&mut fb, &lines, pcol as f64 * cpw, box_top as f64 * cph, cpw, cph);
-                for &(frame, tint, z, x, y) in &fxr {
-                    if z >= 0 {
-                        draw_effect_pixels(&mut fb, frame, tint, x, y, cpw, cph);
-                    }
-                }
-                backend.present(&mut out, &fb, arena.cols, disp_rows, full_redraw, &[]);
-            }
+            let alpha = acc as f64 / SIM_DT_NS as f64;
+            present_scene(&mut out, &mut fb, &arena, &sim, &mut backend, full_redraw, alpha);
             full_redraw = false;
             if ui == Ui::ConfirmQuit {
                 render_quit_prompt(&mut status, arena.rows, arena.cols);
             } else {
-                render_status(&mut status, &player, score, fps, backend.name(), arena.rows, arena.cols);
+                render_status(&mut status, &sim.player, score, fps, backend.name(), arena.rows, arena.cols, recorder.is_some());
             }
             let mut o = std::io::stdout().lock();
             let _ = o.write_all(&out);
@@ -881,20 +924,246 @@ fn run_live() {
         frame += 1;
         if frame == 1 || frame % 120 == 0 {
             dlog!(
-                "frame {frame}: backend={} encoded {} bytes, fps={fps:.0}, pos=({:.0},{:.0}) state={}",
-                backend.name(), out.len(), player.pos.x, player.pos.y, state_letter(player.state)
+                "frame {frame}: backend={} encoded {} bytes, fps={fps:.0}, tick={} pos=({:.0},{:.0}) state={}",
+                backend.name(), out.len(), sim.tick, sim.player.pos.x, sim.player.pos.y, state_letter(sim.player.state)
             );
         }
 
-        next += sim_dt_ns;
+        next += SIM_DT_NS;
         let nn = now_ns();
         if next < nn {
             next = nn; // fell behind; don't spiral
         }
         sleep_until_ns(next, spin_margin);
     }
+
+    // Persist the recording on every exit path (gated quit, Ctrl-C, signal) so a
+    // run is never lost. Restore the terminal first so the message is readable.
+    if let Some(rec) = recorder {
+        drop(guard);
+        let dir = capture::captures_dir();
+        match capture::save_recording(&dir, &rec) {
+            Ok(p) => eprintln!("scamp: recorded {} ticks -> {}", rec.frames.len(), p.display()),
+            Err(e) => eprintln!("scamp: FAILED to save recording {:?}: {e}", rec.name),
+        }
+        return;
+    }
     drop(guard);
     eprintln!("scamp: bye.");
+}
+
+/// The active-backend cycle (kitty → text → ascii → mono → kitty), clearing the
+/// old backend's output. Shared by live play and visual replay.
+fn make_switch_backend() -> impl Fn(&mut Box<dyn Backend>) {
+    |backend: &mut Box<dyn Backend>| {
+        let mut o2: Vec<u8> = Vec::new();
+        backend.teardown(&mut o2);
+        {
+            let mut o = std::io::stdout().lock();
+            let _ = o.write_all(&o2);
+            let _ = o.write_all(b"\x1b[2J");
+            let _ = o.flush();
+        }
+        *backend = match backend.name() {
+            "kitty" => Box::new(TextBackend::new()) as Box<dyn Backend>,
+            "text" => Box::new(AsciiBackend::new()) as Box<dyn Backend>,
+            "ascii" => Box::new(MonoBackend::new()) as Box<dyn Backend>,
+            _ => Box::new(KittyBackend::new()) as Box<dyn Backend>,
+        };
+        dlog!("backend -> {}", backend.name());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Replay — re-run a capture's per-tick inputs through the same tick-driven sim,
+// either visually (a live window) or headless for snapshot regression testing.
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy, PartialEq)]
+enum ReplayMode {
+    Play,  // visual playback in a terminal
+    Check, // headless: snapshot keyframes, diff against golden (CI)
+    Bless, // headless: snapshot keyframes, write/update golden
+}
+
+/// Keyframe cadence for snapshot regression: every N ticks, plus the final tick.
+const SNAPSHOT_INTERVAL: u64 = 30;
+
+fn run_replay(name: &str, mode: ReplayMode) {
+    let dir = capture::captures_dir();
+    let rec = match capture::load_recording(&dir, name) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("replay: cannot load capture {name:?}: {e}");
+            eprintln!("  (looked in {})", dir.display());
+            std::process::exit(2);
+        }
+    };
+    let arena = build_arena(rec.win);
+    let mut fb = Framebuffer::new(arena.fb_w, arena.fb_h);
+    let mut player = Player::new(arena.map.spawn.0, arena.map.spawn.1);
+    fit_player_to_munchii(&mut player, &arena);
+    let mut sim = Sim::new(player, arena.map.spawn);
+
+    match mode {
+        ReplayMode::Play => replay_visual(&rec, &arena, &mut fb, sim),
+        ReplayMode::Check | ReplayMode::Bless => {
+            // Headless: replay every recorded tick, snapshotting at the keyframe
+            // cadence. Pure + deterministic, so it doubles as the CI invariant.
+            let keys = compute_keyframes(&rec, &arena, &mut fb, &mut sim);
+
+            if mode == ReplayMode::Bless {
+                let mut snaps = Snapshots::new(name);
+                snaps.keys = keys;
+                match capture::save_snapshots(&dir, &snaps) {
+                    Ok(p) => eprintln!("replay {name}: blessed {} keyframes -> {}", snaps.keys.len(), p.display()),
+                    Err(e) => {
+                        eprintln!("replay {name}: FAILED to write snapshots: {e}");
+                        std::process::exit(2);
+                    }
+                }
+            } else {
+                let golden = match capture::load_snapshots(&dir, name) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!("replay {name}: no golden snapshots ({e}). Bless first: scamp replay {name} --bless");
+                        std::process::exit(2);
+                    }
+                };
+                let diffs = golden.diff(&keys);
+                if diffs.is_empty() {
+                    eprintln!("replay {name}: {} keyframes match golden ✓", keys.len());
+                } else {
+                    for d in &diffs {
+                        eprintln!("{d}");
+                    }
+                    eprintln!("replay {name}: MISMATCH — replay diverged from golden");
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+}
+
+/// Replay `rec` through `sim` headless, returning `mono_text` keyframes at the
+/// snapshot cadence (always including tick 0 and the final tick). Deterministic:
+/// the same capture + arena always yields byte-identical output.
+fn compute_keyframes(rec: &Recording, arena: &Arena, fb: &mut Framebuffer, sim: &mut Sim) -> Vec<(u64, String)> {
+    let mut keys: Vec<(u64, String)> = Vec::new();
+    for inp in &rec.frames {
+        if sim.tick % SNAPSHOT_INTERVAL == 0 {
+            keys.push((sim.tick, snapshot_text(fb, arena, sim)));
+        }
+        sim.step(&arena.map, *inp);
+    }
+    if keys.last().map(|(t, _)| *t) != Some(sim.tick) {
+        keys.push((sim.tick, snapshot_text(fb, arena, sim)));
+    }
+    keys
+}
+
+/// Visual replay: feed the capture's inputs back one tick per rendered frame at
+/// 60 fps (reproducing the original 60 Hz pacing). Tab cycles backends, q quits.
+fn replay_visual(rec: &Recording, arena: &Arena, fb: &mut Framebuffer, mut sim: Sim) {
+    let guard = match terminal::TerminalGuard::enter() {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln!("replay needs an interactive terminal ({e}). Use --check for headless.");
+            return;
+        }
+    };
+    let kitty_kbd = terminal::probe_kitty_keyboard();
+    let mut input = Input::new(kitty_kbd);
+    let mut out: Vec<u8> = Vec::new();
+    let mut status = String::new();
+    let mut backend: Box<dyn Backend> = Box::new(KittyBackend::new());
+    let mut full_redraw = true;
+    let switch_backend = make_switch_backend();
+    let total = rec.frames.len();
+
+    let spin_margin = 1_000_000u64;
+    let mut next = now_ns();
+    let mut i = 0usize;
+    loop {
+        if terminal::quit_requested() || input.quit {
+            break;
+        }
+        input.poll();
+        if input.quit || input.pressed(K_Q) || input.pressed(K_ESC) {
+            break;
+        }
+        if input.pressed(K_TAB) {
+            switch_backend(&mut backend);
+            full_redraw = true;
+        }
+        if terminal::take_resize() {
+            // Geometry is fixed to the capture; just repaint cleanly.
+            out.clear();
+            backend.teardown(&mut out);
+            full_redraw = true;
+            let mut o = std::io::stdout().lock();
+            let _ = o.write_all(&out);
+            let _ = o.write_all(b"\x1b[2J");
+            let _ = o.flush();
+        }
+
+        // One recorded tick per frame; hold on the final frame when done.
+        let done = i >= total;
+        if !done {
+            sim.step(&arena.map, rec.frames[i]);
+            i += 1;
+        }
+
+        present_scene(&mut out, fb, arena, &sim, &mut backend, full_redraw, 0.0);
+        full_redraw = false;
+        render_replay_status(&mut status, &rec.name, sim.tick, total as u64, backend.name(), arena.rows, arena.cols, done);
+        {
+            let mut o = std::io::stdout().lock();
+            let _ = o.write_all(&out);
+            let _ = o.write_all(status.as_bytes());
+            let _ = o.flush();
+        }
+
+        next += SIM_DT_NS;
+        let nn = now_ns();
+        if next < nn {
+            next = nn;
+        }
+        sleep_until_ns(next, spin_margin);
+    }
+    drop(guard);
+    eprintln!("scamp: replay done.");
+}
+
+/// Replay's bottom status row: progress through the capture + backend + quit hint.
+fn render_replay_status(buf: &mut String, name: &str, tick: u64, total: u64, backend: &str, rows: u16, cols: u16, done: bool) {
+    use std::fmt::Write;
+    let tail = if done { "done — q to quit" } else { "q quit" };
+    let mut plain = String::new();
+    let _ = write!(plain, "REPLAY {name}  |  tick {tick}/{total}  |  Tab gfx:{backend}  |  {tail}");
+    let maxw = (cols as usize).saturating_sub(1);
+    if plain.len() > maxw {
+        plain.truncate(maxw);
+    }
+    buf.clear();
+    let _ = write!(buf, "\x1b[{rows};1H\x1b[2K\x1b[7m{plain}\x1b[0m");
+}
+
+/// `scamp captures`: list recorded captures (and whether each has golden snapshots).
+fn run_captures() {
+    let dir = capture::captures_dir();
+    let names = capture::list_captures(&dir);
+    if names.is_empty() {
+        eprintln!("no captures in {}", dir.display());
+        eprintln!("record one with:  scamp record <name>");
+        return;
+    }
+    println!("captures in {}:", dir.display());
+    for n in names {
+        let has_golden = capture::snapshot_path(&dir, &n).exists();
+        let ticks = capture::load_recording(&dir, &n).map(|r| r.frames.len()).unwrap_or(0);
+        println!("  {n}  ({ticks} ticks){}", if has_golden { "  [golden]" } else { "" });
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1155,7 +1424,7 @@ mod tests {
         let p = Player::new(10.0, 10.0);
         let mut s = String::new();
         // narrow terminal: must truncate well within the width, no wrap.
-        render_status(&mut s, &p, 0, 60.0, "kitty", 24, 20);
+        render_status(&mut s, &p, 0, 60.0, "kitty", 24, 20, false);
         assert!(s.contains("\x1b[4mh\x1b[24m"), "h help affordance should be underlined");
         assert!(s.contains("\x1b[24;1H"), "should position to the last row");
         // strip escapes; visible text must fit in cols-1.
@@ -1183,6 +1452,92 @@ mod tests {
         assert!(visible.contains("Y") && visible.contains("N"), "should offer Y/N: {visible:?}");
         assert!(visible.len() <= 39, "quit prompt {visible:?} exceeds width");
         assert!(s.contains("\x1b[24;1H"), "should position to the last row");
+    }
+
+    // ---- record / replay (RECORD_REPLAY.md) ----
+
+    /// A deterministic scripted run used both to bless the committed fixture and
+    /// to drive the determinism tests: settle, run right into the wall, jump,
+    /// double-jump, fast-fall — enough to exercise movement + effects.
+    fn fixture_recording() -> Recording {
+        let mut r = Recording::new("ci-smoke", terminal::WinSize { cols: 80, rows: 24, xpix: 800, ypix: 480 });
+        let push = |r: &mut Recording, n: usize, f: InputFrame| {
+            for _ in 0..n {
+                r.frames.push(f);
+            }
+        };
+        let z = InputFrame::default();
+        push(&mut r, 20, z); // settle on the floor
+        push(&mut r, 60, InputFrame { axis_x: 1, ..z }); // run right
+        // jump (press one tick, hold the rise), still drifting right
+        push(&mut r, 1, InputFrame { axis_x: 1, jump_pressed: true, jump_held: true, ..z });
+        push(&mut r, 14, InputFrame { axis_x: 1, jump_held: true, ..z });
+        // double jump
+        push(&mut r, 1, InputFrame { axis_x: 1, jump_pressed: true, jump_held: true, ..z });
+        push(&mut r, 12, InputFrame { axis_x: 1, jump_held: true, ..z });
+        push(&mut r, 20, InputFrame { axis_x: 1, down_held: true, ..z }); // fast-fall
+        push(&mut r, 30, z); // settle again
+        r
+    }
+
+    fn arena_for(rec: &Recording) -> (Arena, Framebuffer, Sim) {
+        let arena = build_arena(rec.win);
+        let fb = Framebuffer::new(arena.fb_w, arena.fb_h);
+        let mut player = Player::new(arena.map.spawn.0, arena.map.spawn.1);
+        fit_player_to_munchii(&mut player, &arena);
+        let sim = Sim::new(player, arena.map.spawn);
+        (arena, fb, sim)
+    }
+
+    #[test]
+    fn replay_keyframes_are_deterministic() {
+        let rec = fixture_recording();
+        let run = || {
+            let (arena, mut fb, mut sim) = arena_for(&rec);
+            compute_keyframes(&rec, &arena, &mut fb, &mut sim)
+        };
+        let a = run();
+        let b = run();
+        assert!(!a.is_empty(), "should produce keyframes");
+        assert_eq!(a, b, "replaying the same capture must be byte-identical");
+        // sanity: tick 0 is captured and the final tick is the frame count
+        assert_eq!(a.first().unwrap().0, 0);
+        assert_eq!(a.last().unwrap().0, rec.frames.len() as u64);
+    }
+
+    fn fixtures_dir() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures").join("captures")
+    }
+
+    /// CI invariant: the committed capture, replayed headless, must reproduce its
+    /// committed golden keyframes exactly. A physics or rasterizer change that
+    /// alters behavior fails here. Regenerate intentionally with `bless_fixtures`.
+    #[test]
+    fn committed_fixture_matches_golden() {
+        let dir = fixtures_dir();
+        let rec = capture::load_recording(&dir, "ci-smoke").expect("load fixture capture");
+        let golden = capture::load_snapshots(&dir, "ci-smoke").expect("load golden snapshots");
+        let (arena, mut fb, mut sim) = arena_for(&rec);
+        let keys = compute_keyframes(&rec, &arena, &mut fb, &mut sim);
+        let diffs = golden.diff(&keys);
+        assert!(diffs.is_empty(), "replay diverged from golden:\n{}", diffs.join("\n"));
+    }
+
+    /// Regenerate the committed fixture (capture + golden snapshots). Not run in
+    /// the normal suite — invoke deliberately after an intended behavior change:
+    ///   cargo test bless_fixtures -- --ignored
+    #[test]
+    #[ignore]
+    fn bless_fixtures() {
+        let dir = fixtures_dir();
+        let rec = fixture_recording();
+        capture::save_recording(&dir, &rec).expect("write fixture capture");
+        let (arena, mut fb, mut sim) = arena_for(&rec);
+        let keys = compute_keyframes(&rec, &arena, &mut fb, &mut sim);
+        let mut snaps = Snapshots::new(&rec.name);
+        snaps.keys = keys;
+        let p = capture::save_snapshots(&dir, &snaps).expect("write golden snapshots");
+        eprintln!("blessed fixture -> {} ({} keyframes)", p.display(), snaps.keys.len());
     }
 
     // crude ANSI stripper for the width assertion

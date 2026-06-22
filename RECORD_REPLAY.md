@@ -1,8 +1,44 @@
 # Milestone: Input Capture + Deterministic Replay
 
-> Status: **planned / not started.** This is the next milestone after
-> cross-backend dimensional parity (landed in `db1015b`). Pick up here on the
-> next machine. Updated: 2026-06-22.
+> Status: **landed (v1).** Tick-driven sim, capture/replay, golden keyframe
+> snapshots, a committed CI fixture, and a `run.sh -i` browser are all in. The
+> TUI file browser does play / check / bless / rename / delete. Updated:
+> 2026-06-22.
+
+## How to use it
+
+```sh
+scamp record <name>          # play + capture per-tick inputs; q saves the capture
+scamp replay <name>          # visual replay (Tab cycles backends, q quits)
+scamp replay <name> --bless  # headless: write golden mono_text keyframes
+scamp replay <name> --check  # headless: replay + diff vs golden (exit 1 on drift)
+scamp captures               # list captures (and which have golden snapshots)
+```
+
+`run.sh -i` exposes all of this: *record a run* (name-before-record prompt) and
+*replay a run* (a browser over the captures dir — play / check / bless / rename /
+delete). Captures live under `$XDG_STATE_HOME/scamper/captures` (`~/.local/state/
+scamper/captures`); `SCAMP_CAPTURE_DIR` overrides it (used by the test fixtures).
+
+## What landed vs. the plan below
+
+- **Tick-driven sim** — `src/sim.rs` (`Sim`) advances exactly one `Player::step`
+  per tick and derives **all** timing (effects, the wall-slide spark throttle,
+  sprite-animation frame selection) from a tick clock (`tick * SIM_DT_NS`), never
+  `now_ns()`. Wall-clock survives only for frame pacing, the FPS readout, and
+  inter-tick render interpolation — none of which appear in a snapshot.
+- **Capture format** — `src/capture.rs`: line-oriented text (`<name>.scap`), one
+  `InputFrame` per tick (`axis jump_pressed jump_held down_held`) plus a header
+  (`name`, `seed`, originating `WinSize`, `frames` count). Golden keyframes in
+  `<name>.snap`. The arena is **frozen during recording** (resizes ignored) so a
+  capture has a single geometry; replay rebuilds it from the stored `WinSize`.
+- **Snapshots** — every 30 ticks (plus the final tick), `backend::mono_text`.
+- **CI invariant** — `fixtures/captures/ci-smoke.{scap,snap}` is committed; the
+  `committed_fixture_matches_golden` test replays it headless and asserts the
+  keyframes match. Regenerate intentionally with
+  `cargo test bless_fixtures -- --ignored`.
+
+## Original design notes
 
 ## Why
 

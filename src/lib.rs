@@ -2,6 +2,7 @@
 //! protocol. Local-first, single-player, keyboard-only. See PROJECT_PLAN.md.
 
 pub mod backend;
+pub mod capture;
 pub mod dbg;
 pub mod effects;
 pub mod framebuffer;
@@ -11,6 +12,7 @@ pub mod math;
 pub mod munchii;
 pub mod player;
 pub mod png;
+pub mod sim;
 pub mod terminal;
 pub mod time;
 pub mod world;

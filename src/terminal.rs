@@ -62,7 +62,7 @@ unsafe fn set_handler(sig: libc::c_int, handler: extern "C" fn(libc::c_int)) {
     libc::sigaction(sig, &sa, std::ptr::null_mut());
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WinSize {
     pub cols: u16,
     pub rows: u16,

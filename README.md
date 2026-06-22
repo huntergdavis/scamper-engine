@@ -54,10 +54,15 @@ colored ASCII, and full Kitty pixels.
 ## Run it
 
 ```sh
+./install.sh               # one-time: ensure Rust + build (Linux or Termux)
 ./run.sh                   # build (release) + play
 # or
 cargo run --release
 ```
+
+`./install.sh` ensures a Rust toolchain (`pkg install rust` on Termux, rustup on
+Linux) and builds the release binaries; `--link` also symlinks `scamp` onto your
+PATH. Both `install.sh` and `run.sh` are cross-platform (`#!/usr/bin/env bash`).
 
 The **kitty** backend (the default) needs a terminal that speaks the Kitty
 graphics + keyboard protocols — **Kitty**, **Ghostty**, or **foot**. But the
@@ -108,6 +113,26 @@ moments — used for development on machines without a Kitty terminal:
 
 There's also a graphics probe — `./run.sh gfxtest` — that draws one static image
 and reports your terminal's size + protocol support.
+
+## Record &amp; deterministic replay
+
+Capture a playthrough and replay it tick-for-tick — the sim is **same-binary
+deterministic** (a fixed 60 Hz timestep with all timing driven off a tick clock,
+not the wall clock), so a recording reproduces exactly. Used to catch movement /
+rendering regressions textually, headless, in CI. See `RECORD_REPLAY.md`.
+
+```sh
+scamp record <name>          # play + capture per-tick inputs; q saves
+scamp replay <name>          # visual replay (Tab cycles backends, q quits)
+scamp replay <name> --bless  # write golden mono_text keyframes (headless)
+scamp replay <name> --check  # replay + diff vs golden, exit 1 on drift (CI)
+scamp captures               # list captures
+```
+
+`./run.sh -i` has a **record a run** entry and a **replay browser** (play /
+check / bless / rename / delete). Captures live in `~/.local/state/scamper/
+captures`. A committed fixture (`fixtures/captures/ci-smoke.*`) is replayed by
+`cargo test` as a regression guard.
 
 ## Test
 

@@ -4,7 +4,9 @@
 #   ./run.sh -i                # interactive menu (game / sprite viewer / tools)
 #   ./run.sh sprites           # sprite-lab: view sprite animations
 #   ./run.sh verify ./scratch  # headless: scripted scenarios + PNG dumps
-#   ./run.sh info | gfxtest | shot
+#   ./run.sh record <name>     # play + capture per-tick inputs (q saves)
+#   ./run.sh replay <name>     # replay a capture (add --check / --bless headless)
+#   ./run.sh info | gfxtest | shot | captures
 #
 # The kitty backend needs a terminal speaking the Kitty graphics + keyboard
 # protocols (Kitty, Ghostty, foot); the text backends run anywhere. Not tmux.
@@ -67,6 +69,95 @@ menu() {
     done
 }
 
+# Where captures live — mirrors capture::captures_dir() in the engine.
+captures_dir() {
+    printf '%s/scamper/captures' "${XDG_STATE_HOME:-$HOME/.local/state}"
+}
+
+# A capture name the engine will accept (single component; safe charset).
+valid_name() {
+    [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]]
+}
+
+# Prompt for a name (cursor shown), then record a run. `q` in-game finalizes it.
+record_run() {
+    local dir name c
+    dir="$(captures_dir)"
+    printf '\033[2J\033[H\n  \033[1mRecord a run\033[0m\n\n'
+    printf '  Name it (letters, digits, . _ -); blank cancels.\n  Then play — \033[1mq\033[0m stops and saves the capture.\n\n  name > '
+    printf '\033[?25h'
+    IFS= read -r name
+    printf '\033[?25l'
+    [[ -z "$name" ]] && return
+    if ! valid_name "$name"; then
+        printf '\n  invalid name. press a key…'; IFS= read -rsn1; return
+    fi
+    if [[ -e "$dir/$name.scap" ]]; then
+        printf '\n  "%s" exists — overwrite? [y/N] ' "$name"
+        IFS= read -rsn1 c; [[ "$c" == y || "$c" == Y ]] || return
+    fi
+    "target/$profile_dir/scamp" record "$name"
+}
+
+# Per-capture action menu: play / check / bless / rename / delete.
+capture_actions() {
+    local dir="$1" name="$2" new c golden
+    while true; do
+        golden=""; [[ -e "$dir/$name.snap" ]] && golden="  [golden]"
+        menu "capture: $name$golden" \
+            "play  (visual replay)" \
+            "check against golden" \
+            "bless / update golden" \
+            "rename" \
+            "delete" \
+            "back"
+        case "$MENU_SEL" in
+            0) "target/$profile_dir/scamp" replay "$name" ;;
+            1) printf '\033[2J\033[H'; "target/$profile_dir/scamp" replay "$name" --check; IFS= read -rsn1 -p $'\npress a key…' ;;
+            2) printf '\033[2J\033[H'; "target/$profile_dir/scamp" replay "$name" --bless; IFS= read -rsn1 -p $'\npress a key…' ;;
+            3) printf '\033[2J\033[H\n  rename "%s" to (blank cancels):\n  > ' "$name"
+               printf '\033[?25h'; IFS= read -r new; printf '\033[?25l'
+               if [[ -n "$new" ]] && valid_name "$new"; then
+                   mv -f "$dir/$name.scap" "$dir/$new.scap"
+                   [[ -e "$dir/$name.snap" ]] && mv -f "$dir/$name.snap" "$dir/$new.snap"
+                   return
+               fi ;;
+            4) printf '\033[2J\033[H\n  delete "%s" (and its golden)? [y/N] ' "$name"
+               IFS= read -rsn1 c
+               if [[ "$c" == y || "$c" == Y ]]; then
+                   rm -f "$dir/$name.scap" "$dir/$name.snap"
+                   return
+               fi ;;
+            *) return ;;
+        esac
+    done
+}
+
+# Browse the captures directory and act on a chosen capture.
+replay_browser() {
+    local dir f names
+    dir="$(captures_dir)"
+    while true; do
+        names=()
+        if [[ -d "$dir" ]]; then
+            for f in "$dir"/*.scap; do
+                [[ -e "$f" ]] || continue
+                names+=("$(basename "$f" .scap)")
+            done
+        fi
+        if [[ ${#names[@]} -eq 0 ]]; then
+            printf '\033[2J\033[H\n  \033[1mReplay\033[0m\n\n  no captures yet — record one first.\n\n  press a key…'
+            IFS= read -rsn1
+            return
+        fi
+        menu "SCAMPER \xc2\xb7 replay  (pick a capture)" "${names[@]}" "back"
+        if [[ $MENU_SEL -lt 0 || $MENU_SEL -ge ${#names[@]} ]]; then
+            return
+        fi
+        capture_actions "$dir" "${names[$MENU_SEL]}"
+    done
+}
+
 debug_menu() {
     while true; do
         menu "SCAMPER \xc2\xb7 debug tools" \
@@ -88,13 +179,17 @@ interactive_menu() {
     while true; do
         menu "SCAMPER  (munchii)" \
             "play the game" \
+            "record a run" \
+            "replay a run" \
             "sprite viewer  (Tab cycles backends)" \
             "debug tools" \
             "quit"
         case "$MENU_SEL" in
             0) run_game ;;
-            1) "target/$profile_dir/sprite-lab" ;;
-            2) debug_menu ;;
+            1) record_run ;;
+            2) replay_browser ;;
+            3) "target/$profile_dir/sprite-lab" ;;
+            4) debug_menu ;;
             *) break ;;
         esac
     done
