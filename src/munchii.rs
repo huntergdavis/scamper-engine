@@ -72,16 +72,14 @@ const CRAWL: &[&[&str]] = &[
     &["                   ", "                   ", "            __     ", " )    ___(( o==@   ", " |       (\\_)      ", "    w  w   n   n   "],
 ];
 
-// pressed to the wall (renderer flips him to face away from it). A held pose —
-// the friction sparks now come from the SPARK effect, emitted at his feet.
-const WALLSLIDE: &[&[&str]] = &[&[
-    "             __    ",
-    "           (( o==@ ",
-    "           (\\_)    ",
-    "  /__________\\     ",
-    "  \\__________/     ",
-    "   n  n     n  n   ",
-]];
+// pressed to the wall (renderer flips him to face away from it); legs drag and
+// eyes go wide as he scrapes down. Friction sparks come from the SPARK effect.
+const WALLSLIDE: &[&[&str]] = &[
+    &["             __    ", "           (( o==@ ", "           (\\_)    ", "  /__________\\     ", "  \\__________/     ", "   n  n     n  n   "],
+    &["             __    ", "           (( °==@ ", "           (\\_)    ", "  /__________\\     ", "  \\__________/     ", "   \\  \\     \\  \\   "],
+    &["             __    ", "           (( o==@ ", "           (\\_)    ", "  /__________\\     ", "  \\__________/     ", "   n  n     n  n   "],
+    &["             __    ", "           (( °==@ ", "           (\\_)    ", "  /__________\\     ", "  \\__________/     ", "   \\  \\     \\  \\   "],
+];
 
 // big fast tail wag, steady eye (no blink)
 const HAPPY: &[&[&str]] = &[

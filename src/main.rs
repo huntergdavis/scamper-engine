@@ -390,6 +390,25 @@ fn render(fb: &mut Framebuffer, map: &TileMap, rpos: Vec2, player: &Player) {
     draw_player(fb, rpos, player, player.w, player.h);
 }
 
+/// Rasterize Munchii's sprite into the framebuffer (the pixel tiers' version of
+/// the character): each glyph becomes a cell-sized block in its beagle color,
+/// top-left at (`lx`,`ly`) px. Matches what mono/ascii stamp as the overlay.
+fn draw_sprite_pixels(fb: &mut Framebuffer, lines: &[String], lx: f64, ly: f64, cpw: f64, cph: f64) {
+    let bw = cpw.ceil() as i32;
+    let bh = cph.ceil() as i32;
+    for (gr, line) in lines.iter().enumerate() {
+        for (gc, ch) in line.chars().enumerate() {
+            if ch == ' ' {
+                continue;
+            }
+            let (r, g, b) = munchii::beagle_rgb(ch);
+            let px = (lx + gc as f64 * cpw).round() as i32;
+            let py = (ly + gr as f64 * cph).round() as i32;
+            fb.fill_rect(px, py, bw, bh, Rgba::rgb(r, g, b));
+        }
+    }
+}
+
 /// Rasterize an effect clip into the framebuffer (the pixel tiers' version of an
 /// effect): each non-space glyph becomes a cell-sized block in the effect tint,
 /// so it matches the character tiers' look. `ax`/`ay` = clip anchor (center-x,
@@ -789,14 +808,14 @@ fn run_live() {
                 )
             };
 
-            if backend.draws_overlay() {
-                // Munchii sprite, aligned to his hitbox (feet on the box bottom,
-                // centered across its width). Effects are world-anchored layers.
-                let fw = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0) as i32;
-                let (box_left, box_top) = to_cells(rpos.x, rpos.y);
-                let pcol = box_left + (munchii::W as i32 - fw) / 2;
+            // Munchii sprite aligned to his hitbox (feet on the box bottom,
+            // centered across its width); same placement in every tier.
+            let fw = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0) as i32;
+            let (box_left, box_top) = to_cells(rpos.x, rpos.y);
+            let pcol = box_left + (munchii::W as i32 - fw) / 2;
 
-                // Effect layers own their text so the overlays can borrow it.
+            if backend.draws_overlay() {
+                // Character tiers stamp Munchii + effects as overlays.
                 let fx_render: Vec<(Vec<String>, (u8, u8, u8), i32, i32, i32)> = fx
                     .render(now)
                     .into_iter()
@@ -815,8 +834,8 @@ fn run_live() {
                 }
                 backend.present(&mut out, &fb, arena.cols, disp_rows, full_redraw, &overlays);
             } else {
-                // Pixel tiers: rasterize effects into the framebuffer, z-ordered
-                // around the player box (behind first, then in front).
+                // Pixel tiers: rasterize Munchii + effects into the framebuffer,
+                // z-ordered around him (behind first, then in front).
                 let cpw = arena.fb_w as f64 / arena.cols.max(1) as f64;
                 let cph = arena.fb_h as f64 / disp_rows.max(1) as f64;
                 let fxr = fx.render(now);
@@ -825,7 +844,7 @@ fn run_live() {
                         draw_effect_pixels(&mut fb, frame, tint, x, y, cpw, cph);
                     }
                 }
-                draw_player(&mut fb, rpos, &player, player.w, player.h);
+                draw_sprite_pixels(&mut fb, &lines, pcol as f64 * cpw, box_top as f64 * cph, cpw, cph);
                 for &(frame, tint, z, x, y) in &fxr {
                     if z >= 0 {
                         draw_effect_pixels(&mut fb, frame, tint, x, y, cpw, cph);
