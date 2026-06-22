@@ -2,7 +2,7 @@
 //! rendered to a Kitty terminal. Also a headless `verify` mode that runs scripted
 //! scenarios and dumps PNGs (for development on a box without a Kitty terminal).
 
-use scamper::backend::{AsciiBackend, Backend, KittyBackend, TextBackend};
+use scamper::backend::{AsciiBackend, Backend, KittyBackend, MonoBackend, TextBackend};
 use scamper::framebuffer::{Framebuffer, Rgba};
 use scamper::input::{Input, K_ESC, K_HELP, K_N, K_Q, K_TAB, K_Y};
 use scamper::math::Vec2;
@@ -418,7 +418,9 @@ fn render_help(out: &mut Vec<u8>, active_backend: &str) {
     r += 1;
     hline(out, r, "  text    Unicode half-block cells, color (works anywhere)");
     r += 1;
-    hline(out, r, "  ascii   monochrome ASCII glyphs, green phosphor (retro)");
+    hline(out, r, "  ascii   colored ASCII glyphs (retro art)");
+    r += 1;
+    hline(out, r, "  mono    plain black & white ASCII (bare minimum)");
     r += 2;
     hline(out, r, "\x1b[2mpress ? or Esc to resume\x1b[0m");
 }
@@ -477,10 +479,11 @@ fn run_live() {
             let _ = o.write_all(b"\x1b[2J");
             let _ = o.flush();
         }
-        // Cycle: kitty -> text -> ascii -> kitty.
+        // Cycle: kitty -> text -> ascii -> mono -> kitty.
         *backend = match backend.name() {
             "kitty" => Box::new(TextBackend::new()) as Box<dyn Backend>,
             "text" => Box::new(AsciiBackend::new()) as Box<dyn Backend>,
+            "ascii" => Box::new(MonoBackend::new()) as Box<dyn Backend>,
             _ => Box::new(KittyBackend::new()) as Box<dyn Backend>,
         };
         dlog!("backend -> {}", backend.name());
@@ -866,7 +869,7 @@ mod tests {
         let mut out = Vec::new();
         render_help(&mut out, "text");
         let s = String::from_utf8(out).unwrap();
-        for needle in ["SCAMPER", "Move", "Jump", "Wall", "Tab", "kitty", "text", "quit"] {
+        for needle in ["SCAMPER", "Move", "Jump", "Wall", "Tab", "kitty", "text", "ascii", "mono", "quit"] {
             assert!(s.contains(needle), "help should mention {needle:?}");
         }
         // reflects the active backend
