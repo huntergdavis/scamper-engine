@@ -103,6 +103,7 @@ impl Effects {
     pub fn render(&self, now: u64) -> Vec<(&'static [&'static str], (u8, u8, u8), i32, f64, f64)> {
         self.active
             .iter()
+            .filter(|a| !a.fx.frames.is_empty()) // a clip with no frames can't index
             .map(|a| {
                 let step = NS_PER_SEC / a.fx.fps.max(1) as u64;
                 let i = ((now.saturating_sub(a.start) / step) as usize).min(a.fx.frames.len() - 1);

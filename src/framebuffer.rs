@@ -85,11 +85,15 @@ impl Framebuffer {
     }
 
     /// Fill an axis-aligned rectangle (integer pixel coords), alpha-blended.
+    /// Saturating bounds so extreme coords clip cleanly instead of overflowing.
     pub fn fill_rect(&mut self, x: i32, y: i32, w: i32, h: i32, c: Rgba) {
+        if w <= 0 || h <= 0 {
+            return;
+        }
         let x0 = x.max(0);
         let y0 = y.max(0);
-        let x1 = (x + w).min(self.width as i32);
-        let y1 = (y + h).min(self.height as i32);
+        let x1 = x.saturating_add(w).min(self.width as i32);
+        let y1 = y.saturating_add(h).min(self.height as i32);
         for py in y0..y1 {
             for px in x0..x1 {
                 self.blend(px, py, c);
@@ -99,10 +103,13 @@ impl Framebuffer {
 
     /// Draw a 1px rectangle outline.
     pub fn stroke_rect(&mut self, x: i32, y: i32, w: i32, h: i32, c: Rgba) {
+        if w <= 0 || h <= 0 {
+            return;
+        }
         self.fill_rect(x, y, w, 1, c);
-        self.fill_rect(x, y + h - 1, w, 1, c);
+        self.fill_rect(x, y.saturating_add(h - 1), w, 1, c);
         self.fill_rect(x, y, 1, h, c);
-        self.fill_rect(x + w - 1, y, 1, h, c);
+        self.fill_rect(x.saturating_add(w - 1), y, 1, h, c);
     }
 
     /// Bresenham line (used for debug overlays like velocity vectors).

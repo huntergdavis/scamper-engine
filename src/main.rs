@@ -308,7 +308,12 @@ fn munchii_box(arena: &Arena) -> (f64, f64) {
     let disp_rows = arena.rows.saturating_sub(1).max(1) as f64;
     let w = munchii::W as f64 / arena.cols.max(1) as f64 * arena.fb_w as f64;
     let h = munchii::H as f64 / disp_rows * arena.fb_h as f64;
-    (w.max(8.0), h.max(8.0))
+    // Never let the box exceed the open interior between the border tiles —
+    // otherwise on a tiny window it embeds in the walls and the sweep, which
+    // can't depenetrate a pre-existing overlap, freezes him in place.
+    let iw = (arena.map.px_w() - 2.0 * TILE).max(8.0);
+    let ih = (arena.map.px_h() - 2.0 * TILE).max(8.0);
+    (w.clamp(8.0, iw), h.clamp(8.0, ih))
 }
 
 /// Resize the player's hitbox to Munchii's footprint and reseat it onto the
@@ -394,19 +399,27 @@ fn render(fb: &mut Framebuffer, map: &TileMap, rpos: Vec2, player: &Player) {
 /// the character): each glyph becomes a cell-sized block in its beagle color,
 /// top-left at (`lx`,`ly`) px. Matches what mono/ascii stamp as the overlay.
 fn draw_sprite_pixels(fb: &mut Framebuffer, lines: &[String], lx: f64, ly: f64, cpw: f64, cph: f64) {
-    let bw = cpw.ceil() as i32;
-    let bh = cph.ceil() as i32;
     for (gr, line) in lines.iter().enumerate() {
         for (gc, ch) in line.chars().enumerate() {
             if ch == ' ' {
                 continue;
             }
             let (r, g, b) = munchii::beagle_rgb(ch);
-            let px = (lx + gc as f64 * cpw).round() as i32;
-            let py = (ly + gr as f64 * cph).round() as i32;
-            fb.fill_rect(px, py, bw, bh, Rgba::rgb(r, g, b));
+            cell_block(fb, lx, ly, gc, gr, cpw, cph, Rgba::rgb(r, g, b));
         }
     }
+}
+
+/// Fill the block for glyph (gc, gr) by snapping to cell *boundaries*, so blocks
+/// tile exactly (no `ceil` inflation): N glyphs span exactly N·cpw px, matching
+/// the character tiers' N cells.
+#[inline]
+fn cell_block(fb: &mut Framebuffer, lx: f64, ly: f64, gc: usize, gr: usize, cpw: f64, cph: f64, col: Rgba) {
+    let x0 = (lx + gc as f64 * cpw).floor() as i32;
+    let x1 = (lx + (gc as f64 + 1.0) * cpw).floor() as i32;
+    let y0 = (ly + gr as f64 * cph).floor() as i32;
+    let y1 = (ly + (gr as f64 + 1.0) * cph).floor() as i32;
+    fb.fill_rect(x0, y0, (x1 - x0).max(1), (y1 - y0).max(1), col);
 }
 
 /// Rasterize an effect clip into the framebuffer (the pixel tiers' version of an
@@ -417,16 +430,11 @@ fn draw_effect_pixels(fb: &mut Framebuffer, frame: &[&str], tint: (u8, u8, u8), 
     let w_cells = frame.iter().map(|l| l.chars().count()).max().unwrap_or(0);
     let left = ax - w_cells as f64 * cpw / 2.0;
     let col = Rgba::rgb(tint.0, tint.1, tint.2);
-    let bw = cpw.ceil() as i32;
-    let bh = cph.ceil() as i32;
     for (gr, line) in frame.iter().enumerate() {
         for (gc, ch) in line.chars().enumerate() {
-            if ch == ' ' {
-                continue;
+            if ch != ' ' {
+                cell_block(fb, left, ay, gc, gr, cpw, cph, col);
             }
-            let px = (left + gc as f64 * cpw).round() as i32;
-            let py = (ay + gr as f64 * cph).round() as i32;
-            fb.fill_rect(px, py, bw, bh, col);
         }
     }
 }
