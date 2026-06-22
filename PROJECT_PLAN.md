@@ -1,300 +1,335 @@
-# Terminal 2D Platformer Engine — Project Plan (v2, post red-team)
+# Terminal 2D Platformer Engine — Project Plan (v3)
 
-> Status: **planning / pre-code**. v2 incorporates a 6-expert red-team review
-> (principal eng, Linux kernel, Kitty-graphics, hardcore gamer, pro game dev,
-> world-class Rust) and the user's strategic decisions.
+> Status: **planning / pre-code**. v3 narrows scope hard after a second red-team
+> review (principal eng, Kitty-graphics, pro game dev w/ the real N++ sim, N++
+> speedrunner, world-class Rust, Kitty power-user) and the user's decisions:
+> single-player, keyboard-only, no audio, no network code (SSH is the transport).
 > Updated: 2026-06-22.
 
-## 1. North Star (revised)
+## 1. North Star
 
-A **local-first, deterministic 2D platformer engine** with **N++-class tight controls**,
-rendered in the terminal via the **Kitty graphics protocol** at a smooth 60fps. The
-engine has a **transport-agnostic seam** so the same game can *also* stream to remote
-terminal clients as an **optional, explicitly "good-enough" mode** — never marketed as
-frame-perfect.
+A **single-player, N++-tight 2D platformer** that runs as an ordinary **local process**
+doing stdin/stdout, rendering via the **Kitty graphics protocol** at a smooth 60fps, with
+**keyboard-only** controls. The Kitty terminal is the target audience.
 
-**The core resolution of the central tension:** *tight feel is a LOCAL guarantee.*
-The red team proved (with numbers) that codec/encode latency alone (2–4 frames) puts any
-streamed thin client at ~80–130ms motion-to-photon — past the ~50ms precision-platformer
-threshold. So **local play (kitty terminal + gamepad/keyboard) is where "N++-tight"
-lives**; streaming is a secondary convenience that trades feel for reach.
+**The transport is SSH — we never write network code.** The game only ever reads stdin
+and writes Kitty escapes to stdout. Running it over SSH into a remote Kitty terminal (or
+sitting on the host already, in Kitty, running it locally) is *identical* from the game's
+point of view; SSH carries the bytes. There is no socket code, no QUIC, no codec, no
+streaming stack.
 
-First deliverable: a colored box with N++-tight movement on a real Kitty/Ghostty terminal.
-Art comes later. The engine is the product, **but built game-first** (the local game pulls
-the abstractions into the right shape; we do not gold-plate seams before the game is fun).
+**Future (not now):** local "New Super Mario Bros"-style multiplayer where everyone on the
+**same host** plays at once — implemented purely as **host-local IPC** (Unix socket +
+optional `/dev/shm`/`/tmp` mmap ring), no root, no network. SSH just gets remote players a
+shell on the host; once there, they're local.
+
+First deliverable: a colored box with N++-tight movement on a real Kitty terminal — local
+and over SSH. Art comes later. The engine is the product, **built game-first**: we ship a
+tight local game, then extract generality from proven code, never gold-plate seams up front.
 
 ## 2. Locked decisions
 
-| # | Decision | Choice |
-|---|---|---|
-| Strategy | tight vs streamed | **Local = tight guarantee; streaming = optional good-enough mode.** |
-| D2/D3 | primary client + transport | **Terminal-native (Kitty graphics) primary.** Stock terminal carries graphics+keyboard only. Remote real-time path, if/when richer, uses **QUIC datagrams (timely-or-drop)** — never TCP/SSH for anything claiming to be responsive. |
-| Feel | genre | **N++-class:** momentum/slippery, slopes & angled surfaces central, no dash. |
-| D1 | latency/prediction | Thin-client/no-prediction for any streaming; **sim deterministic from Phase 2** so a future predicting (fat) client is a layer, not a rewrite. No WAN-tightness promises. |
-| D4 | local terminal | **Kitty / Ghostty / foot** (full Kitty keyboard protocol → key-release events). Gamepad works on any terminal (bypasses it). |
-| D5 | kitty keyboard | **Hand-roll the codec** (termwiz as reference); `rustix` for raw mode + `TIOCGWINSZ`. crossterm's event model is too shallow for clean release events. |
-| D6 | server-auth for SP | **No.** Local-first, in-process, authority off. Streaming is a mode. |
-| Lang | language | Rust, **Cargo workspace**, hand-rolled engine + focused crates. |
-| Collision | model | **Faithful: swept circle-vs-tile-segment** (the real N++ model). |
-| Runtime | default | **Local Kitty/Ghostty terminal is the default runtime.** Streaming is opt-in. |
-| Streaming | reach | **LAN-only.** No WAN target (would only worsen feel for no gain). |
+| Topic | Decision |
+|---|---|
+| Players | **Single-player only** for now. Local same-host multiplayer is a future goal. |
+| Input | **Keyboard only.** No gamepad (a pad on the client can't travel over SSH anyway; users map pad→keyboard externally). Kitty keyboard protocol for key down/up/held. |
+| Audio | **None.** Cut entirely. |
+| Networking | **None — ever, in our code.** SSH is the transport for "remote play"; host-local IPC for future multiplayer. |
+| Rendering | Kitty graphics protocol; **direct base64** is the universal path (mandatory over SSH; shm impossible across machines). shm `t=s` is a *local-only* probed optimization. |
+| Feel | **N++-class, faithful** to the real N++ physics model (see §4.6). |
+| Determinism | **f64 + same-binary replay** (NOT fixed-point — N++ is an f64 game; fixed-point quantizes the feel and isn't needed). |
+| Collision | **Faithful N++:** half-radius anti-tunnel sweep + up-to-32-iter closest-point depenetration vs oriented line + quarter-circle-arc segments on a 24px grid. |
+| Lang/structure | Rust; **2 crates** (`engine` lib + `game` bin). Single-threaded game loop + one input thread. |
 
-## 3. Verified platform reality (re-check before relitigating)
+## 3. Platform reality (verified; re-check before relitigating)
 
-- ✅ Konsole: **no** Kitty keyboard protocol (KDE Bug 512065) → no key-release →
-  **variable-jump-height physically impossible there**. Partial graphics (direct base64
-  ok, shm unreliable). Use Kitty/Ghostty/foot for feel; gamepad-only on Konsole.
-- ✅ Kitty keyboard protocol: Kitty, Ghostty, foot, WezTerm, Alacritty, iTerm2, rio.
-- ✅ This dev box (Termux/Android, unrooted): `/dev/input` = **Permission denied** (DAC
-  *and* SELinux MAC gates) → **no gamepad/evdev without root**. `/dev/shm` absent.
-  Session is inside **tmux**. tmux breaks **both** Kitty graphics and the Kitty keyboard
-  protocol → never the runtime; **Termux = dev/build/headless-test box only.**
-- ✅ Desktop/server `/dev/input`: interactive desktop users get access via logind
-  **uaccess ACLs**; a **daemon/SSH/service-account server has no seat** → needs the
-  `input` group or a udev rule (`SUBSYSTEM=="input", MODE="0660", GROUP="input"`). gilrs
-  needs **read+write** (rumble). **evdev is NOT focus-aware** — we must gate gamepad
-  input on our own focus/pause state (optionally via terminal focus-reporting `CSI ?1004h`).
-- ✅ shm `t=s` = POSIX **named** shm (`shm_open`, `/dev/shm` tmpfs), not memfd; cannot
-  cross machines; absent on Android (Bionic uses ashmem). Opt-in local fast-path only.
-- ✅ Kitty over SSH works (direct base64; no shm). TCP/SSH = head-of-line blocking → one
-  lost segment stalls all later frame bytes → latency spikes. Fine for "lite" mode only.
+- ✅ **SSH is transparent at the terminal layer.** Game = stdin/stdout; SSH tunnels Kitty
+  escapes to the remote terminal. No networking in our code. **But over SSH the terminal
+  is on another machine → `t=s` shm transfer is impossible → base64 is mandatory and
+  bandwidth matters** (see §4.4 for the `z=`-layer mitigation).
+- ✅ Kitty keyboard protocol (key release/held — required for variable jump) on Kitty,
+  Ghostty, foot, WezTerm, Alacritty, iTerm2, rio. **Konsole lacks it** (legacy only).
+- ✅ **Gamepad can't ride SSH** (it's not in the terminal stream) and needs `/dev/input`
+  on the host — so keyboard-only is the *correct* fit for the SSH-first model, not a compromise.
+- ✅ Dev box = Termux/Android, unrooted: `/dev/input` denied, `/dev/shm` absent, inside
+  tmux (breaks Kitty graphics + keyboard). **Termux is the build + headless-test + PNG-dump
+  box only**; play happens on a desktop Kitty (local or via SSH).
+- ✅ Host-local IPC without root (future multiplayer): **Unix domain socket** (events),
+  **mmap'd `/tmp` file** (tmpfs, most portable) or **POSIX `/dev/shm`** (shm_open, no root
+  on desktop Linux) for a shared world/frame ring, `memfd_create`+fd-passing as the modern
+  variant. All root-free, all local.
 
-## 4. Engine architecture
+## 4. Engine design
 
-### 4.1 The game loop (fixed-timestep + interpolation — was missing in v1)
+### 4.1 Game loop — fixed-timestep + interpolation
 
 ```
-const SIM_DT = 1/60 s;                  // fixed, integer-friendly
-let mut acc = 0; let mut prev = Instant::now();
+const SIM_DT = 1/60 s;
+let mut acc=0; let mut prev=Instant::now();
 loop {
-    let now = Instant::now(); acc += now - prev; prev = now;
-    if acc > 8*SIM_DT { acc = 8*SIM_DT; }        // clamp: no spiral-of-death
+    let now=Instant::now(); acc += now-prev; prev=now;
+    if acc > 8*SIM_DT { acc = 8*SIM_DT; }          // clamp: no spiral-of-death
     while acc >= SIM_DT {
-        prev_state = current_state;              // keep last state
-        sim_step(SIM_DT);                        // deterministic, no wall-clock reads
+        let p = feel_params.load();                // arc-swap load ONCE, top-of-tick (see 4.7)
+        prev_state = current_state;
+        sim_step(&mut current_state, &inputs_this_tick, &p);   // pure, no wall-clock reads
         acc -= SIM_DT;
     }
-    let alpha = acc / SIM_DT;
-    render(lerp(prev_state, current_state, alpha));   // interpolate → smooth on any refresh
-    sleep_until(next_deadline);                  // see 4.2
+    render(lerp(prev_state, current_state, acc/SIM_DT));   // interpolate → smooth on any refresh
+    sleep_until(next_deadline);
 }
 ```
-- **Sim = fixed 60Hz** (not 120/240 — higher costs determinism/re-tuning for no felt gain;
-  swept collision handles tunneling). Substep only for pathological speeds.
-- **Render interpolation is mandatory.** Phase 0 exit criterion = **smooth on a 144Hz
-  panel** (60Hz hides judder). Requires `prev`/`current` sim state + interpolatable render
-  transform distinct from sim transform.
+- **Sim = fixed 60Hz** (N++ is a 60Hz integer-frame game; all its windows are frame counts).
+- **Render interpolation mandatory.** Phase 0 exit = **smooth on a 144Hz panel** (60Hz
+  hides judder). Render state is distinct from sim state.
+- Interpolation costs ~1 frame of display latency — budget it; offer a `--no-interp` flag
+  for input-latency testing.
 
-### 4.2 Timing (was unspecified)
+### 4.2 Timing
 
-`CLOCK_MONOTONIC` always (`Instant`). Sleep to an **absolute** deadline via
-`clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME)` (no drift accumulation; re-sleep on
-EINTR), then **spin the last ~1ms** (`spin_loop()`) for sub-100µs accuracy (`spin_sleep`
-crate). Margin configurable (0 on battery/Termux). Tail-latency tools on the **run target
-only, capability-guarded, with a watchdog**: `nice -10`, then low-prio `SCHED_FIFO` +
-`mlockall`. These **EPERM/no-op on Termux** — degrade gracefully. Once networking exists,
-prefer `timerfd` in an epoll loop so tick/socket/gamepad fds are serviced together.
+`CLOCK_MONOTONIC` (`Instant`). Sleep to an **absolute** deadline via
+`clock_nanosleep(…, TIMER_ABSTIME)` (no drift; re-sleep on EINTR), spin the last ~1ms
+(`spin_sleep`) for accuracy; margin configurable (0 on battery). `nice`/`SCHED_FIFO`/
+`mlockall` are run-target-only, capability-guarded, watchdog'd; they no-op on Termux.
 
-### 4.3 Determinism (Phase 2 requirement, not "someday")
+### 4.3 Determinism — f64, same-binary replay (NOT fixed-point)
 
-Isolate all sim math behind a `sim_math` module. Default to **integer/fixed-point
-sub-pixel** positions (good for N++ precision *and* the only robust cross-machine
-determinism). If floats: `glam` `scalar-math` feature, route transcendentals through
-`libm`, never `mul_add`/`+fma`, no fast-math. Same-binary replay is then free; cross-
-machine determinism (for a future predicting client) is reachable. Enables record/replay.
+Isolate sim math behind a `sim_math` module: `type Scalar = f64`, thin `sqrt/atan2/normalize`
+wrappers via **`libm`** (not platform libm). **No `mul_add`/FMA** (CI lint + no fast-math),
+**no wall-clock in sim**, single-threaded sim, fixed iteration caps (the 32-iter and 45-frame
+caps are integers). Result: **bit-identical same-binary replay** — all the record/replay
+tuning and CI invariants need. Cross-machine bit-identity is explicitly **out of scope**
+(it would require a softfloat sim; not worth it, and N++ itself doesn't guarantee it). f64
+gives far more sub-pixel precision than any fixed-point we'd pick, so we lose nothing.
 
-### 4.4 Rendering — Kitty pipeline (corrected per Kitty expert)
+### 4.4 Rendering — Kitty pipeline (corrections locked from prior review)
 
-Per-frame command (one tight write burst; home cursor first with `\033[H`):
+Per-frame command, assembled into one reused buffer, written in **one `write_all` to the
+raw tty fd** (no `BufWriter` — it'd double-copy; no vmsplice):
 ```
-\033_Ga=T,f=24,i=1,p=1,s=<Wpx>,v=<Hpx>,q=2,C=1,m=1;<base64 chunk>\033\\
-\033_Gm=1;<chunk>\033\\        (middle; chunks = multiple of 4, ≤4096 b64 bytes)
-\033_Gm=0;<final chunk>\033\\
+\033_Ga=T,f=24,i=1,p=1,s=<Wpx>,v=<Hpx>,q=2,C=1,m=1;<base64>\033\\
+\033_Gm=1;<chunk>\033\\        (chunks: multiple of 4, ≤4096 b64 bytes)
+\033_Gm=0;<final>\033\\
 ```
-- **`q=2` suppresses FAILURE responses** (NOT "all" — v1 was wrong; `q=1` suppresses OK).
-  We never solicit OK, and the stdin parser **defensively discards any `_G` APC replies**
-  (Konsole may reply regardless).
-- **Pin `i=1, p=1`.** Same-id re-transmit is **self-cleaning** (terminal frees the prior
-  image+placement) → no leak, no per-frame `a=d`. Fixed id+placement = in-place atomic
-  replacement → this (not the delete policy) is what prevents **flicker/z-fighting**.
-- `a=d,d=I,i=1` only on **resize/reconfigure**. `s=`/`v=` mandatory for `f=24`.
-- **No protocol double-buffer exists**; atomicity = write the *whole* frame in one burst
-  (partial transmissions aren't displayed). **Do NOT use Kitty animation (`a=f`/`a=a`)** —
-  wrong tool for a live scrolling stream; do our own dirty-rect/compression later if needed.
-- Transmit **RGB24** (drop alpha after compositing, –25% bytes). Output px size from
-  `TIOCGWINSZ` (`ws_xpixel`/`ws_ypixel`) with fallback; handle 0 pixel-dims (common over SSH).
-- `t=s` shm = capability-**probed** opt-in (fall back cleanly to base64); never platform-guessed.
+- **`q=2` suppresses FAILURE responses only** (`q=1` = suppress OK). We never solicit OK and
+  the input parser **defensively discards any `_G` APC replies** on stdin.
+- **Pin `i=1, p=1`.** Same-id re-transmit is self-cleaning (terminal frees prior image+
+  placement) → no leak, no per-frame `a=d`; fixed id+placement = in-place atomic replacement
+  → this prevents flicker/z-fighting. `a=d,d=I,i=1` only on resize.
+- Atomicity = write the *whole* frame in one burst (partial transmissions aren't shown). **No
+  protocol double-buffer; no Kitty animation (`a=f`/`a=a`).**
+- Transmit **RGB24** (drop alpha, −25% bytes). Size from `TIOCGWINSZ` (+ `CSI 14t`/`16t`
+  fallback; handle 0 dims, common over SSH).
+- **Bandwidth (matters because base64 rides the SSH pipe):** internal render resolution
+  ~**960×540** (≈1.5MB raw/frame), integer-scaled by the terminal; pace to 60fps. **Big
+  SSH win to adopt early: static background as a separate placement at `z=-1` transmitted
+  ONCE, only the dynamic foreground (`f=32` RGBA) streamed each frame** — Kitty-native
+  dirty-rect for free; turns a full-frame stream into a small-region stream. SSH's own
+  compression helps further.
+- `t=s` shm = probed, **local-only** optimization (impossible over SSH). Probe per-terminal
+  via `a=q`, never by name. Keyboard probe must check the **release-events flag bit**, not
+  just protocol presence (Ghostty vs Kitty differ).
 
-### 4.5 Input — virtual controller
+### 4.5 Terminal lifecycle & hygiene (PROMOTED to first-class — was the biggest gap)
 
-Canonical virtual controller (D-pad, A/B/X/Y, L1/R1, L2/R2 analog+threshold, L3/R3,
-Left/Right sticks). Game reads `input.pressed(A)` / `input.axis_x()`. **Backends are an
-`enum`** (closed set, polled together): keyboard, gamepad, mouse(stub), net. Bindings in
-an **`arc-swap`** table (rebindable, hot-reloadable).
-- Keyboard: hand-rolled Kitty keyboard codec — push enhancement flags (≥ disambiguate +
-  **report-event-types** for releases) with **push/pop on the stack** (pop on exit/crash);
-  probe support via `CSI ?u`; **legacy fallback** with explicit degradation logged.
-- Gamepad: `gilrs` polled on the **input thread** (non-blocking `next_event`), hotplug
-  (`Connected`/`Disconnected`), **own radial deadzone** in the virtual layer, loadable
-  `gamecontrollerdb.txt`. Gate on focus/pause (evdev isn't focus-aware).
-- **Input sampled at top-of-tick** and stamped; for streaming, stamp with frame-id so the
-  server knows which frame an input was for (keeps prediction reachable).
-- Prototype scope: D-pad + 2 face buttons + LeftStick wired; full surface designed, not built.
+A single idempotent, reentrant `TerminalGuard`:
+- **Setup (order):** save cursor → **alt-screen (`\033[?1049h`)** → hide cursor → raw mode
+  (`rustix`) → push Kitty keyboard flags → focus reporting (`\033[?1004h`).
+- **Teardown (reverse, run-once):** focus off → **pop keyboard flags** → **delete images
+  (`\033_Ga=d,d=A\033\\`)** → leave alt-screen → show cursor → cooked mode.
+- **Wire to EVERY exit path:** RAII `Drop` (normal quit); `std::panic::set_hook` that tears
+  down *before* printing the backtrace (and `catch_unwind` around threads so a sim panic
+  doesn't bypass cleanup); **SIGINT/SIGTERM/SIGHUP** (`signal-hook`) flip an atomic quit;
+  **SIGTSTP/SIGCONT** (Ctrl-Z/`fg`) tear down on stop, re-setup + re-transmit on continue.
+- **Resize (SIGWINCH):** re-`TIOCGWINSZ` (cells *and* pixels — font-size change keeps cells
+  but changes pixels), realloc framebuffers (the one allowed realloc outside the hot path),
+  `a=d,i=1` the stale image, recompute viewport, re-transmit. **Debounce** the SIGWINCH storm
+  (~100ms quiescence). Policy: **fixed logical resolution, letterboxed/scaled** (consistent
+  feel; resizing never changes how much level you see).
+- **Min size:** if the terminal is too small, show a "resize to ≥ N×M" pause overlay.
+- **Logging goes to a file** (`$XDG_STATE_HOME`), **never** stdout (corrupts the stream) or
+  stderr (scribbles the alt-screen). `tracing` → file subscriber only while the TUI owns the screen.
+- **Capability messaging:** on a terminal lacking the keyboard protocol, tell the user up
+  front ("variable-height jumps need Kitty/Ghostty/foot") instead of feeling silently broken.
 
-### 4.6 Physics & feel — N++-class
+### 4.6 Physics & feel — faithful N++
 
-- **Collision (faithful, locked):** swept **circle-vs-tile-segment** continuous collision
-  — the actual N++ model (momentum + slopes + curves). Sub-pixel fixed-point. Must handle:
-  slopes/angled surfaces, **internal-edge merging** (no ghost-collision snags), one-way
-  platforms (direction + prev-frame-feet aware), moving platforms (move solids → carry
-  riders → resolve), corner correction with a **stated magnitude (±~4px)**, and correct
-  **speed-clamp ordering** (clamp before sweep). Continuous, so no tunneling.
-- **Player state machine:** just **Grounded / Airborne**. Everything else is timers/queries
-  on the player (Celeste model), NOT states:
-  `coyote_timer`, `jump_buffer_timer`, `var_jump_timer`/`var_jump_speed`,
-  `wall_jump_lock_timer` (+ `force_move_x`), `air_jumps_remaining`, `apex_timer`.
-  Wall-slide = query (`airborne && touching_wall && vel.y>0` → modify gravity).
-- **Feel params (ms, rate-independent; all hot-reloadable):** coyote 80–100ms, jump buffer
-  100–133ms, var-jump cut to 40–50% upward vel on release (≤~150–200ms after takeoff),
-  apex hang ~50% gravity when |vel.y|<~30px/s for ~80–120ms, **fall gravity 1.5–2.0× rise**,
-  wall-jump h-lock ~120ms + wall-slide max-fall well below terminal, **fast-fall** (hold
-  down → higher max-fall), per-surface friction tags (N++ ice/normal), separate
-  **turn-around decel** from friction, terminal velocity, **zero landing recovery**
-  (any squash is visual only), **collision box ≠ render box** (forgiveness) decided now.
+Constants below are from the community-authoritative reverse-engineered sim
+(`nsim.py` / SimonV42/nclone, treated as frame-accurate); **verify against source before
+locking**. All are per-60Hz-frame, in pixels. Ninja `RADIUS = 10`.
 
-### 4.7 Concurrency (Rust — tokio is WRONG for the hot loop)
+- **Dual gravity (NOT apex-hang, NOT velocity-cut):** `GRAVITY_JUMP = 0.01111` applies while
+  jump is held AND rising AND `jump_duration ≤ 45 frames`; otherwise `GRAVITY_FALL = 0.06667`
+  (**exactly 6× stronger**). Variable height comes from *when gravity switches*, not from
+  chopping velocity. Releasing jump or hitting 45 frames flips to fall gravity.
+- **Horizontal: input-accel vs multiplicative drag (asymptotic top speed):**
+  `GROUND_ACCEL = 0.06667`, `AIR_ACCEL = 0.04444` (air = 2/3 ground). Drag multipliers per
+  frame: `DRAG_REGULAR = 0.99332`, `DRAG_SLOW = 0.86177`. Ground friction `0.94593`, wall
+  friction `0.91134`. **`MAX_HOR_SPEED = 3.333` (200px/s) clamps INPUT ACCELERATION ONLY**
+  (skip the accel if it would exceed max) — drag/slopes/launchpads may push total velocity
+  *over* max and are NOT clamped. (This is what makes slope/launch speed tech work — never
+  clamp total velocity.)
+- **Slopes (central):** running/falling downhill *adds* a downhill-boost accel (≈
+  `GROUND_ACCEL/2` projected along the slope); uphill uses N++'s bespoke `fric_force`
+  projection formula (port it exactly). Landing on a slope **redirects** velocity along the
+  tangent (preserves the tangential component), never zeroes it.
+- **Jumps = impulses applied to velocity AND position same frame, with per-surface vectors:**
+  flat floor `(0,-2)`; slope variants branch on uphill/downhill × input; wall: slide-jump
+  `(2/3,-1)` vs regular `(1,-1.4)` scaled by wall normal. **Same-wall re-jump allowed** (wall
+  climbing is core tech). No double-jump, no air-jump, no dash (`air_jumps = 0`).
+- **Wall slide** = multiplicative damping of *downward* velocity while pressed into the wall
+  (not a fixed reduced gravity).
+- **Momentum preserved through ALL state transitions** (takeoff/landing never zero velocity;
+  zero landing recovery — any squash is visual only).
+- **Impact death:** `MAX_SURVIVABLE_IMPACT = 6`, scaled by surface normal (slopes survive
+  faster landings). Core to how N++ plays. Plus crush death.
+- **Launch pads:** boost `2·|normal| + 2`, special-cased to 1.7 for pure-vertical.
+- **State machine = N++'s real states**, not Grounded/Airborne: `0 immobile, 1 running,
+  2 ground-sliding, 3 jumping, 4 falling, 5 wall-sliding` (+ dead/etc). The run↔slide
+  distinction gates which friction/accel branch fires — load-bearing for feel.
+- **Forgiveness windows in FRAMES (small — N++ is crisp, not Celeste-forgiving):** jump
+  buffer 5, wall buffer 5, floor/coyote 5, launchpad 4. (The circle collider already gives
+  natural corner forgiveness — don't double-dip with Celeste-style ±px corner correction.)
 
-Dedicated OS threads; **tokio confined to the net edge**:
-- **Sim+render on ONE thread** (no lock on the 60Hz-mutated world).
-- **Encoder on its own thread** (RGBA→RGB→base64→chunk is pure CPU; mustn't stall sim).
-- **Input thread** (keyboard/gilrs/net-in).
-- **tokio runtime** only for quinn/QUIC when streaming exists; bridge via `flume` async.
-- Communication: **channels** (`flume`/`crossbeam`), **not `Arc<Mutex<World>>`**. Sim owns
-  the world; hands `Arc<FrameBuffer>` to encoder over a **bounded (cap 1–2)** channel so a
-  slow sink applies backpressure / drops *visibly* (no silent caps). `FeelParams` via
-  **`arc-swap`** (wait-free per-frame load; `notify` watcher swaps on file change).
-- **Sinks = `Box<dyn FrameSink: Send>`**, one coarse `present(&FrameBuffer)` call/frame
-  (vtable cost negligible). `AudioSink` consumer is the cpal RT callback → lock-free ring
-  (`rtrb`), no alloc/lock in callback.
-- **Transport seam is pull/credit + a control channel**, not bare push: the loop asks
-  "render+encode frame N?"; sink signals backpressure, keyframe requests, resize, bandwidth.
-  Frames+audio carry a shared **PTS/frame-id**. Validate the seam against a **hostile
-  in-process sink** (injected latency/jitter/drop), not just "local sink unchanged."
+### 4.7 Collision — faithful N++ (half-radius sweep + iterative depenetration)
 
-### 4.8 Hot-path allocation (zero per-frame alloc)
+Per-frame order: `integrate → collide_vs_tiles → post_collision → think`.
+- **Anti-tunnel sweep with HALF radius (5px):** sweep the half-circle along the frame's
+  displacement, advance to earliest intersection time. A cheap clamp, NOT the resolver.
+- **Iterative depenetration, up to 32 passes:** each pass find the *single globally-closest*
+  collidable point, push out along contact normal by `RADIUS − dist`, project velocity onto
+  the surface **only if moving into it** (`dot < 0`); repeat to convergence or 32. **Accumulate
+  floor/ceiling normals across passes, normalize once in `post_collision`** (stable resting,
+  no jitter on concave floors).
+- **Geometry:** tiles on a **24px grid** decompose into **oriented line segments** (one-sided
+  → this is how internal edges / ghost-collisions are avoided; back-facing hits de-prioritized)
+  **and quarter-circle arc segments (r=24)** for rounded tiles. Segment ends tested as circles
+  (circle-vs-circle) plus the body. **A tile→segment decomposition table is its own spec.**
+- **Determinism note:** this needs sqrt/normalize → f64 (§4.3), not fixed-point. The real sim
+  has hardcoded epsilon nudges at exact corner geometry — budget a contact-epsilon policy and
+  expect corner-case divergence as a known risk.
 
-Double-buffered recycled framebuffers. **Fuse** RGBA→strip-alpha→base64 into **one pass**
-into a reused buffer (RGB24 is already 3-byte groups = base64 quanta; skip every 4th byte;
-inject chunk escapes inline at 4096 b64 boundaries). Hand-rolled table-driven base64 (keep
-`base64` crate as a test oracle). One `write_all` per frame to an owned `BufWriter` on the
-fd. `image` only behind a feature for PNG-dump/sprites — never on the live path. SIMD later,
-only after measuring.
+### 4.8 Concurrency — simplest correct (2–3 threads, no async)
 
-## 5. Workspace layout (trait seam in a tokio-free core)
+- **Game thread:** drains input channel → fixed-step sim → interpolate → blit → **fused
+  RGBA→RGB24→base64 in one zero-alloc pass into a reused buffer** → one `write_all`. All
+  inline (encode is ~1–2ms at 540p; a separate encoder thread would only add a frame of
+  latency for no local benefit).
+- **Input thread:** blocking `read()` on stdin (Kitty keyboard bytes), parses to virtual
+  controller, pushes events over `std::sync::mpsc`/`crossbeam-channel`.
+- **No tokio, no flume bus, no encoder thread, no `Arc<Mutex<World>>`.** The sim owns the world.
+- **Add complexity only on a trigger:** encoder thread when encode+write >8ms/frame; a bus
+  when ≥2 live consumers (future multiplayer view-clients); IPC (Unix socket + shm ring) at
+  the multiplayer phase. Until then, keep `render_encode_write` a concrete monomorphic fn —
+  introduce a sink trait only when a second sink exists.
+
+### 4.9 Live-tuning ↔ deterministic replay
+
+`FeelParams` via **`arc-swap`**, loaded **once at top-of-tick** (never inside the integrator).
+Hot-reload (`notify` file watcher) does NOT mutate the sim directly — it **enqueues a
+`ParamChange` event onto the recorded input timeline** at the next tick boundary. A recording
+= `seed + per-tick (input, optional ParamChange)`. **Two replay modes:** *faithful* (apply
+recorded ParamChanges → reproduces the session bit-for-bit) and *counterfactual* (pin one
+param set, replay the same controller inputs → the A/B tuning workhorse). CI invariants run
+counterfactual against a committed param snapshot.
+
+## 5. Workspace (2 crates)
 
 ```
 crates/
-  engine-core/        traits (FrameSink/InputSource/AudioSink), FrameBuffer, InputState,
-                      fixed-step clock, sim_math, glam re-export.  NO tokio/quinn.
-  engine-physics/     deterministic integrator, swept circle-vs-segment collision
-  engine-player/      Grounded/Airborne + timers, FeelParams
-  engine-render/      blitter, Kitty encoder (fused RGB+b64), debug overlays
-  engine-input/       virtual controller, binding table (arc-swap), backends (enum),
-                      record/replay
-  engine-audio/       mixer (deferred)
-  transport-terminal/ LocalSink: Kitty over stdout
-  transport-png/      PNG-dump sink            [feature: png-dump, dep: image]
-  transport-quic/     quinn + tokio            [feature: quic]
-  net-protocol/       serde + postcard wire types
-  game-platformer/    THE binary; selects features
+  engine/   lib. modules: math, clock, physics, player, render (blitter + Kitty encoder +
+            TerminalGuard), input (virtual controller, keyboard backend, record/replay),
+            debug (overlays). PNG-dump = a #[cfg(feature="png-dump")] module (image optional).
+  game/     bin. owns the loop, thread wiring, CLI, config; selects features.
 ```
-Features on the binary gate **whole crates**: `default=["terminal","gamepad"]`; optional
-`quic`, `png-dump`, `shm`, `kitty-keyboard`. Keep async out of `engine-core` (CI guard).
+Modules (not crates) do the layering while APIs churn during feel-tuning. Grow crates only
+when a boundary stabilizes and earns its compile-firewall (e.g. split `engine-physics` once
+its golden suite is heavy; transports/IPC when multiplayer is real).
 
-## 6. Proposed crates
+## 6. Crates
 
-Keep: `glam`, `gilrs`, `image`(gated). Hot path: hand-rolled base64 (oracle: `base64`).
-Keyboard: hand-roll + `rustix` (raw mode, `TIOCGWINSZ`). Add: **`flume`/`crossbeam-channel`**
-(bus), **`arc-swap`** (FeelParams), **`spin_sleep`** (frame pacing), **`notify`** (config
-watch), **`parking_lot`**, **`tracing`** (per-stage latency, honest logging), **`postcard`**
-(input wire; over bincode), **`bytes`** (net fragments), **`rtrb`** (audio ring, deferred),
-seeded PCG RNG. Networking (later): **`tokio`+`quinn`** (QUIC). `hecs` deferred (keep
-components as small structs now so adoption is a storage swap). `str0m` only if a browser
-client is ever added.
+Keep: `glam` (math; `scalar-math` for determinism), `image` (PNG-dump, feature-gated),
+hand-rolled base64 (oracle: `base64` crate). Add: `rustix` (raw mode, `TIOCGWINSZ`, signals),
+`libm` (deterministic transcendentals), `spin_sleep` (frame pacing), `arc-swap` (FeelParams),
+`notify` (config watch), `crossbeam-channel` (input bus) or `std::mpsc`, `signal-hook`
+(SIG handling), `directories`/`etcetera` (XDG paths), `tracing` + file subscriber (latency
+logging), seeded PCG (`rand_pcg`) for any sim randomness. **Dropped vs v2:** tokio, quinn,
+webrtc/str0m, postcard, bytes, gilrs, cpal, rtrb, parking_lot (no contended hot-path locks),
+`hecs` (still deferred; keep components as small structs).
 
-## 7. Observability (designed in from Phase 0)
+## 7. Observability
 
-Frame-id stamped pipeline (sim→render→encode→transmit→present); each stage logs a
-timestamp via `tracing`. **Glass-to-glass latency** = histogram of (present − input) per
-frame-id; per-stage budget vs the 16.6ms frame on a live HUD. You cannot tune what you
-cannot measure — and glass-to-glass is the metric everyone gets wrong by measuring
-socket-to-socket.
+Frame-id stamped pipeline (sim→render→encode→present); per-stage timestamps via `tracing` to
+file. **Glass-to-glass** = histogram of (present − input). **Measure terminal present time,
+not just encode time** — over SSH and against the terminal's own vsync is where unaccounted
+latency hides. Per-stage budget vs 16.6ms on a debug HUD.
 
-## 8. Tuning & debug tooling (the backbone — was missing)
+## 8. Tuning & debug tooling (the backbone)
 
-- **Deterministic input record/replay** at the `InputSource` seam (Phase 2). Record the
-  virtual-controller stream + seed; replay exactly → tweak a constant → replay *same
-  inputs* → A/B the trajectory. This is what makes feel-tuning a science, not vibes.
-- **Frame-step debugger** (pause, advance one sim tick, inspect state).
-- **Debug overlays** (cheap — we own the framebuffer): swept path, collision shape, contact
-  normals, tile grid, velocity vector, timer bars (coyote/buffer), input visualization +
-  short history trail. **Ghost compare** a prior recording's path.
-- **CI feel-invariants**: "max jump height == X±ε", "ledge-jump within coyote works", "no
-  penetration across a battery of recorded high-speed inputs." Runs headless from Termux.
+- **Deterministic input record/replay** at the input seam (Phase 1). Faithful + counterfactual.
+- **Velocity vector + numeric vx/vy/speed readout + motion trail** — *Phase 1*, not Phase 3:
+  momentum and slope speed-gain are invisible on a static box; you tune N++ by reading speed
+  numbers against targets.
+- **Collision circle + slope segments + contact normal + movement-STATE (0–5) display** —
+  early Phase 2. N++ feel bugs are usually "wrong state / wrong friction branch."
+- **Frame-step debugger** showing the 32-iteration depenetration (corner snags happen mid-loop).
+- **Ghost compare** vs a prior recording — and, crucially, vs an **external N++ ground-truth
+  trajectory** (import real N++ replay inputs); self-comparison can't tell you it's "N++-tight."
+- **CI feel-invariants** as whole-trajectory L2 distance against golden traces (not scalar
+  "max jump height" thresholds — that's a Celeste metric). Runs headless from Termux.
 
 ## 9. Phased build plan
 
-- **Phase 0 — Skeleton + local render.** Workspace; fixed-step loop **with accumulator +
-  interpolation**; `clock_nanosleep` ABSTIME + spin pacing; recycled RGBA framebuffer;
-  corrected Kitty encoder (i=1/p=1, q=2, fused RGB+b64, chunked); terminal sink + PNG-dump
-  sink; frame-id latency instrumentation. **Encoder byte-golden tests.** *Exit:* box moves
-  **smoothly on a 144Hz Kitty/Ghostty terminal**; frames verifiable as PNGs in CI.
-- **Phase 1 — Input.** Virtual controller (enum backends); hand-rolled Kitty keyboard codec
-  + legacy fallback + capability probe; `gilrs` (own thread, hotplug, deadzone); analog
-  axis; arc-swap bindings; **record/replay scaffolding**. *Exit:* box driven by keyboard AND
-  gamepad via one code path; inputs recordable/replayable.
-- **Phase 2 — Physics + collision (N++) + determinism.** Deterministic fixed-step sim
-  (sub-pixel fixed-point, `sim_math` isolated); swept circle-vs-segment collision with
-  slopes, one-ways, moving platforms, internal-edge merge, corner correction;
-  Grounded/Airborne + timers. **Determinism + replay verified; physics golden tests; debug
-  overlays; frame-step.** Test level with slopes/walls/gaps/ledges. *Exit:* box runs slopes
-  & walls, no tunneling/ghost-collisions, identical replay.
-- **Phase 3 — GAME FEEL (the milestone, LOCAL).** All feel params in ms via hot-reload;
-  tuning HUD + input viz; dial in N++ momentum/slippery + wall-jump/slide + variable jump.
-  **Validated against RECORDED inputs on a 144Hz Kitty terminal** (trustworthy because
-  interpolated + replay-checked). *Exit:* feels N++-tight. **Project is shippable as a tight
-  local game here**, independent of any streaming.
-- **Phase 4 — Transport seam hardening.** FrameSink/InputSource/AudioSink as pull/credit +
-  control channel + frame-id PTS. **Validate against a hostile in-process sink** (latency/
-  jitter/drop). *Exit:* decoupling proven under adversarial timing, local sink unchanged.
-- **Phase 5 — Streaming "lite" (good-enough, terminal-native, LAN-only).** Kitty graphics
-  over SSH to a remote Kitty terminal on the LAN (graphics + keyboard). No WAN target.
-  Measure glass-to-glass; document it as *not* frame-perfect. Optional QUIC-datagram
-  transport for a leaner remote path. *Exit:* playable from a remote terminal on the LAN
-  with measured, honestly-labeled latency.
-- **Phase 6+ — Deferred (much later).** Audio (mixer + `cpal` + `rtrb` + jitter/clock-sync); richer
-  clients (custom/native or browser+WebRTC) to carry sound+controller remotely; codec/
-  compression + dirty-rect for bandwidth; a future fat/predicting client for WAN tightness
-  (determinism already in place). Each behind its own feature/crate.
+- **Phase 0 — Skeleton + render + CLEAN LIFECYCLE.** Workspace (2 crates); fixed-step loop
+  w/ interpolation; `clock_nanosleep` pacing; recycled framebuffer; corrected Kitty encoder
+  (i=1/p=1, q=2, fused zero-alloc RGB+base64, one write_all); **`TerminalGuard` + panic hook
+  + SIGINT/TERM/HUP/TSTP/CONT + SIGWINCH resize (debounced) + alt-screen + image cleanup +
+  min-size + capability message + file logging**; PNG-dump sink; frame-id latency HUD.
+  Encoder byte-golden test + a teardown-sequence test. *Exit:* box moves **smoothly on a
+  144Hz Kitty, local AND over SSH**, and Ctrl-C / `panic!` / Ctrl-Z / resize all leave a
+  clean terminal.
+- **Phase 1 — Input + tuning visibility.** Virtual controller; **hand-rolled Kitty keyboard
+  codec** (push/pop flags, release-event flag check, legacy fallback + capability probe);
+  record/replay; **velocity vector + numeric readout + trail overlay**; XDG config + keybind
+  file (format + location decided here). *Exit:* box driven by keyboard, inputs record/replay
+  exactly, speed is readable on screen.
+- **Phase 2 — N++ physics + collision.** Deterministic f64 sim (`sim_math` isolated); tile
+  →segment decomposition (lines + arcs, 24px grid); half-radius sweep + 32-iter depenetration
+  w/ normal accumulation; N++ states + drag/gravity/accel constants; impact death; launch
+  pads. Collision/normal/state overlays; frame-step. **Test level built from N++'s real tile
+  set** (45°, 1:2, 2:1 slopes, convex+concave arcs, inner/outer 90° corners, 1-tile gap &
+  pillar at max speed, tall wall, wall-above-slope, high drop, launchpad, downhill→flat).
+  *Exit:* faithful collision, identical replay, no tunneling/ghost-snags/jitter.
+- **Phase 3 — GAME FEEL (the milestone, ship line).** Tune to N++ feel via counterfactual
+  replay + ghost-compare vs real N++ traces; dual-gravity, drag, slope tech, wall-jump
+  climbing, frame-tight buffers. A minimal shell: title → play → pause (auto-pause on focus
+  loss) → quit. *Exit:* feels N++-tight against ground-truth; a stranger can launch, play, quit.
+- **Phase 3.5 — Ship it.** `cargo install`; documented min Kitty/Ghostty/foot versions;
+  README + run-over-SSH instructions; `--help/--version/--check/--record/--replay/--config`;
+  config/replays/saves in XDG dirs. **This is the real v1 deliverable.**
+- **Phase 4+ — Future (deferred).** Local same-host multiplayer (NSMB-style): authoritative
+  sim + per-session view-clients over a **Unix socket** (+ optional `/dev/shm`/`/tmp` mmap
+  ring), no root, no network. Then content (levels, art/sprites), `z=`-layer bg optimization
+  if not already done, gamepad-on-host if ever wanted.
 
 ## 10. Top risks
 
-1. **Conflating frame-rate with input-latency in streaming** — defused by strategy (local =
-   tight, streaming = good-enough, never sold as frame-perfect). Keep the messaging honest.
-2. **Phase 3 trustworthiness** — judder masked by 60Hz + feel tuned by inconsistent human
-   input. Mitigated by mandatory interpolation (144Hz exit) + replay-based tuning.
-3. **N++ collision complexity** — circle-vs-segment + slopes + moving/one-way platforms is
-   the genuinely hard part; budget real time, lean on golden tests + overlays.
-4. **Premature generality** — building the engine before the game. Mitigated by game-first
-   framing: thin seams from day one, but no server/wire-protocol until the local game is fun.
-5. **Determinism drift** (only if a predicting client is ever built) — fixed-point sim +
-   isolated `sim_math` keep cross-machine determinism reachable.
-6. **Termux-only blind spots** — graphical/gamepad paths can't run on the dev box; rely on
-   PNG-dump + headless replay/golden tests as the primary CI signal; verify feel on desktop.
+1. **N++ fidelity** — §4.6/§4.7 are reverse-engineered; the exact-corner epsilon behavior
+   even the experts approximate. Verify constants vs source; budget corner-case divergence;
+   use external-N++ ground-truth ghosts to know if it's actually tight.
+2. **Terminal lifecycle correctness** — panic/signal/resize/teardown is the thing TUIs get
+   wrong; it's now a Phase-0 exit criterion with tests, not prose.
+3. **SSH bandwidth** — base64 full-frame at 60fps is heavy on a network pipe; adopt the
+   `z=`-layer static-bg trick and a modest internal resolution; measure over a real SSH link.
+4. **Premature generality** — avoided by 2 crates + single-threaded loop + concrete fns;
+   add seams only when a second consumer (multiplayer) exists.
+5. **Phase-3 trust** — judder masked by 60Hz / tuning by inconsistent human input; mitigated
+   by mandatory interpolation (144Hz exit) + replay-based tuning + ground-truth ghosts.
 
-## 11. Resolved (was open)
+## 11. Resolved / out of scope
 
-- **Collision model:** faithful swept circle-vs-tile-segment. ✔
-- **Streaming "lite" reach:** LAN-only; no WAN target. ✔
-- **Default runtime:** local Kitty/Ghostty terminal; streaming is opt-in and deferred. ✔
-- **Richer client** (remote sound+controller): Phase 6, much later. ✔
+- Audio: **cut.** Gamepad: **cut for now** (keyboard-only; pad→keyboard is the user's job).
+- Networking: **never in our code** — SSH is the transport; future multiplayer is host-local IPC.
+- Determinism: **f64 same-binary replay**; cross-machine bit-identity out of scope.
+- Collision/feel: **faithful N++** per §4.6–4.7.
+- Streaming/QUIC/codec/PTS/transport-seam: **deleted** (were artifacts of a network model we don't have).
