@@ -2,9 +2,9 @@
 //! rendered to a Kitty terminal. Also a headless `verify` mode that runs scripted
 //! scenarios and dumps PNGs (for development on a box without a Kitty terminal).
 
-use scamper::backend::{Backend, KittyBackend};
+use scamper::backend::{Backend, KittyBackend, TextBackend};
 use scamper::framebuffer::{Framebuffer, Rgba};
-use scamper::input::Input;
+use scamper::input::{Input, K_ESC, K_HELP, K_N, K_Q, K_TAB, K_Y};
 use scamper::math::Vec2;
 use scamper::player::{FeelParams, Player, State};
 use scamper::time::{now_ns, sleep_until_ns, NS_PER_SEC};
@@ -317,7 +317,7 @@ fn render(fb: &mut Framebuffer, map: &TileMap, rpos: Vec2, player: &Player) {
 }
 
 // ---------------------------------------------------------------------------
-// Status line (bottom terminal row): "Quit" hint + score + live engine readout
+// Status line (bottom terminal row): help hint + backend + live engine readout
 // ---------------------------------------------------------------------------
 
 fn state_letter(s: State) -> &'static str {
@@ -329,18 +329,18 @@ fn state_letter(s: State) -> &'static str {
 }
 
 /// Build the bottom status row. Positions to the last row, clears it, and writes
-/// a single line (truncated to the terminal width so it never wraps/scrolls). The
-/// leading `Q` of "Quit" is underlined as the quit affordance.
-fn render_status(buf: &mut String, p: &Player, score: u32, fps: f64, rows: u16, cols: u16) {
+/// a single line (truncated to terminal width so it never wraps/scrolls). The
+/// leading `?` (the help affordance) is underlined; full controls + quit live in
+/// the help menu.
+fn render_status(buf: &mut String, p: &Player, score: u32, fps: f64, backend: &str, rows: u16, cols: u16) {
     use std::fmt::Write;
     let mut plain = String::new();
     let _ = write!(
         plain,
-        "Quit  |  Score {score}  |  {}  vx {:>4.0} vy {:>4.0}  |  air {}  |  {fps:>3.0} fps",
+        "? Help  |  Tab gfx:{backend}  |  Score {score}  |  {}  vx {:>4.0} vy {:>4.0}  |  {fps:>3.0} fps",
         state_letter(p.state),
         p.vel.x,
         p.vel.y,
-        p.air_jumps,
     );
     // Truncate to fit (leave 1 col of slack so the cursor never forces a wrap).
     let maxw = (cols as usize).saturating_sub(1);
@@ -350,13 +350,75 @@ fn render_status(buf: &mut String, p: &Player, score: u32, fps: f64, rows: u16, 
 
     buf.clear();
     let _ = write!(buf, "\x1b[{rows};1H\x1b[2K\x1b[2m", rows = rows); // go to last row, clear, dim
-    if let Some(rest) = plain.strip_prefix('Q') {
-        buf.push_str("\x1b[4mQ\x1b[24m"); // underlined quit affordance
+    if let Some(rest) = plain.strip_prefix('?') {
+        buf.push_str("\x1b[4m?\x1b[24m"); // underlined help affordance
         buf.push_str(rest);
     } else {
         buf.push_str(&plain);
     }
     buf.push_str("\x1b[0m");
+}
+
+// ---------------------------------------------------------------------------
+// Modal UI: play, help menu, quit confirmation
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy, PartialEq)]
+enum Ui {
+    Play,
+    Help,
+    ConfirmQuit,
+}
+
+/// Quit gate: a reverse-video prompt on the status row. Quitting is gated so a
+/// stray Q/Esc can't drop you out mid-play.
+fn render_quit_prompt(buf: &mut String, rows: u16, cols: u16) {
+    use std::fmt::Write;
+    let plain = "Really quit?   Y = yes    N / Esc = keep playing";
+    // Reserve 1 col of slack + the 2 padding spaces in the reverse-video bar.
+    let maxw = (cols as usize).saturating_sub(3);
+    let shown = if plain.len() > maxw { &plain[..maxw] } else { plain };
+    buf.clear();
+    let _ = write!(buf, "\x1b[{rows};1H\x1b[2K\x1b[7m {shown} \x1b[0m");
+}
+
+/// Write one help line at (row, col 3), clearing the rest of the line first so
+/// shorter content (e.g. a changed backend name) leaves no trailing junk.
+fn hline(out: &mut Vec<u8>, row: u16, s: &str) {
+    use std::io::Write;
+    let _ = write!(out, "\x1b[{row};3H\x1b[K{s}");
+}
+
+/// Full-screen help/controls + graphics-backend explainer. Drawn as plain text
+/// so it works under either backend (the live image is torn down on entry).
+fn render_help(out: &mut Vec<u8>, active_backend: &str) {
+    out.clear();
+    let mut r = 2u16;
+    hline(out, r, "\x1b[1mSCAMPER — controls & graphics\x1b[0m");
+    r += 2;
+    hline(out, r, "Move              A / D   or   \u{2190} / \u{2192}");
+    r += 1;
+    hline(out, r, "Jump (hold=higher)  Space / Z / K / W / \u{2191}");
+    r += 1;
+    hline(out, r, "Double jump       jump again in mid-air");
+    r += 1;
+    hline(out, r, "Wall slide / jump push into a wall, then jump");
+    r += 1;
+    hline(out, r, "Fast-fall         S / \u{2193}");
+    r += 2;
+    hline(out, r, &format!("Tab               switch graphics backend   [now: {active_backend}]"));
+    r += 1;
+    hline(out, r, "?                 toggle this help");
+    r += 1;
+    hline(out, r, "Q / Esc           quit (confirm with Y / N)");
+    r += 2;
+    hline(out, r, "\x1b[1mGraphics backends\x1b[0m");
+    r += 1;
+    hline(out, r, "  kitty   pixel image via the Kitty graphics protocol (sharp)");
+    r += 1;
+    hline(out, r, "  text    Unicode half-block cells (works in any terminal)");
+    r += 2;
+    hline(out, r, "\x1b[2mpress ? or Esc to resume\x1b[0m");
 }
 
 // ---------------------------------------------------------------------------
@@ -402,13 +464,70 @@ fn run_live() {
     let mut pending_jump = false; // latch a press until a sim substep consumes it
     let mut frame: u64 = 0;
 
+    let mut ui = Ui::Play;
+    // Switch the active backend (kitty <-> text), clearing the old one's output.
+    let switch_backend = |backend: &mut Box<dyn Backend>| {
+        let mut o2: Vec<u8> = Vec::new();
+        backend.teardown(&mut o2);
+        {
+            let mut o = std::io::stdout().lock();
+            let _ = o.write_all(&o2);
+            let _ = o.write_all(b"\x1b[2J");
+            let _ = o.flush();
+        }
+        *backend = if backend.name() == "kitty" {
+            Box::new(TextBackend::new()) as Box<dyn Backend>
+        } else {
+            Box::new(KittyBackend::new()) as Box<dyn Backend>
+        };
+        dlog!("backend -> {}", backend.name());
+    };
+
     loop {
-        if terminal::quit_requested() {
-            break;
+        if terminal::quit_requested() || input.quit {
+            break; // external signal / Ctrl-C — the hard escape hatch (no gate)
         }
         input.poll();
         if input.quit {
             break;
+        }
+
+        // --- modal / UI transitions ---
+        match ui {
+            Ui::Play => {
+                if input.pressed(K_HELP) {
+                    ui = Ui::Help;
+                    // Tear down the live image so help text isn't hidden behind it.
+                    out.clear();
+                    backend.teardown(&mut out);
+                    let mut o = std::io::stdout().lock();
+                    let _ = o.write_all(&out);
+                    let _ = o.write_all(b"\x1b[2J");
+                    let _ = o.flush();
+                } else if input.pressed(K_Q) || input.pressed(K_ESC) {
+                    ui = Ui::ConfirmQuit;
+                } else if input.pressed(K_TAB) {
+                    switch_backend(&mut backend);
+                    full_redraw = true;
+                }
+            }
+            Ui::ConfirmQuit => {
+                if input.pressed(K_Y) {
+                    break;
+                }
+                if input.pressed(K_N) || input.pressed(K_ESC) {
+                    ui = Ui::Play;
+                    full_redraw = true;
+                }
+            }
+            Ui::Help => {
+                if input.pressed(K_HELP) || input.pressed(K_ESC) {
+                    ui = Ui::Play;
+                    full_redraw = true;
+                } else if input.pressed(K_TAB) {
+                    switch_backend(&mut backend); // stays in help; redrawn below
+                }
+            }
         }
 
         // Rebuild the arena to the new window size, keeping the player in bounds.
@@ -442,42 +561,58 @@ fn run_live() {
         if elapsed > 0 {
             fps = fps * 0.9 + (NS_PER_SEC as f64 / elapsed as f64) * 0.1;
         }
-        acc += elapsed;
 
-        if input.jump_pressed() {
-            pending_jump = true;
-        }
-        while acc >= sim_dt_ns {
-            prev_pos = player.pos;
-            player.step(
-                &arena.map,
-                sim_dt,
-                input.axis_x(),
-                pending_jump,
-                input.jump_held(),
-                input.down_held(),
-                &fp,
-            );
-            pending_jump = false; // consumed by the first substep only (no double-fire)
-            acc -= sim_dt_ns;
-            // Safety net (shouldn't happen in a closed box): respawn if it escapes.
-            if player.pos.y > arena.map.px_h() + 64.0 {
-                player = Player::new(arena.map.spawn.0, arena.map.spawn.1);
-                prev_pos = player.pos;
+        // Advance the sim only while playing; modals (help / quit prompt) freeze
+        // it. Drop accumulated time when paused so resuming doesn't burst-step.
+        if ui == Ui::Play {
+            acc += elapsed;
+            if input.jump_pressed() {
+                pending_jump = true;
             }
+            while acc >= sim_dt_ns {
+                prev_pos = player.pos;
+                player.step(
+                    &arena.map,
+                    sim_dt,
+                    input.axis_x(),
+                    pending_jump,
+                    input.jump_held(),
+                    input.down_held(),
+                    &fp,
+                );
+                pending_jump = false; // consumed by the first substep only (no double-fire)
+                acc -= sim_dt_ns;
+                // Safety net (shouldn't happen in a closed box): respawn if it escapes.
+                if player.pos.y > arena.map.px_h() + 64.0 {
+                    player = Player::new(arena.map.spawn.0, arena.map.spawn.1);
+                    prev_pos = player.pos;
+                }
+            }
+        } else {
+            acc = 0;
         }
 
-        let alpha = acc as f64 / sim_dt_ns as f64;
-        let rpos = prev_pos.lerp(player.pos, alpha);
-        render(&mut fb, &arena.map, rpos, &player);
-        // Hand the rendered framebuffer to the active backend, which fills `out`
-        // with a complete frame (image scaled across the play area, or text
-        // cells). The status line is appended and the whole thing flushed once.
-        let disp_rows = arena.rows.saturating_sub(1);
-        backend.present(&mut out, &fb, arena.cols, disp_rows, full_redraw);
-        full_redraw = false;
-        render_status(&mut status, &player, score, fps, arena.rows, arena.cols);
-        {
+        // --- present (modal-aware) ---
+        if ui == Ui::Help {
+            render_help(&mut out, backend.name());
+            let mut o = std::io::stdout().lock();
+            let _ = o.write_all(&out);
+            let _ = o.flush();
+        } else {
+            let alpha = acc as f64 / sim_dt_ns as f64;
+            let rpos = prev_pos.lerp(player.pos, alpha);
+            render(&mut fb, &arena.map, rpos, &player);
+            // Hand the framebuffer to the active backend, which fills `out` with a
+            // complete frame (scaled image, or text cells). Status/quit-prompt is
+            // appended and the whole thing flushed once.
+            let disp_rows = arena.rows.saturating_sub(1);
+            backend.present(&mut out, &fb, arena.cols, disp_rows, full_redraw);
+            full_redraw = false;
+            if ui == Ui::ConfirmQuit {
+                render_quit_prompt(&mut status, arena.rows, arena.cols);
+            } else {
+                render_status(&mut status, &player, score, fps, backend.name(), arena.rows, arena.cols);
+            }
             let mut o = std::io::stdout().lock();
             let _ = o.write_all(&out);
             let _ = o.write_all(status.as_bytes());
@@ -711,16 +846,38 @@ mod tests {
     }
 
     #[test]
-    fn status_line_underlines_quit_and_never_overflows() {
+    fn status_line_underlines_help_and_never_overflows() {
         let p = Player::new(10.0, 10.0);
         let mut s = String::new();
         // narrow terminal: must truncate well within the width, no wrap.
-        render_status(&mut s, &p, 0, 60.0, 24, 20);
-        assert!(s.contains("\x1b[4mQ\x1b[24m"), "Q should be underlined");
+        render_status(&mut s, &p, 0, 60.0, "kitty", 24, 20);
+        assert!(s.contains("\x1b[4m?\x1b[24m"), "? help affordance should be underlined");
         assert!(s.contains("\x1b[24;1H"), "should position to the last row");
         // strip escapes; visible text must fit in cols-1.
         let visible: String = strip_ansi(&s);
         assert!(visible.len() <= 19, "visible status {:?} exceeds width", visible);
+    }
+
+    #[test]
+    fn help_screen_lists_controls_and_backends() {
+        let mut out = Vec::new();
+        render_help(&mut out, "text");
+        let s = String::from_utf8(out).unwrap();
+        for needle in ["SCAMPER", "Move", "Jump", "Wall", "Tab", "kitty", "text", "quit"] {
+            assert!(s.contains(needle), "help should mention {needle:?}");
+        }
+        // reflects the active backend
+        assert!(s.contains("now: text"), "help should show the active backend");
+    }
+
+    #[test]
+    fn quit_prompt_fits_and_offers_yes_no() {
+        let mut s = String::new();
+        render_quit_prompt(&mut s, 24, 40);
+        let visible = strip_ansi(&s);
+        assert!(visible.contains("Y") && visible.contains("N"), "should offer Y/N: {visible:?}");
+        assert!(visible.len() <= 39, "quit prompt {visible:?} exceeds width");
+        assert!(s.contains("\x1b[24;1H"), "should position to the last row");
     }
 
     // crude ANSI stripper for the width assertion

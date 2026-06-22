@@ -85,9 +85,12 @@ pub fn query_winsize() -> WinSize {
 }
 
 // Setup/teardown escape sequences.
-const SETUP: &[u8] = b"\x1b[?1049h\x1b[?25l\x1b[>11u\x1b[?1004h\x1b[2J";
-// Teardown: delete all images, focus off, pop kbd flags, show cursor, leave alt screen.
-const TEARDOWN: &[u8] = b"\x1b_Ga=d,d=A\x1b\\\x1b[?1004l\x1b[<u\x1b[?25h\x1b[?1049l";
+// Alt screen, hide cursor, push kitty kbd flags, focus events, disable autowrap
+// (so a full-width text row can't scroll the screen), clear.
+const SETUP: &[u8] = b"\x1b[?1049h\x1b[?25l\x1b[>11u\x1b[?1004h\x1b[?7l\x1b[2J";
+// Teardown: delete all images, focus off, pop kbd flags, re-enable autowrap,
+// show cursor, leave alt screen.
+const TEARDOWN: &[u8] = b"\x1b_Ga=d,d=A\x1b\\\x1b[?1004l\x1b[<u\x1b[?7h\x1b[?25h\x1b[?1049l";
 
 fn teardown_global() {
     if TORN_DOWN.swap(true, Ordering::SeqCst) {

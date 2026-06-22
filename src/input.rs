@@ -17,6 +17,10 @@ pub const K_C: u32 = 99;
 pub const K_Z: u32 = 122;
 pub const K_K: u32 = 107;
 pub const K_Q: u32 = 113;
+pub const K_Y: u32 = 121;
+pub const K_N: u32 = 110;
+pub const K_TAB: u32 = 9;
+pub const K_HELP: u32 = 63; // '?'
 pub const K_LEFT: u32 = 1_000;
 pub const K_DOWN: u32 = 1_001;
 pub const K_UP: u32 = 1_002;
@@ -115,11 +119,9 @@ impl Input {
                 }
             }
         }
-        if code == K_Q || code == K_ESC {
-            if ev != Ev::Release {
-                self.quit = true;
-            }
-        }
+        // Nothing here forces a quit: the game loop gates quitting behind a y/n
+        // prompt (Q/Esc open it). Only Ctrl-C (handled in `parse`) is an immediate
+        // hard quit — the emergency escape hatch.
     }
 
     fn legacy_byte(&mut self, code: u32) {
@@ -182,8 +184,8 @@ impl Input {
                 // Legacy mode: raw byte keys.
                 let code = b as u32;
                 match code {
-                    K_A | K_D | K_W | K_S | K_SPACE | K_Z | K_K => self.legacy_byte(code),
-                    K_Q => self.quit = true,
+                    K_A | K_D | K_W | K_S | K_SPACE | K_Z | K_K | K_TAB | K_HELP | K_Q
+                    | K_Y | K_N => self.legacy_byte(code),
                     _ => {}
                 }
                 i += 1;
@@ -363,6 +365,32 @@ mod tests {
         // a kitty graphics OK reply should be swallowed, not parsed as keys
         feed(&mut inp, b"\x1b_Gi=1;OK\x1b\\\x1b[100u");
         assert!(inp.held(K_D));
+        assert!(!inp.quit);
+    }
+
+    #[test]
+    fn tab_press_registers_without_quitting() {
+        let mut inp = Input::new(true);
+        feed(&mut inp, b"\x1b[9u"); // Tab
+        assert!(inp.pressed(K_TAB));
+        assert!(!inp.quit);
+    }
+
+    #[test]
+    fn help_key_registers() {
+        let mut inp = Input::new(true);
+        feed(&mut inp, b"\x1b[63u"); // '?'
+        assert!(inp.pressed(K_HELP));
+        assert!(!inp.quit);
+    }
+
+    #[test]
+    fn esc_is_an_edge_not_a_hard_quit() {
+        // Esc must reach the game loop as a press edge (it decides quit vs close-help),
+        // not force quit at the input layer. (Kitty reports Esc as CSI 27 u.)
+        let mut inp = Input::new(true);
+        feed(&mut inp, b"\x1b[27u");
+        assert!(inp.pressed(K_ESC));
         assert!(!inp.quit);
     }
 
