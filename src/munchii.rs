@@ -72,17 +72,16 @@ const CRAWL: &[&[&str]] = &[
     &["                   ", "                   ", "            __     ", " )    ___(( o==@   ", " |       (\\_)      ", "    w  w   n   n   "],
 ];
 
-// upright, pressed to the wall (renderer flips him to face it); scuff/spark
-// puffs fly off his feet on the back (wall) side and rise as he slides — the
-// sprite faces right, so sparks sit on the left and flip with him. No rotation.
-const WALLSLIDE: &[&[&str]] = &[
-    &["             __    ", "           (( o==@ ", "           (\\_)    ", "  /__________\\     ", "  \\__________/     ", "   n  n     n  n   "],
-    &["             __    ", "           (( o==@ ", "           (\\_)    ", "  /__________\\     ", "  \\__________/     ", " * n  n     n  n   "],
-    &["             __    ", "           (( o==@ ", "           (\\_)    ", "  /__________\\     ", "* \\__________/     ", " . n  n     n  n   "],
-    &["             __    ", "           (( o==@ ", "           (\\_)    ", "° /__________\\     ", " '\\__________/     ", "   n  n     n  n   "],
-    &["             __    ", "           (( o==@ ", "           (\\_)    ", " '/__________\\     ", ", \\__________/     ", "   n  n     n  n   "],
-    &["             __    ", "           (( o==@ ", "           (\\_)    ", "  /__________\\     ", "  \\__________/     ", ".  n  n     n  n   "],
-];
+// pressed to the wall (renderer flips him to face away from it). A held pose —
+// the friction sparks now come from the SPARK effect, emitted at his feet.
+const WALLSLIDE: &[&[&str]] = &[&[
+    "             __    ",
+    "           (( o==@ ",
+    "           (\\_)    ",
+    "  /__________\\     ",
+    "  \\__________/     ",
+    "   n  n     n  n   ",
+]];
 
 // big fast tail wag, steady eye (no blink)
 const HAPPY: &[&[&str]] = &[

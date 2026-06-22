@@ -600,6 +600,7 @@ fn run_live() {
     let mut fx = Effects::new();
     let mut was_double = false; // rising edge of did_double = the double-jump fires
     let mut was_grounded = true; // falling edge of grounded = a landing
+    let mut last_spark_ns: u64 = 0; // throttles the continuous wall-slide sparks
 
     let mut ui = Ui::Play;
     // Switch the active backend (kitty <-> text), clearing the old one's output.
@@ -740,6 +741,13 @@ fn run_live() {
         }
         if player.grounded && !was_grounded {
             fx.spawn(&effects::DUST, feet_x, feet_y, now); // landing scuff
+        }
+        // Continuous friction sparks at the wall-side foot while sliding.
+        if player.state == State::WallSliding && now.saturating_sub(last_spark_ns) >= NS_PER_SEC / 18 {
+            let sx = feet_x + player.wall_dir as f64 * player.w * 0.42;
+            let sy = player.pos.y + player.h * 0.6;
+            fx.spawn(&effects::SPARK, sx, sy, now);
+            last_spark_ns = now;
         }
         was_double = player.did_double;
         was_grounded = player.grounded;
