@@ -113,30 +113,27 @@ record_run() {
     "target/$profile_dir/scamp" record "$name"
 }
 
-# Per-capture action menu: play / check / bless / rename / delete.
+# Per-capture action menu: play / rename / delete. (Snapshot golden check/bless
+# is a regression-testing tool, kept off the menu — use the flags directly:
+#   scamp replay <name> --check    scamp replay <name> --bless)
 capture_actions() {
-    local dir="$1" name="$2" new c golden
+    local dir="$1" name="$2" new c
     while true; do
-        golden=""; [[ -e "$dir/$name.snap" ]] && golden="  [golden]"
-        menu "capture: $name$golden" \
+        menu "capture: $name" \
             "play  (visual replay)" \
-            "check against golden" \
-            "bless / update golden" \
             "rename" \
             "delete" \
             "back"
         case "$MENU_SEL" in
             0) "target/$profile_dir/scamp" replay "$name" ;;
-            1) printf '\033[2J\033[H'; "target/$profile_dir/scamp" replay "$name" --check; IFS= read -rsn1 -p $'\npress a key…' ;;
-            2) printf '\033[2J\033[H'; "target/$profile_dir/scamp" replay "$name" --bless; IFS= read -rsn1 -p $'\npress a key…' ;;
-            3) printf '\033[2J\033[H\n  rename "%s" to (blank cancels):\n  > ' "$name"
+            1) printf '\033[2J\033[H\n  rename "%s" to (blank cancels):\n  > ' "$name"
                printf '\033[?25h'; read_name; new="$REPLY_NAME"; printf '\033[?25l'
                if [[ -n "$new" ]] && valid_name "$new"; then
                    mv -f "$dir/$name.scap" "$dir/$new.scap"
                    [[ -e "$dir/$name.snap" ]] && mv -f "$dir/$name.snap" "$dir/$new.snap"
                    return
                fi ;;
-            4) printf '\033[2J\033[H\n  delete "%s" (and its golden)? [y/N] ' "$name"
+            2) printf '\033[2J\033[H\n  delete "%s" (and its golden)? [y/N] ' "$name"
                IFS= read -rsn1 c
                if [[ "$c" == y || "$c" == Y ]]; then
                    rm -f "$dir/$name.scap" "$dir/$name.snap"
