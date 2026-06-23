@@ -12,7 +12,7 @@
 use crate::level::art::Theme;
 use crate::level::ir::{Level, TileKind};
 use crate::world::{TileMap, TILE};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// A pipe/warp trigger and where it leads. `target` is `"<level-id>@tx,ty"` or
 /// `"@tx,ty"` (same level); `None` means decorative (e.g. imported pipes with no
@@ -27,6 +27,7 @@ pub struct Warp {
 pub struct LevelWorld {
     pub map: TileMap,                // solid cells, drives Player::step
     pub hazard: HashSet<(i32, i32)>, // cells that kill on contact
+    pub kinds: HashMap<(i32, i32), TileKind>, // per-cell kind, for rendering
     pub w: i32,
     pub h: i32,
     pub spawn: (f64, f64), // px (top-left of the player box)
@@ -41,6 +42,7 @@ impl LevelWorld {
         let h = lvl.h.max(1);
         let mut map = TileMap::new(w as usize, h as usize);
         let mut hazard = HashSet::new();
+        let mut kinds = HashMap::new();
         let in_bounds = |x: i32, y: i32| x >= 0 && y >= 0 && x < w && y < h;
 
         for span in &lvl.tiles {
@@ -55,6 +57,7 @@ impl LevelWorld {
                 if span.kind == TileKind::Hazard {
                     hazard.insert((x, y));
                 }
+                kinds.insert((x, y), span.kind);
             }
         }
 
@@ -65,6 +68,7 @@ impl LevelWorld {
                 "question" | "brick" => {
                     if in_bounds(e.x, e.y) {
                         map.set(e.x as usize, e.y as usize, true);
+                        kinds.insert((e.x, e.y), if e.kind == "question" { TileKind::Question } else { TileKind::Brick });
                     }
                 }
                 "warp" | "pipe" => warps.push(Warp {
@@ -80,7 +84,12 @@ impl LevelWorld {
         map.spawn = spawn;
         let goal = lvl.goal.as_ref().map(|g| (g.x as f64 * TILE, g.y as f64 * TILE));
 
-        LevelWorld { map, hazard, w, h, spawn, goal, warps, theme: Theme::from_str(&lvl.theme) }
+        LevelWorld { map, hazard, kinds, w, h, spawn, goal, warps, theme: Theme::from_str(&lvl.theme) }
+    }
+
+    /// The tile kind drawn at cell (x,y), if any (for rendering).
+    pub fn kind_at(&self, x: i32, y: i32) -> Option<TileKind> {
+        self.kinds.get(&(x, y)).copied()
     }
 
     pub fn px_w(&self) -> f64 {
@@ -153,6 +162,9 @@ mod tests {
         let w = LevelWorld::from_level(&demo());
         assert!(w.map.is_solid(0, 10) && w.map.is_solid(39, 10), "ground is solid");
         assert!(w.map.is_solid(6, 6), "question block entity is solid");
+        assert_eq!(w.kind_at(6, 6), Some(TileKind::Question), "block entity renders as a question tile");
+        assert_eq!(w.kind_at(0, 10), Some(TileKind::Ground));
+        assert_eq!(w.kind_at(10, 6), Some(TileKind::Deco));
         assert!(!w.map.is_solid(10, 6), "deco is not solid");
         assert!(!w.map.is_solid(20, 9), "hazard cell is not solid (you fall in)");
         assert!(w.hazard.contains(&(20, 9)) && w.hazard.contains(&(22, 9)));
