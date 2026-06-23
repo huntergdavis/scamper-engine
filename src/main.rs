@@ -6,8 +6,10 @@ use scamper::backend::{AsciiBackend, Backend, KittyBackend, MonoBackend, Overlay
 use scamper::capture::{self, InputFrame, Recording, Snapshots};
 use scamper::munchii;
 use scamper::framebuffer::{Framebuffer, Rgba};
-use scamper::input::{Input, K_ESC, K_HELP, K_N, K_Q, K_T, K_TAB, K_Y};
+use scamper::input::{Input, K_DOWN, K_ESC, K_HELP, K_N, K_Q, K_S, K_T, K_TAB, K_Y};
 use scamper::level::art::{self, Theme};
+use scamper::level::ir::Level;
+use scamper::level::world::{camera, LevelWorld};
 use scamper::math::Vec2;
 use scamper::player::{FeelParams, Player, State};
 use scamper::sim::{Sim, SIM_DT_NS};
@@ -80,6 +82,7 @@ fn main() {
         Some("import") => run_import(&args),
         Some("level-info") => run_level_info(&args),
         Some("tiles") => run_tiles(),
+        Some("play") => run_play(nth_nonflag(&args, 1).unwrap_or("levels/yard-romp-1.lvl")),
         _ => run_live(None),
     }
 }
@@ -282,6 +285,236 @@ fn render_tiles_status(buf: &mut String, theme: Theme, backend: &str, rows: u16,
     let grid = names.chunks(3).map(|r| r.join(" ")).collect::<Vec<_>>().join(" / ");
     let mut plain = String::new();
     let _ = write!(plain, "TILES  theme:{} (t)  ·  Tab gfx:{backend}  ·  q quit   [{grid}]", theme.name());
+    let maxw = (cols as usize).saturating_sub(1);
+    if plain.len() > maxw {
+        plain.truncate(maxw);
+    }
+    buf.clear();
+    let _ = write!(buf, "\x1b[{rows};1H\x1b[2K\x1b[7m{plain}\x1b[0m");
+}
+
+// ---------------------------------------------------------------------------
+// Level runtime — play an imported/authored level: scrolling camera, tile
+// collision, hazards, the goal (level end), and pipe warps (CAMPAIGN_PLAN.md §6).
+// ---------------------------------------------------------------------------
+
+/// Viewport geometry for the level camera: an internal framebuffer sized to a
+/// whole number of tiles (so backends keep dimensional parity) plus the terminal
+/// cell area it scales across. Mirrors `build_arena`, but it's a *window* onto a
+/// larger level rather than the whole arena.
+fn play_view(ws: terminal::WinSize) -> (usize, usize, u16, u16) {
+    let tile = TILE as usize;
+    let cpt_x = tile / CELL_PX; // cells per tile, horizontally (4)
+    let cpt_y = tile / CELL_PH; // cells per tile, vertically (2)
+    let max_tiles = MAX_INTERNAL_DIM / tile;
+    let view_tw = (ws.cols.max(20) as usize / cpt_x).clamp(6, max_tiles);
+    let view_th = ((ws.rows.max(6) as usize - 1) / cpt_y).clamp(5, max_tiles);
+    (view_tw * tile, view_th * tile, (view_tw * cpt_x) as u16, (view_th * cpt_y) as u16)
+}
+
+fn load_level_file(path: &str) -> std::io::Result<Level> {
+    Level::from_text(&std::fs::read_to_string(path)?)
+}
+
+/// A fresh sim placing the player at `spawn` px (default ~1-tile hitbox).
+fn sim_at(spawn: (f64, f64)) -> Sim {
+    Sim::new(Player::new(spawn.0, spawn.1), spawn)
+}
+
+/// Parse a warp target `"<id>@tx,ty"` (empty id = same level) into the level to
+/// load and the spawn pixel. `dir` is the directory of the current level file.
+fn parse_warp(target: &str, dir: &std::path::Path, current: &Level) -> Option<(Level, (f64, f64))> {
+    let (id, coords) = target.split_once('@')?;
+    let (xs, ys) = coords.split_once(',')?;
+    let (tx, ty): (i32, i32) = (xs.trim().parse().ok()?, ys.trim().parse().ok()?);
+    let lvl = if id.is_empty() {
+        current.clone()
+    } else {
+        load_level_file(dir.join(format!("{id}.lvl")).to_str()?).ok()?
+    };
+    Some((lvl, (tx as f64 * TILE, ty as f64 * TILE)))
+}
+
+fn run_play(path: &str) {
+    let mut level = match load_level_file(path) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("play: cannot load level {path}: {e}");
+            std::process::exit(2);
+        }
+    };
+    let dir = std::path::Path::new(path).parent().map(|p| p.to_path_buf()).unwrap_or_default();
+
+    let guard = match terminal::TerminalGuard::enter() {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln!("play needs an interactive terminal ({e}).");
+            return;
+        }
+    };
+    let kitty_kbd = terminal::probe_kitty_keyboard();
+    let mut input = Input::new(kitty_kbd);
+    let switch_backend = make_switch_backend();
+    let mut backend: Box<dyn Backend> = Box::new(KittyBackend::new());
+
+    let mut world = LevelWorld::from_level(&level);
+    let mut sim = sim_at(world.spawn);
+
+    let (mut fb_w, mut fb_h, mut cols, mut rows) = play_view(terminal::query_winsize());
+    let mut fb = Framebuffer::new(fb_w, fb_h);
+    let mut out: Vec<u8> = Vec::new();
+    let mut status = String::new();
+    let mut full_redraw = true;
+    let mut pending_jump = false;
+    let mut won = false;
+
+    let spin = 1_000_000u64;
+    let mut acc: u64 = 0;
+    let mut prev_t = now_ns();
+    let mut next = now_ns();
+
+    loop {
+        if terminal::quit_requested() || input.quit {
+            break;
+        }
+        input.poll();
+        if input.quit || input.pressed(K_Q) || input.pressed(K_ESC) {
+            break;
+        }
+        if input.pressed(K_TAB) {
+            switch_backend(&mut backend);
+            full_redraw = true;
+        }
+        if terminal::take_resize() {
+            let v = play_view(terminal::query_winsize());
+            fb_w = v.0;
+            fb_h = v.1;
+            cols = v.2;
+            rows = v.3;
+            fb.resize(fb_w, fb_h);
+            out.clear();
+            backend.teardown(&mut out);
+            let mut o = std::io::stdout().lock();
+            let _ = o.write_all(&out);
+            let _ = o.write_all(b"\x1b[2J");
+            let _ = o.flush();
+            full_redraw = true;
+        }
+
+        // --- advance physics (fixed timestep) unless the level is finished ---
+        let now = now_ns();
+        let mut elapsed = now - prev_t;
+        prev_t = now;
+        if elapsed > 8 * SIM_DT_NS {
+            elapsed = 8 * SIM_DT_NS;
+        }
+        if input.jump_pressed() {
+            pending_jump = true;
+        }
+        if !won {
+            acc += elapsed;
+            while acc >= SIM_DT_NS {
+                let inp = InputFrame {
+                    axis_x: input.axis_x() as i8,
+                    jump_pressed: pending_jump,
+                    jump_held: input.jump_held(),
+                    down_held: input.down_held(),
+                };
+                pending_jump = false;
+                sim.step(&world.map, inp);
+                acc -= SIM_DT_NS;
+            }
+        } else {
+            acc = 0;
+        }
+
+        let (px, py, pw_, ph_) = (sim.player.pos.x, sim.player.pos.y, sim.player.w, sim.player.h);
+        // hazard (lava/water) → respawn
+        if world.hazard_overlap(px, py, pw_, ph_) {
+            sim = sim_at(world.spawn);
+            full_redraw = true;
+        }
+        // goal reached → level complete
+        if let Some((gx, _)) = world.goal {
+            if px + pw_ / 2.0 >= gx {
+                won = true;
+            }
+        }
+        // pipe warp: press down while standing on a warp with a destination
+        if !won && (input.pressed(K_S) || input.pressed(K_DOWN)) {
+            if let Some(target) = world.warp_at(px, py, pw_, ph_).and_then(|w| w.target.clone()) {
+                if let Some((lvl, spawn)) = parse_warp(&target, &dir, &level) {
+                    level = lvl;
+                    world = LevelWorld::from_level(&level);
+                    sim = sim_at(spawn);
+                    full_redraw = true;
+                }
+            }
+        }
+
+        // --- render the camera window ---
+        let pal = art::palette(world.theme);
+        let pcx = sim.player.pos.x + sim.player.w / 2.0;
+        let pcy = sim.player.pos.y + sim.player.h / 2.0;
+        let (cam_x, cam_y) = camera(pcx, pcy, fb_w as f64, fb_h as f64, world.px_w(), world.px_h());
+        let (cam_x, cam_y) = (cam_x.floor(), cam_y.floor());
+
+        fb.clear(pal.sky);
+        let t = TILE as i32;
+        let tx0 = (cam_x / TILE).floor() as i32;
+        let tx1 = ((cam_x + fb_w as f64) / TILE).ceil() as i32;
+        let ty0 = (cam_y / TILE).floor() as i32;
+        let ty1 = ((cam_y + fb_h as f64) / TILE).ceil() as i32;
+        for ty in ty0..ty1 {
+            for tx in tx0..tx1 {
+                if let Some(kind) = world.kind_at(tx, ty) {
+                    art::draw_tile(&mut fb, tx * t - cam_x as i32, ty * t - cam_y as i32, kind, &pal);
+                }
+            }
+        }
+        // goal post
+        if let Some((gx, gy)) = world.goal {
+            let sx = (gx - cam_x) as i32;
+            fb.fill_rect(sx, 0, 2, fb_h as i32, Rgba::rgb(235, 235, 245));
+            fb.fill_rect(sx - 7, (gy - cam_y) as i32, 7, 5, Rgba::rgb(232, 84, 84));
+        }
+        // player box (state-colored, with an outline + facing eye)
+        let (psx, psy) = ((sim.player.pos.x - cam_x) as i32, (sim.player.pos.y - cam_y) as i32);
+        let (pw, ph) = (sim.player.w as i32, sim.player.h as i32);
+        fb.fill_rect(psx, psy, pw, ph, state_color(sim.player.state));
+        fb.stroke_rect(psx, psy, pw, ph, Rgba::rgb(255, 245, 210));
+        let eye = if sim.player.facing >= 0 { psx + pw - 4 } else { psx + 1 };
+        fb.fill_rect(eye, psy + 3, 3, 3, Rgba::rgb(20, 20, 20));
+
+        backend.present(&mut out, &fb, cols, rows, full_redraw, &[]);
+        full_redraw = false;
+        render_play_status(&mut status, &level, sim.player.state, backend.name(), won, rows + 1, cols);
+        {
+            let mut o = std::io::stdout().lock();
+            let _ = o.write_all(&out);
+            let _ = o.write_all(status.as_bytes());
+            let _ = o.flush();
+        }
+
+        next += SIM_DT_NS;
+        let nn = now_ns();
+        if next < nn {
+            next = nn;
+        }
+        sleep_until_ns(next, spin);
+    }
+    drop(guard);
+    eprintln!("scamp: play done.");
+}
+
+fn render_play_status(buf: &mut String, level: &Level, st: State, backend: &str, won: bool, rows: u16, cols: u16) {
+    use std::fmt::Write;
+    let mut plain = String::new();
+    if won {
+        let _ = write!(plain, "★ LEVEL COMPLETE — {} ★   gfx:{backend} · Tab gfx · q quit", level.id);
+    } else {
+        let _ = write!(plain, "{}  [{}]  {}   A/D · jump · ↓ pipe · Tab gfx:{backend} · q quit", level.id, level.theme, state_letter(st));
+    }
     let maxw = (cols as usize).saturating_sub(1);
     if plain.len() > maxw {
         plain.truncate(maxw);
