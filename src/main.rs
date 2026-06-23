@@ -478,15 +478,41 @@ fn run_play(path: &str) {
             fb.fill_rect(sx, 0, 2, fb_h as i32, Rgba::rgb(235, 235, 245));
             fb.fill_rect(sx - 7, (gy - cam_y) as i32, 7, 5, Rgba::rgb(232, 84, 84));
         }
-        // player box (state-colored, with an outline + facing eye)
-        let (psx, psy) = ((sim.player.pos.x - cam_x) as i32, (sim.player.pos.y - cam_y) as i32);
-        let (pw, ph) = (sim.player.w as i32, sim.player.h as i32);
-        fb.fill_rect(psx, psy, pw, ph, state_color(sim.player.state));
-        fb.stroke_rect(psx, psy, pw, ph, Rgba::rgb(255, 245, 210));
-        let eye = if sim.player.facing >= 0 { psx + pw - 4 } else { psx + 1 };
-        fb.fill_rect(eye, psy + 3, 3, 3, Rgba::rgb(20, 20, 20));
+        // --- Munchii himself (not a box): the sprite at his natural cell size,
+        // centered on the hitbox with his feet on its bottom edge. He's a wide,
+        // low beagle, so he overhangs the ~1-tile collision box — that's fine.
+        let anim = munchii::anim(pose_for(&sim.player, input.down_held()));
+        let n = anim.frames.len().max(1);
+        let fi = (sim.clock() / (NS_PER_SEC / anim.fps.max(1) as u64)) as usize % n;
+        let face_left = if sim.player.state == State::WallSliding {
+            sim.player.facing > 0
+        } else {
+            sim.player.facing < 0
+        };
+        let lines: Vec<String> = if face_left {
+            anim.frames[fi].iter().map(|l| flip_line(l)).collect()
+        } else {
+            anim.frames[fi].iter().map(|s| s.to_string()).collect()
+        };
+        let fw = lines.iter().map(|l| l.chars().count()).max().unwrap_or(1) as f64;
+        let cpw = fb_w as f64 / cols.max(1) as f64; // px per terminal cell
+        let cph = fb_h as f64 / rows.max(1) as f64;
+        let (mw, mh) = (fw * cpw, lines.len() as f64 * cph); // sprite footprint, px
+        let cx = (sim.player.pos.x - cam_x) + sim.player.w / 2.0;
+        let bottom = (sim.player.pos.y - cam_y) + sim.player.h;
+        let (lx, ly) = (cx - mw / 2.0, bottom - mh);
 
-        backend.present(&mut out, &fb, cols, rows, full_redraw, &[]);
+        if backend.draws_overlay() {
+            // character tiers: stamp Munchii's glyphs (one per cell) over the tiles
+            let col = (lx / cpw).round() as i32;
+            let row = (ly / cph).round() as i32;
+            let ov = [Overlay { lines: &lines, col, row, tint: None, z: 0 }];
+            backend.present(&mut out, &fb, cols, rows, full_redraw, &ov);
+        } else {
+            // pixel tiers: rasterize him into the framebuffer in his beagle colors
+            draw_sprite_pixels(&mut fb, &lines, lx, ly, cpw, cph);
+            backend.present(&mut out, &fb, cols, rows, full_redraw, &[]);
+        }
         full_redraw = false;
         render_play_status(&mut status, &level, sim.player.state, backend.name(), won, rows + 1, cols);
         {
