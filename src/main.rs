@@ -6,7 +6,8 @@ use scamper::backend::{AsciiBackend, Backend, KittyBackend, MonoBackend, Overlay
 use scamper::capture::{self, InputFrame, Recording, Snapshots};
 use scamper::munchii;
 use scamper::framebuffer::{Framebuffer, Rgba};
-use scamper::input::{Input, K_ESC, K_HELP, K_N, K_Q, K_TAB, K_Y};
+use scamper::input::{Input, K_ESC, K_HELP, K_N, K_Q, K_T, K_TAB, K_Y};
+use scamper::level::art::{self, Theme};
 use scamper::math::Vec2;
 use scamper::player::{FeelParams, Player, State};
 use scamper::sim::{Sim, SIM_DT_NS};
@@ -78,6 +79,7 @@ fn main() {
         Some("captures") => run_captures(),
         Some("import") => run_import(&args),
         Some("level-info") => run_level_info(&args),
+        Some("tiles") => run_tiles(),
         _ => run_live(None),
     }
 }
@@ -175,6 +177,117 @@ fn flag_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
 /// The `n`-th non-flag argument after the program name (0 = the subcommand).
 fn nth_nonflag(args: &[String], n: usize) -> Option<&str> {
     args.iter().skip(1).filter(|a| !a.starts_with("--")).nth(n).map(|s| s.as_str())
+}
+
+// ---------------------------------------------------------------------------
+// Tile preview — see every tile kind across all four backends + every theme,
+// so we can confirm they read distinctly from mono ASCII up to Kitty pixels.
+// ---------------------------------------------------------------------------
+
+/// `scamp tiles`: a 3×3 grid of tile-kind patches. Tab cycles the graphics
+/// backend, `t` cycles the theme, q/Esc quits.
+fn run_tiles() {
+    let guard = match terminal::TerminalGuard::enter() {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln!("tiles needs an interactive terminal ({e}).");
+            return;
+        }
+    };
+    let kitty_kbd = terminal::probe_kitty_keyboard();
+    let mut input = Input::new(kitty_kbd);
+    let mut backend: Box<dyn Backend> = Box::new(KittyBackend::new());
+    let switch_backend = make_switch_backend();
+
+    // Layout: each kind is a `PATCH`×`PATCH` field of tiles, on a grid with a
+    // one-tile gutter, so repeating tiles read as a surface.
+    const PATCH: usize = 3;
+    const GAP: usize = 1;
+    const COLS: usize = 3;
+    let rows = art::KINDS.len().div_ceil(COLS);
+    let step = PATCH + GAP;
+    let t = TILE as usize;
+    let fb_w = (COLS * step + GAP) * t;
+    let fb_h = (rows * step + GAP) * t;
+    let mut fb = Framebuffer::new(fb_w, fb_h);
+
+    let mut out: Vec<u8> = Vec::new();
+    let mut status = String::new();
+    let mut theme_i = 0usize;
+    let mut dirty = true; // only re-encode when something changed (kitty is heavy)
+
+    loop {
+        if terminal::quit_requested() || input.quit {
+            break;
+        }
+        input.poll();
+        if input.quit || input.pressed(K_Q) || input.pressed(K_ESC) {
+            break;
+        }
+        if input.pressed(K_TAB) {
+            switch_backend(&mut backend);
+            dirty = true;
+        }
+        if input.pressed(K_T) {
+            theme_i = (theme_i + 1) % Theme::ALL.len();
+            dirty = true;
+        }
+        if terminal::take_resize() {
+            out.clear();
+            backend.teardown(&mut out);
+            let mut o = std::io::stdout().lock();
+            let _ = o.write_all(&out);
+            let _ = o.write_all(b"\x1b[2J");
+            let _ = o.flush();
+            dirty = true;
+        }
+
+        if dirty {
+            let theme = Theme::ALL[theme_i];
+            let pal = art::palette(theme);
+            fb.clear(pal.sky);
+            for (i, &kind) in art::KINDS.iter().enumerate() {
+                let (gx, gy) = (i % COLS, i / COLS);
+                let ox = ((GAP + gx * step) * t) as i32;
+                let oy = ((GAP + gy * step) * t) as i32;
+                for ty in 0..PATCH {
+                    for tx in 0..PATCH {
+                        art::draw_tile(&mut fb, ox + (tx * t) as i32, oy + (ty * t) as i32, kind, &pal);
+                    }
+                }
+            }
+            let ws = terminal::query_winsize();
+            let cols = ws.cols.max(1);
+            let play_rows = ws.rows.saturating_sub(1).max(1);
+            backend.present(&mut out, &fb, cols, play_rows, true, &[]);
+            render_tiles_status(&mut status, theme, backend.name(), ws.rows, ws.cols);
+            let mut o = std::io::stdout().lock();
+            let _ = o.write_all(&out);
+            let _ = o.write_all(status.as_bytes());
+            let _ = o.flush();
+            dirty = false;
+        }
+
+        sleep_until_ns(now_ns() + NS_PER_SEC / 30, 1_000_000);
+    }
+    drop(guard);
+    eprintln!("scamp: tiles done.");
+}
+
+/// Status row for the tile preview: theme, backend, the grid legend, and controls.
+fn render_tiles_status(buf: &mut String, theme: Theme, backend: &str, rows: u16, cols: u16) {
+    use std::fmt::Write;
+    // Kinds in grid reading order (3 per row), so the legend maps to the patches.
+    let names: Vec<&str> = art::KINDS.iter().map(|k| k.as_str()).collect();
+    let grid = names.chunks(3).map(|r| r.join(" ")).collect::<Vec<_>>().join(" / ");
+    let mut plain = String::new();
+    let _ = write!(plain, "TILES  theme:{} (t)  ·  Tab gfx:{backend}  ·  q quit   [{grid}]", theme.name());
+    let maxw = (cols as usize).saturating_sub(1);
+    if plain.len() > maxw {
+        plain.truncate(maxw);
+    }
+    buf.clear();
+    let _ = write!(buf, "\x1b[{rows};1H\x1b[2K\x1b[7m{plain}\x1b[0m");
 }
 
 // ---------------------------------------------------------------------------
