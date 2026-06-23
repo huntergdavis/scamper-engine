@@ -193,6 +193,7 @@ interactive_menu() {
             "record a run" \
             "replay a run" \
             "sprite viewer  (Tab cycles backends)" \
+            "tile viewer  (Tab gfx \xc2\xb7 space tile \xc2\xb7 t theme)" \
             "debug tools" \
             "quit"
         case "$MENU_SEL" in
@@ -200,7 +201,8 @@ interactive_menu() {
             1) record_run ;;
             2) replay_browser ;;
             3) "target/$profile_dir/sprite-lab" ;;
-            4) debug_menu ;;
+            4) "target/$profile_dir/tile-lab" ;;
+            5) debug_menu ;;
             *) break ;;
         esac
     done

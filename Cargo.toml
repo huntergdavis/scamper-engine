@@ -18,6 +18,11 @@ path = "src/main.rs"
 name = "sprite-lab"
 path = "src/sprite_lab.rs"
 
+# tile-lab: standalone tile-set viewer (the tile counterpart to sprite-lab)
+[[bin]]
+name = "tile-lab"
+path = "src/tile_lab.rs"
+
 [dependencies]
 libc = "0.2"
 
