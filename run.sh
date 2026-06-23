@@ -195,6 +195,47 @@ play_level() {
     fi
 }
 
+# Navigate the imported-levels tree (imported/lvl/<game>/<world>/*.lvl) and play
+# one. Directories descend; *.lvl files launch `scamp play`.
+import_browser() {
+    local root="imported/lvl"
+    if [[ ! -d "$root" ]]; then
+        printf '\033[2J\033[H\n  no imported levels at ./%s\n  import some first, e.g.:\n    scamp import <in.tscn> %s/demo.lvl\n\n  press a key…' "$root" "$root"
+        IFS= read -rsn1
+        return
+    fi
+    local cur="$root"
+    while true; do
+        local items=() targets=() kinds=() d f rel
+        if [[ "$cur" != "$root" ]]; then
+            items+=(".. (up)"); targets+=(""); kinds+=("up")
+        fi
+        for d in "$cur"/*/; do
+            [[ -d "$d" ]] || continue
+            items+=("$(basename "$d")/"); targets+=("${d%/}"); kinds+=("dir")
+        done
+        for f in "$cur"/*.lvl; do
+            [[ -e "$f" ]] || continue
+            items+=("$(basename "$f")"); targets+=("$f"); kinds+=("file")
+        done
+        if [[ ${#items[@]} -eq 0 ]]; then
+            items+=("(empty)"); targets+=(""); kinds+=("none")
+        fi
+        rel="${cur#"$root"}"; [[ -z "$rel" ]] && rel="/"
+        menu "imported levels  $rel" "${items[@]}" "back"
+        local sel=$MENU_SEL
+        if [[ $sel -lt 0 || $sel -ge ${#items[@]} ]]; then
+            return
+        fi
+        case "${kinds[$sel]}" in
+            up) cur="$(dirname "$cur")" ;;
+            dir) cur="${targets[$sel]}" ;;
+            file) "target/$profile_dir/scamp" play "${targets[$sel]}" ;;
+            *) ;;
+        esac
+    done
+}
+
 debug_menu() {
     while true; do
         menu "SCAMPER \xc2\xb7 debug tools" \
@@ -217,6 +258,7 @@ interactive_menu() {
         menu "SCAMPER  (munchii)" \
             "play the game  (sandbox arena)" \
             "play a level  (campaign)" \
+            "browse imported levels" \
             "record a run" \
             "replay a run" \
             "sprite viewer  (Tab cycles backends)" \
@@ -226,11 +268,12 @@ interactive_menu() {
         case "$MENU_SEL" in
             0) run_game ;;
             1) play_level ;;
-            2) record_run ;;
-            3) replay_browser ;;
-            4) "target/$profile_dir/sprite-lab" ;;
-            5) "target/$profile_dir/tile-lab" ;;
-            6) debug_menu ;;
+            2) import_browser ;;
+            3) record_run ;;
+            4) replay_browser ;;
+            5) "target/$profile_dir/sprite-lab" ;;
+            6) "target/$profile_dir/tile-lab" ;;
+            7) debug_menu ;;
             *) break ;;
         esac
     done
