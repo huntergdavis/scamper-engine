@@ -1,9 +1,51 @@
 # Plan: Munchii's Campaign — tile levels, a bestiary, and power-ups
 
-> Status: **importer phase underway.** The level pipeline (importer + Level IR +
-> an authored original level) is greenlit and building; the rest of the campaign
-> (entities, power-ups, boss, camera/runtime) remains planning-only pending
-> red-team passes. Drafted 2026-06-22.
+> Status: **runtime spine playable.** Importer, Level IR, semantic tile art (all
+> backends), and a playable runtime (camera / collision / hazard / goal / warp)
+> are in. Munchii renders in-level. Bestiary + power-ups + compact sprite are next.
+> Drafted 2026-06-22; updated 2026-06-23.
+
+## Progress log (what's done)
+
+- **Importer** (`src/level/import.rs`): `.tscn` → Level IR. Full scene classifier
+  (145 source types → 0 unmapped), semantic tile kinds from the atlas legend
+  (`atlas_kind`). Validated locally over all 305 levels (gitignored).
+- **Level IR** (`src/level/ir.rs`): line-oriented `*.lvl`, round-trip + ascii
+  preview. Authored level shipped: `levels/yard-romp-1.lvl`.
+- **Tile art** (`src/level/art.rs`): a distinct 16×16 pattern per `TileKind`
+  feeding all four tiers, 5 theme palettes, mono-distinctness enforced by test
+  across every theme.
+- **Viewers**: `scamp tiles` (grid) and the `tile-lab` binary (stepper, like
+  sprite-lab); both in the `run.sh -i` menu.
+- **Runtime** (`src/level/world.rs` + `run_play` in `main.rs`): `LevelWorld`
+  projects IR → solid `TileMap` + hazard/goal/warp/kind data; clamped side-scroll
+  `camera`; `scamp play <level>` does collision, hazard/pit respawn, goal =
+  LEVEL COMPLETE, pipe warps (`<id>@tx,ty`). Munchii renders via the sprite/pose
+  system (overhangs the 1-tile hitbox — see next steps).
+- **Menus**: play campaign (`levels/` picker), **browse imported levels**
+  (navigates `imported/lvl/<game>/<world>` tree), record/replay, sprite/tile labs.
+
+## Next steps (pick up here)
+
+1. **Compact Munchii sprite (DECISION PENDING).** Big Munchii overhangs the
+   1-tile hitbox badly in-level. Options: (a) author a compact ~1–2 tile beagle
+   sprite for platforming (recommended), or (b) keep big Munchii + zoom the camera.
+   Owner chose to evaluate by playtest first — revisit after running it.
+2. **Jump/feel tuning against real geometry** — assert standard 4-tile gap / 4-high
+   clearance with the default `FeelParams`; tune if needed (CAMPAIGN_PLAN §5).
+3. **Sprite registry + first creatures** — generalize `munchii.rs` into a
+   per-creature registry (glyph frames + palette), preview in a lab; author the
+   first few (`boneling`, `rollo`, `kibble`, `big_kibble`) before mass-producing.
+4. **Entities in the runtime** — render + step creatures/items (currently the IR
+   carries them but `run_play` ignores them); collisions (pounce, collect).
+5. **Breakable blocks behavior** — IR already marks `brick breakable=1` +
+   `question contains=…`; wire bonk-from-below / smash-while-big in `run_play`.
+6. **Red-team the runtime** — `run_play` itself hasn't had a review/playtest pass
+   (only `LevelWorld`/`camera` are unit-tested). One-way platforms are solid for
+   now; warp targets only exist on authored levels (imported pipes have none).
+
+> Build/run: `./run.sh` → menu. Headless tests: `cargo test`. Imported levels are
+> local-only (gitignored); re-import on a new machine with `scamp import`.
 
 ## Decisions (locked)
 
