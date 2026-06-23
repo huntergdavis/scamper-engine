@@ -218,12 +218,14 @@ pub fn import_tscn(text: &str, id: &str, theme: &str) -> io::Result<Imported> {
 ///   - sources 4,5 = conveyor belts → solid, moving → platform.
 ///   - sources 3,6 = deco / edge-connection visuals → non-solid deco.
 /// Only applied to terrain layers; the deco layer is forced to `Deco` by name.
-fn atlas_kind(source_id: u16, _atlas_x: u16, atlas_y: u16) -> TileKind {
+fn atlas_kind(source_id: u16, atlas_x: u16, atlas_y: u16) -> TileKind {
     match source_id {
         2 => TileKind::Hazard,
         4 | 5 => TileKind::Platform,
         3 | 6 => TileKind::Deco,
-        0 if atlas_y == 5 => TileKind::Platform, // one-way semisolid row
+        // The terrain atlas's one-way semisolids are exactly row 5, cols 0..=5;
+        // other row-5 tiles are ordinary solid terrain.
+        0 if atlas_y == 5 && atlas_x <= 5 => TileKind::Platform,
         _ => TileKind::Ground, // terrain + embedded solid blocks
     }
 }
@@ -623,7 +625,8 @@ mod tests {
     #[test]
     fn atlas_kind_maps_sources_to_semantics() {
         assert_eq!(atlas_kind(0, 3, 0), TileKind::Ground); // terrain
-        assert_eq!(atlas_kind(0, 2, 5), TileKind::Platform); // one-way semisolid row
+        assert_eq!(atlas_kind(0, 2, 5), TileKind::Platform); // one-way semisolid (cols 0..=5)
+        assert_eq!(atlas_kind(0, 9, 5), TileKind::Ground); // row 5 beyond the one-way cols = solid
         assert_eq!(atlas_kind(1, 0, 0), TileKind::Ground); // embedded solid block
         assert_eq!(atlas_kind(2, 0, 2), TileKind::Hazard); // liquids
         assert_eq!(atlas_kind(4, 0, 0), TileKind::Platform); // conveyor

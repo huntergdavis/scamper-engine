@@ -240,16 +240,18 @@ pub fn draw_tile(fb: &mut Framebuffer, ox: i32, oy: i32, kind: TileKind, p: &Pal
             fb.fill_rect(ox, oy + 4, TILE, 1, shade(p.platform, 1, 2));
         }
         TileKind::Hazard => {
+            // A bright liquid crest over a dark pool: a strong top-bright /
+            // bottom-dark signature, distinct from brick's uniform body in mono.
             fb.fill_rect(ox, oy, TILE, TILE, p.hazard_a);
-            // a crested wave along the top (alternating heights)
             let mut x = 0;
             while x < TILE {
-                let dy = if (x / 4) % 2 == 0 { 0 } else { 2 };
-                fb.fill_rect(ox + x, oy + dy, 4, 3, p.hazard_b);
+                let h = if (x / 4) % 2 == 0 { 7 } else { 5 }; // wavy underside
+                fb.fill_rect(ox + x, oy, 4, h, p.hazard_b);
                 x += 4;
             }
-            fb.fill_rect(ox + 3, oy + 10, 2, 2, p.hazard_b); // bubbles
-            fb.fill_rect(ox + 10, oy + 12, 2, 2, p.hazard_b);
+            // faint ripples low — keep the bottom row dark
+            fb.fill_rect(ox + 2, oy + 11, 3, 1, light(p.hazard_a, 1, 3));
+            fb.fill_rect(ox + 9, oy + 13, 3, 1, light(p.hazard_a, 1, 3));
         }
         TileKind::Deco => {
             // sparse faint tufts on empty space
@@ -284,7 +286,10 @@ mod tests {
 
     /// The 4×2 cell-luma signature of a tile — what the mono/ascii ramp samples.
     fn signature(kind: TileKind) -> [u8; 8] {
-        let p = palette(Theme::Overworld);
+        signature_in(kind, Theme::Overworld)
+    }
+    fn signature_in(kind: TileKind, theme: Theme) -> [u8; 8] {
+        let p = palette(theme);
         let mut fb = Framebuffer::new(TILE as usize, TILE as usize);
         fb.clear(p.sky);
         draw_tile(&mut fb, 0, 0, kind, &p);
@@ -308,17 +313,20 @@ mod tests {
 
     #[test]
     fn every_kind_has_a_distinct_mono_signature() {
-        // The headline requirement: distinct even in black & white. Quantize each
-        // kind's cell-luma signature and assert all nine are mutually distinct.
+        // The headline requirement: distinct even in black & white, in EVERY theme.
+        // Quantize each kind's cell-luma signature and assert all nine are mutually
+        // distinct per theme.
         let quant = |s: [u8; 8]| s.map(|v| v / 24); // coarse, ramp-like buckets
-        let sigs: Vec<[u8; 8]> = KINDS.iter().map(|&k| quant(signature(k))).collect();
-        for i in 0..sigs.len() {
-            for j in (i + 1)..sigs.len() {
-                assert_ne!(
-                    sigs[i], sigs[j],
-                    "tiles {:?} and {:?} look identical in mono",
-                    KINDS[i], KINDS[j]
-                );
+        for theme in Theme::ALL {
+            let sigs: Vec<[u8; 8]> = KINDS.iter().map(|&k| quant(signature_in(k, theme))).collect();
+            for i in 0..sigs.len() {
+                for j in (i + 1)..sigs.len() {
+                    assert_ne!(
+                        sigs[i], sigs[j],
+                        "tiles {:?} and {:?} look identical in mono ({} theme)",
+                        KINDS[i], KINDS[j], theme.name()
+                    );
+                }
             }
         }
     }
