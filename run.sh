@@ -169,6 +169,32 @@ replay_browser() {
     done
 }
 
+# Pick and play an authored campaign level from ./levels (imported levels stay
+# out of the tree; point `scamp play <file>` at them directly to test those).
+play_level() {
+    local dir="levels" f names
+    names=()
+    if [[ -d "$dir" ]]; then
+        for f in "$dir"/*.lvl; do
+            [[ -e "$f" ]] || continue
+            names+=("$(basename "$f" .lvl)")
+        done
+    fi
+    if [[ ${#names[@]} -eq 0 ]]; then
+        printf '\033[2J\033[H\n  no levels in ./%s — author one (*.lvl) first.\n\n  press a key…' "$dir"
+        IFS= read -rsn1
+        return
+    fi
+    if [[ ${#names[@]} -eq 1 ]]; then
+        "target/$profile_dir/scamp" play "$dir/${names[0]}.lvl"
+        return
+    fi
+    menu "SCAMPER \xc2\xb7 play a level" "${names[@]}" "back"
+    if [[ $MENU_SEL -ge 0 && $MENU_SEL -lt ${#names[@]} ]]; then
+        "target/$profile_dir/scamp" play "$dir/${names[$MENU_SEL]}.lvl"
+    fi
+}
+
 debug_menu() {
     while true; do
         menu "SCAMPER \xc2\xb7 debug tools" \
@@ -189,7 +215,8 @@ interactive_menu() {
     cargo build "${profile_args[@]}"
     while true; do
         menu "SCAMPER  (munchii)" \
-            "play the game" \
+            "play the game  (sandbox arena)" \
+            "play a level  (campaign)" \
             "record a run" \
             "replay a run" \
             "sprite viewer  (Tab cycles backends)" \
@@ -198,11 +225,12 @@ interactive_menu() {
             "quit"
         case "$MENU_SEL" in
             0) run_game ;;
-            1) record_run ;;
-            2) replay_browser ;;
-            3) "target/$profile_dir/sprite-lab" ;;
-            4) "target/$profile_dir/tile-lab" ;;
-            5) debug_menu ;;
+            1) play_level ;;
+            2) record_run ;;
+            3) replay_browser ;;
+            4) "target/$profile_dir/sprite-lab" ;;
+            5) "target/$profile_dir/tile-lab" ;;
+            6) debug_menu ;;
             *) break ;;
         esac
     done
