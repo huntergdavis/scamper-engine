@@ -30,6 +30,15 @@
   system (overhangs the 1-tile hitbox — see next steps).
 - **Menus**: play campaign (`games/supermunchii/levels/` picker), **browse imported levels**
   (navigates `imported/lvl/<game>/<world>` tree), record/replay, sprite/tile labs.
+- **Importer: scene inheritance + theme inference (2026-06-24).** The importer now
+  resolves Godot inherited scenes (`instance=ExtResource(base)`) by loading the base
+  and overlaying derived nodes, and infers the level theme from the scene's
+  `theme="…"` (mapping Godot's 16 themes → our 5), with a name-based fallback;
+  `--theme` is now an optional override. All **306** source levels import (0 failures).
+- **Play polish (2026-06-24).** Fixed tile flicker on the character tiers (snap the
+  camera to whole cells on non-pixel-exact backends — `Backend::pixel_exact`); added
+  auto-advance to the next sibling level on completion (debugging aid). Crash
+  debugging: panics now log message + backtrace to `scamp.log` (`dbg::install_panic_logger`).
 
 ## Next steps (pick up here)
 
@@ -388,8 +397,10 @@ Every milestone is guarded by the capture/replay golden snapshots we just built:
   themes? Recommend **one world, all the way through**, then widen.
 
 ## 12. Red-team backlog (seed)
-- Confirm the Godot `tile_map_data` byte layout & TileSet decode before trusting
-  imports; add a round-trip test (import → IR → render → compare to a screenshot).
+- ~~Confirm the Godot `tile_map_data` byte layout & TileSet decode.~~ **Done** —
+  byte layout verified (see Decisions); validated over all 306 levels.
+  ~~Scene inheritance~~ **resolved** (importer loads bases + overlays derived nodes).
+  Still open: a round-trip test (import → IR → render → compare to a screenshot).
 - Determinism of entity AI (tick-only, seeded RNG in the capture).
 - Camera + variable hitbox interactions with the existing wall/ground probes.
 - Performance: culling for ~200-tile levels across all four tiers (the kitty tier
