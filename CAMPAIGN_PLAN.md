@@ -47,6 +47,15 @@
   (imported Player-node Y lands on the ground surface → was starting embedded /
   unplayable). Added `supermunchii soak [dir]` + walkthrough tests (hold right + jump,
   all four backends): **all 306 imported levels pass with 0 crashes.**
+- **Entities + creatures + collisions — items 4–5 (2026-06-24).** Engine primitive
+  `engine/src/mob.rs`: a deterministic tile-colliding walker (`Wander`/`Careful`/`Still`
+  gaits) + `aabb_overlap`/`stomp` helpers — knows how a box moves, not what it means.
+  Game (`supermunchii`): builds live `Actor`s from IR entities with game-chosen gaits,
+  steps them each tick, and resolves pounce (creature pops + bounce), collect (kibble),
+  and side-hit (respawn + ~1.5s invuln); kibble shown in the status line. Engine/game
+  split per the "primitives vs execution" rule. **Still TODO:** power-state machine
+  (small→big→bubble), projectiles (Sudsball), air/water/thrower creatures (item 6),
+  hazards + boss (item 7), and sprite-lab wiring to preview the registry.
 
 ## Next steps (pick up here)
 
