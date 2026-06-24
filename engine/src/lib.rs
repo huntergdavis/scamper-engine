@@ -13,6 +13,7 @@ pub mod math;
 pub mod munchii;
 pub mod player;
 pub mod png;
+pub mod sprite;
 pub mod sim;
 pub mod terminal;
 pub mod time;
