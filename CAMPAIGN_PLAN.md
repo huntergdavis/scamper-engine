@@ -53,9 +53,26 @@
   Game (`supermunchii`): builds live `Actor`s from IR entities with game-chosen gaits,
   steps them each tick, and resolves pounce (creature pops + bounce), collect (kibble),
   and side-hit (respawn + ~1.5s invuln); kibble shown in the status line. Engine/game
-  split per the "primitives vs execution" rule. **Still TODO:** power-state machine
-  (small→big→bubble), projectiles (Sudsball), air/water/thrower creatures (item 6),
-  hazards + boss (item 7), and sprite-lab wiring to preview the registry.
+  split per the "primitives vs execution" rule.
+- **Power, projectiles, boss — items 6–7 + power-state (2026-06-24).**
+  - Power-state machine (§8): small→big→bubble as *gear*; Big Kibble grows you,
+    Bubble Bone gears up; a hit drops a tier (only a small-hit is a wipeout);
+    shown in the status line.
+  - Air/water creatures cruise on the new engine `Gait::Fly`; in bubble gear,
+    pressing **C** lobs a **Sudsball** (an engine `Mob` the game flies forward,
+    expiring on a wall / lifetime, popping any creature it touches). New `sudsball`
+    sprite. *(Enemy throwers — stick-squirrel tossing — still walk; deferred.)*
+  - **Baron Whiskers** boss: a big Mob that paces the castle ledge, un-pounceable;
+    **pull the bath plug** (reach the `bath_plug` entity) to complete the level.
+    Hazard tiles already respawn on contact. New `baron_whiskers` + `bath_plug` sprites.
+  - **sprite-lab** now previews the whole registry (`s` cycles all creatures), each
+    in its own palette across all four backends.
+  - All 306 imported levels still pass the hold-right + jump soak with every system live.
+
+> **Plan status:** milestones 1–9 are substantially in. Remaining polish/TODOs:
+> enemy-thrower AI, dandi/piranha rise-from-pipe, one-way platforms, compact-Munchii
+> sprite + jump-feel asserts (§5), hi-fi per-creature Kitty art, and a campaign
+> world-map / lives / BGM flow (§10.9).
 
 ## Next steps (pick up here)
 
