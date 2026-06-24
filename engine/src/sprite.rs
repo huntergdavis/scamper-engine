@@ -48,6 +48,7 @@ pub const ALL: &[Sprite] = &[
     Sprite { id: "rollo", role: Role::Creature, w: 6, h: 2, anims: ROLLO, palette: rollo_rgb },
     Sprite { id: "kibble", role: Role::Item, w: 4, h: 2, anims: KIBBLE, palette: kibble_rgb },
     Sprite { id: "big_kibble", role: Role::Item, w: 6, h: 3, anims: BIG_KIBBLE, palette: kibble_rgb },
+    Sprite { id: "sudsball", role: Role::Item, w: 3, h: 1, anims: SUDSBALL, palette: suds_rgb },
 ];
 
 /// Look up a sprite by id (the IR entity `kind`), if registered.
@@ -78,6 +79,14 @@ fn kibble_rgb(ch: char) -> (u8, u8, u8) {
     match ch {
         '.' | '*' => (244, 224, 150), // sparkle / sheen
         _ => (150, 96, 52),           // kibble
+    }
+}
+
+/// Sudsball: a pale soap-bubble projectile, bright rim.
+fn suds_rgb(ch: char) -> (u8, u8, u8) {
+    match ch {
+        'O' => (235, 245, 255), // highlight
+        _ => (190, 220, 245),   // bubble
     }
 }
 
@@ -122,6 +131,10 @@ const BIG_KIBBLE_IDLE: &[&[&str]] = &[
     &[" _.._ ", "(####)", "(####)"],
 ];
 const BIG_KIBBLE: &[Anim] = &[Anim { name: "idle", fps: 3, frames: BIG_KIBBLE_IDLE }];
+
+// Sudsball — a little soap bubble Munchii lobs in his bubble gear.
+const SUDSBALL_IDLE: &[&[&str]] = &[&["(o)"], &["(O)"]];
+const SUDSBALL: &[Anim] = &[Anim { name: "fly", fps: 10, frames: SUDSBALL_IDLE }];
 
 #[cfg(test)]
 mod tests {

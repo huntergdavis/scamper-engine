@@ -6,7 +6,7 @@ use scamper::backend::{AsciiBackend, Backend, KittyBackend, MonoBackend, Overlay
 use scamper::capture::{self, InputFrame, Recording, Snapshots};
 use scamper::munchii;
 use scamper::framebuffer::{Framebuffer, Rgba};
-use scamper::input::{Input, K_DOWN, K_ESC, K_HELP, K_N, K_Q, K_S, K_T, K_TAB, K_Y};
+use scamper::input::{Input, K_C, K_DOWN, K_ESC, K_HELP, K_N, K_Q, K_S, K_T, K_TAB, K_Y};
 use scamper::level::art::{self, Theme};
 use scamper::level::ir::Level;
 use scamper::level::world::{camera, LevelWorld};
@@ -377,6 +377,8 @@ fn run_play(path: &str) {
     let mut world = LevelWorld::from_level(&level);
     let mut sim = sim_at(world.spawn);
     let mut actors = build_actors(&world);
+    let mut projectiles: Vec<Mob> = Vec::new();
+    let mut fire_cd: u32 = 0; // throw cooldown (frames)
     let mut kibble: u32 = 0;
     let mut power = Power::Small;
     let mut invuln: u32 = 0; // ticks of post-hit invulnerability
@@ -423,6 +425,18 @@ fn run_play(path: &str) {
             full_redraw = true;
         }
 
+        // Throw a Sudsball (bubble gear only) — a non-violent bonk that pops critters.
+        if fire_cd > 0 {
+            fire_cd -= 1;
+        }
+        if input.pressed(K_C) && power == Power::Bubble && fire_cd == 0 {
+            let dir = if sim.player.facing >= 0 { 1i8 } else { -1i8 };
+            let px = sim.player.pos.x + sim.player.w / 2.0;
+            let py = sim.player.pos.y + sim.player.h * 0.4;
+            projectiles.push(Mob::new(px, py, 4.0, 4.0, dir, 3.0, Gait::Fly));
+            fire_cd = 15;
+        }
+
         // --- advance physics (fixed timestep) unless the level is finished ---
         let now = now_ns();
         let mut elapsed = now - prev_t;
@@ -446,6 +460,7 @@ fn run_play(path: &str) {
                 sim.step(&world.map, inp);
                 // Step creatures/items and resolve pounces, pickups, and hits.
                 let hurt = step_actors(&mut actors, &world.map, &mut sim.player, &mut kibble, &mut power);
+                step_projectiles(&mut projectiles, &mut actors, &world.map, &mut kibble);
                 if invuln > 0 {
                     invuln -= 1;
                 } else if hurt {
@@ -485,6 +500,7 @@ fn run_play(path: &str) {
                 world = LevelWorld::from_level(&level);
                 sim = sim_at(world.spawn);
                 actors = build_actors(&world);
+                projectiles.clear();
                 power = Power::Small;
                 won = false;
                 full_redraw = true;
@@ -499,6 +515,7 @@ fn run_play(path: &str) {
                     world = LevelWorld::from_level(&level);
                     sim = sim_at(spawn);
                     actors = build_actors(&world);
+                    projectiles.clear();
                     power = Power::Small;
                     full_redraw = true;
                 }
@@ -506,7 +523,7 @@ fn run_play(path: &str) {
         }
 
         // --- render the camera window (shared with the headless soak harness) ---
-        draw_play_frame(&mut fb, backend.as_mut(), &mut out, &world, &sim, &actors, fb_w, fb_h, cols, rows, full_redraw, input.down_held());
+        draw_play_frame(&mut fb, backend.as_mut(), &mut out, &world, &sim, &actors, &projectiles, fb_w, fb_h, cols, rows, full_redraw, input.down_held());
         full_redraw = false;
         render_play_status(&mut status, &level, sim.player.state, backend.name(), won, kibble, power, rows + 1, cols);
         {
@@ -568,8 +585,26 @@ fn is_item(kind: &str) -> bool {
     matches!(kind, "kibble" | "big_kibble" | "bubble_bone" | "zoomies_treat" | "lucky_squeaky" | "flutter_collar")
 }
 
-/// Build the live actor list from a world's entities. The gait/size choices are
-/// game design: `_sun` (red) variants stay on ledges; the rest wander off them.
+/// Air & water creatures cruise on the `Fly` gait (no gravity, bob along a line).
+fn is_flyer(kind: &str) -> bool {
+    matches!(kind, "flutterbug" | "zoomdisc" | "sudsfish" | "sudsfish_sun" | "puffer" | "pop" | "drip")
+}
+
+/// Game design: pick a gait/size for an entity kind. `_sun` (red) ground variants
+/// stay on ledges; air/water kinds fly; the rest wander.
+fn gait_for(kind: &str, item: bool) -> (Gait, f64, f64, f64) {
+    if item {
+        (Gait::Still, 0.0, 12.0, 12.0)
+    } else if is_flyer(kind) {
+        (Gait::Fly, 0.7, 12.0, 12.0)
+    } else if kind.ends_with("_sun") {
+        (Gait::Careful, 0.45, 12.0, 14.0)
+    } else {
+        (Gait::Wander, 0.45, 12.0, 14.0)
+    }
+}
+
+/// Build the live actor list from a world's entities.
 fn build_actors(world: &LevelWorld) -> Vec<Actor> {
     world
         .ents
@@ -577,16 +612,31 @@ fn build_actors(world: &LevelWorld) -> Vec<Actor> {
         .filter(|e| scamper::sprite::get(&e.kind).is_some())
         .map(|e| {
             let item = is_item(&e.kind);
-            let (gait, speed, w, h) = if item {
-                (Gait::Still, 0.0, 12.0, 12.0)
-            } else if e.kind.ends_with("_sun") {
-                (Gait::Careful, 0.45, 12.0, 14.0)
-            } else {
-                (Gait::Wander, 0.45, 12.0, 14.0)
-            };
+            let (gait, speed, w, h) = gait_for(&e.kind, item);
             Actor { mob: Mob::new(e.cx as f64 * TILE, e.cy as f64 * TILE, w, h, -1, speed, gait), kind: e.kind.clone(), item }
         })
         .collect()
+}
+
+/// Step Sudsball projectiles: fly, expire on a wall or after their lifetime, and
+/// pop any creature they touch (into a treat). Dead projectiles are reaped.
+fn step_projectiles(projectiles: &mut Vec<Mob>, actors: &mut [Actor], map: &TileMap, kibble: &mut u32) {
+    for p in projectiles.iter_mut() {
+        p.step(map);
+        if p.blocked || p.age > 90 {
+            p.alive = false;
+            continue;
+        }
+        for a in actors.iter_mut() {
+            if a.mob.alive && !a.item && aabb_overlap(p.pos.x, p.pos.y, p.w, p.h, a.mob.pos.x, a.mob.pos.y, a.mob.w, a.mob.h) {
+                a.mob.alive = false;
+                *kibble += 2;
+                p.alive = false;
+                break;
+            }
+        }
+    }
+    projectiles.retain(|p| p.alive);
 }
 
 /// Upward velocity (px/s) from a successful pounce — a little hop (~0.6× a jump).
@@ -639,6 +689,7 @@ fn draw_play_frame(
     world: &LevelWorld,
     sim: &Sim,
     actors: &[Actor],
+    projectiles: &[Mob],
     fb_w: usize,
     fb_h: usize,
     cols: u16,
@@ -712,6 +763,21 @@ fn draw_play_frame(
         let elx = (exw - cam_x) - emw / 2.0;
         let ely = ((a.mob.pos.y + a.mob.h) - cam_y) - emh; // feet at the mob's bottom
         sprites.push((elines, elx, ely, sp.palette));
+    }
+
+    // Sudsball projectiles.
+    if let Some(sp) = scamper::sprite::get("sudsball") {
+        let an = sp.anim("fly");
+        let n = an.frames.len().max(1);
+        let fi = (sim.clock() / (NS_PER_SEC / an.fps.max(1) as u64)) as usize % n;
+        for p in projectiles {
+            let pl: Vec<String> = an.frames[fi].iter().map(|s| s.to_string()).collect();
+            let pfw = pl.iter().map(|l| l.chars().count()).max().unwrap_or(1) as f64;
+            let (pmw, pmh) = (pfw * cpw, pl.len() as f64 * cph);
+            let plx = (p.pos.x + p.w / 2.0 - cam_x) - pmw / 2.0;
+            let ply = (p.pos.y + p.h / 2.0 - cam_y) - pmh / 2.0;
+            sprites.push((pl, plx, ply, sp.palette));
+        }
     }
 
     // Munchii himself, centered on the hitbox with his feet on its bottom edge.
@@ -832,7 +898,7 @@ fn soak_level(path: &str, ticks: u64) -> Result<(), String> {
         }
         if tick % 15 == 0 {
             for b in backends.iter_mut() {
-                draw_play_frame(&mut fb, b.as_mut(), &mut out, &world, &sim, &actors, fb_w, fb_h, cols, rows, true, false);
+                draw_play_frame(&mut fb, b.as_mut(), &mut out, &world, &sim, &actors, &[], fb_w, fb_h, cols, rows, true, false);
             }
         }
     }
