@@ -86,6 +86,7 @@ fn main() {
         Some("level-info") => run_level_info(&args),
         Some("tiles") => run_tiles(),
         Some("play") => run_play(nth_nonflag(&args, 1).unwrap_or("levels/yard-romp-1.lvl")),
+        Some("soak") => run_soak(nth_nonflag(&args, 1).unwrap_or("imported/lvl")),
         _ => run_live(None),
     }
 }
@@ -482,74 +483,8 @@ fn run_play(path: &str) {
             }
         }
 
-        // --- render the camera window ---
-        let pal = art::palette(world.theme);
-        let pcx = sim.player.pos.x + sim.player.w / 2.0;
-        let pcy = sim.player.pos.y + sim.player.h / 2.0;
-        let (cam_x, cam_y) = camera(pcx, pcy, fb_w as f64, fb_h as f64, world.px_w(), world.px_h());
-        let cpw = fb_w as f64 / cols.max(1) as f64; // px per terminal cell (w)
-        let cph = fb_h as f64 / rows.max(1) as f64; // px per terminal cell (h)
-        // Snap the camera so tiles always land on the same sample sub-grid. Pixel
-        // backends (Kitty) scroll per-pixel; cell-sampling backends must snap to a
-        // whole cell or static tiles flicker as you move (see Backend::pixel_exact).
-        let (cam_x, cam_y) = if backend.pixel_exact() {
-            (cam_x.floor(), cam_y.floor())
-        } else {
-            ((cam_x / cpw).floor() * cpw, (cam_y / cph).floor() * cph)
-        };
-
-        fb.clear(pal.sky);
-        let t = TILE as i32;
-        let tx0 = (cam_x / TILE).floor() as i32;
-        let tx1 = ((cam_x + fb_w as f64) / TILE).ceil() as i32;
-        let ty0 = (cam_y / TILE).floor() as i32;
-        let ty1 = ((cam_y + fb_h as f64) / TILE).ceil() as i32;
-        for ty in ty0..ty1 {
-            for tx in tx0..tx1 {
-                if let Some(kind) = world.kind_at(tx, ty) {
-                    art::draw_tile(&mut fb, tx * t - cam_x as i32, ty * t - cam_y as i32, kind, &pal);
-                }
-            }
-        }
-        // goal post
-        if let Some((gx, gy)) = world.goal {
-            let sx = (gx - cam_x) as i32;
-            fb.fill_rect(sx, 0, 2, fb_h as i32, Rgba::rgb(235, 235, 245));
-            fb.fill_rect(sx - 7, (gy - cam_y) as i32, 7, 5, Rgba::rgb(232, 84, 84));
-        }
-        // --- Munchii himself (not a box): the sprite at his natural cell size,
-        // centered on the hitbox with his feet on its bottom edge. He's a wide,
-        // low beagle, so he overhangs the ~1-tile collision box — that's fine.
-        let anim = munchii::anim(pose_for(&sim.player, input.down_held()));
-        let n = anim.frames.len().max(1);
-        let fi = (sim.clock() / (NS_PER_SEC / anim.fps.max(1) as u64)) as usize % n;
-        let face_left = if sim.player.state == State::WallSliding {
-            sim.player.facing > 0
-        } else {
-            sim.player.facing < 0
-        };
-        let lines: Vec<String> = if face_left {
-            anim.frames[fi].iter().map(|l| flip_line(l)).collect()
-        } else {
-            anim.frames[fi].iter().map(|s| s.to_string()).collect()
-        };
-        let fw = lines.iter().map(|l| l.chars().count()).max().unwrap_or(1) as f64;
-        let (mw, mh) = (fw * cpw, lines.len() as f64 * cph); // sprite footprint, px
-        let cx = (sim.player.pos.x - cam_x) + sim.player.w / 2.0;
-        let bottom = (sim.player.pos.y - cam_y) + sim.player.h;
-        let (lx, ly) = (cx - mw / 2.0, bottom - mh);
-
-        if backend.draws_overlay() {
-            // character tiers: stamp Munchii's glyphs (one per cell) over the tiles
-            let col = (lx / cpw).round() as i32;
-            let row = (ly / cph).round() as i32;
-            let ov = [Overlay { lines: &lines, col, row, tint: None, z: 0 }];
-            backend.present(&mut out, &fb, cols, rows, full_redraw, &ov);
-        } else {
-            // pixel tiers: rasterize him into the framebuffer in his beagle colors
-            draw_sprite_pixels(&mut fb, &lines, lx, ly, cpw, cph);
-            backend.present(&mut out, &fb, cols, rows, full_redraw, &[]);
-        }
+        // --- render the camera window (shared with the headless soak harness) ---
+        draw_play_frame(&mut fb, backend.as_mut(), &mut out, &world, &sim, fb_w, fb_h, cols, rows, full_redraw, input.down_held());
         full_redraw = false;
         render_play_status(&mut status, &level, sim.player.state, backend.name(), won, rows + 1, cols);
         {
@@ -568,6 +503,167 @@ fn run_play(path: &str) {
     }
     drop(guard);
     eprintln!("scamp: play done.");
+}
+
+/// Draw one play frame — the camera window of tiles, the goal post, and Munchii —
+/// and present it through `backend` into `out`. Shared by `run_play` and the
+/// headless `soak` crash-hunt so both exercise the identical render path.
+#[allow(clippy::too_many_arguments)]
+fn draw_play_frame(
+    fb: &mut Framebuffer,
+    backend: &mut dyn Backend,
+    out: &mut Vec<u8>,
+    world: &LevelWorld,
+    sim: &Sim,
+    fb_w: usize,
+    fb_h: usize,
+    cols: u16,
+    rows: u16,
+    full_redraw: bool,
+    down_held: bool,
+) {
+    let pal = art::palette(world.theme);
+    let pcx = sim.player.pos.x + sim.player.w / 2.0;
+    let pcy = sim.player.pos.y + sim.player.h / 2.0;
+    let (cam_x, cam_y) = camera(pcx, pcy, fb_w as f64, fb_h as f64, world.px_w(), world.px_h());
+    let cpw = fb_w as f64 / cols.max(1) as f64; // px per terminal cell (w)
+    let cph = fb_h as f64 / rows.max(1) as f64; // px per terminal cell (h)
+    // Snap the camera so tiles always land on the same sample sub-grid. Pixel
+    // backends (Kitty) scroll per-pixel; cell-sampling backends must snap to a
+    // whole cell or static tiles flicker as you move (see Backend::pixel_exact).
+    let (cam_x, cam_y) = if backend.pixel_exact() {
+        (cam_x.floor(), cam_y.floor())
+    } else {
+        ((cam_x / cpw).floor() * cpw, (cam_y / cph).floor() * cph)
+    };
+
+    fb.clear(pal.sky);
+    let t = TILE as i32;
+    let tx0 = (cam_x / TILE).floor() as i32;
+    let tx1 = ((cam_x + fb_w as f64) / TILE).ceil() as i32;
+    let ty0 = (cam_y / TILE).floor() as i32;
+    let ty1 = ((cam_y + fb_h as f64) / TILE).ceil() as i32;
+    for ty in ty0..ty1 {
+        for tx in tx0..tx1 {
+            if let Some(kind) = world.kind_at(tx, ty) {
+                art::draw_tile(fb, tx * t - cam_x as i32, ty * t - cam_y as i32, kind, &pal);
+            }
+        }
+    }
+    // goal post
+    if let Some((gx, gy)) = world.goal {
+        let sx = (gx - cam_x) as i32;
+        fb.fill_rect(sx, 0, 2, fb_h as i32, Rgba::rgb(235, 235, 245));
+        fb.fill_rect(sx - 7, (gy - cam_y) as i32, 7, 5, Rgba::rgb(232, 84, 84));
+    }
+    // Munchii himself, centered on the hitbox with his feet on its bottom edge.
+    let anim = munchii::anim(pose_for(&sim.player, down_held));
+    let n = anim.frames.len().max(1);
+    let fi = (sim.clock() / (NS_PER_SEC / anim.fps.max(1) as u64)) as usize % n;
+    let face_left = if sim.player.state == State::WallSliding {
+        sim.player.facing > 0
+    } else {
+        sim.player.facing < 0
+    };
+    let lines: Vec<String> = if face_left {
+        anim.frames[fi].iter().map(|l| flip_line(l)).collect()
+    } else {
+        anim.frames[fi].iter().map(|s| s.to_string()).collect()
+    };
+    let fw = lines.iter().map(|l| l.chars().count()).max().unwrap_or(1) as f64;
+    let (mw, mh) = (fw * cpw, lines.len() as f64 * cph); // sprite footprint, px
+    let cx = (sim.player.pos.x - cam_x) + sim.player.w / 2.0;
+    let bottom = (sim.player.pos.y - cam_y) + sim.player.h;
+    let (lx, ly) = (cx - mw / 2.0, bottom - mh);
+
+    if backend.draws_overlay() {
+        // character tiers: stamp Munchii's glyphs (one per cell) over the tiles
+        let col = (lx / cpw).round() as i32;
+        let row = (ly / cph).round() as i32;
+        let ov = [Overlay { lines: &lines, col, row, tint: None, z: 0 }];
+        backend.present(out, fb, cols, rows, full_redraw, &ov);
+    } else {
+        // pixel tiers: rasterize him into the framebuffer in his beagle colors
+        draw_sprite_pixels(fb, &lines, lx, ly, cpw, cph);
+        backend.present(out, fb, cols, rows, full_redraw, &[]);
+    }
+}
+
+/// `supermunchii soak [dir]` — headless crash-hunt: load every `*.lvl` under `dir`
+/// (default `imported/lvl`) and run each through the sim + render pipeline for a
+/// few hundred ticks (walking right, jumping), catching panics per level. No
+/// terminal needed; panic details land in `scamp.log` (run with `--debug`).
+fn run_soak(dir: &str) {
+    let mut files = Vec::new();
+    collect_lvls(std::path::Path::new(dir), &mut files);
+    files.sort();
+    if files.is_empty() {
+        eprintln!("soak: no .lvl files under {dir}");
+        std::process::exit(2);
+    }
+    let mut ok = 0usize;
+    let mut fails: Vec<String> = Vec::new();
+    for path in &files {
+        let p = path.clone();
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| soak_level(&p, 800))) {
+            Ok(Ok(())) => ok += 1,
+            Ok(Err(e)) => fails.push(format!("FAIL  {path}: {e}")),
+            Err(_) => fails.push(format!("PANIC {path}  (message + backtrace in scamp.log if --debug)")),
+        }
+    }
+    eprintln!("soak: {ok}/{} ok", files.len());
+    for f in &fails {
+        eprintln!("  {f}");
+    }
+    if !fails.is_empty() {
+        std::process::exit(1);
+    }
+}
+
+fn collect_lvls(dir: &std::path::Path, out: &mut Vec<String>) {
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                collect_lvls(&p, out);
+            } else if p.extension().map(|x| x == "lvl").unwrap_or(false) {
+                out.push(p.to_string_lossy().into_owned());
+            }
+        }
+    }
+}
+
+/// Run one level headlessly for `ticks` ticks through the same sim + render as
+/// `run_play`, **holding right and repeatedly jumping** — the input that carries
+/// Munchii through most of any level. Renders periodically through all four
+/// backends so backend-specific draw crashes surface too. Returns `Err` on a
+/// clean failure; a panic propagates (the soak/test catches it per level).
+fn soak_level(path: &str, ticks: u64) -> Result<(), String> {
+    let level = load_level_file(path).map_err(|e| format!("load: {e}"))?;
+    let world = LevelWorld::from_level(&level);
+    let mut sim = sim_at(world.spawn);
+    let ws = terminal::WinSize { cols: 80, rows: 24, xpix: 640, ypix: 384 };
+    let (fb_w, fb_h, cols, rows) = play_view(ws);
+    let mut fb = Framebuffer::new(fb_w, fb_h);
+    let mut backends: [Box<dyn Backend>; 4] =
+        [Box::new(KittyBackend::new()), Box::new(TextBackend::new()), Box::new(AsciiBackend::new()), Box::new(MonoBackend::new())];
+    let mut out: Vec<u8> = Vec::new();
+
+    for tick in 0..ticks {
+        // Hold right; tap jump on a ~18-tick cadence (held ~10) to clear gaps.
+        let inp = InputFrame { axis_x: 1, jump_pressed: tick % 18 == 0, jump_held: tick % 18 < 10, down_held: false };
+        sim.step(&world.map, inp);
+        let (px, py, pw, ph) = (sim.player.pos.x, sim.player.pos.y, sim.player.w, sim.player.h);
+        if world.hazard_overlap(px, py, pw, ph) {
+            sim = sim_at(world.spawn);
+        }
+        if tick % 15 == 0 {
+            for b in backends.iter_mut() {
+                draw_play_frame(&mut fb, b.as_mut(), &mut out, &world, &sim, fb_w, fb_h, cols, rows, true, false);
+            }
+        }
+    }
+    Ok(())
 }
 
 fn render_play_status(buf: &mut String, level: &Level, st: State, backend: &str, won: bool, rows: u16, cols: u16) {
@@ -1833,6 +1929,48 @@ fn run_verify(dir: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Soak each given level by holding right and jumping; collect any that panic
+    /// or error so the assertion names the offenders rather than dying on the first.
+    fn soak_all(files: &[String], ticks: u64) -> Vec<String> {
+        let mut fails = Vec::new();
+        for path in files {
+            let p = path.clone();
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| soak_level(&p, ticks))) {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => fails.push(format!("{path}: {e}")),
+                Err(_) => fails.push(format!("{path}: panicked (run `supermunchii soak --debug` for the backtrace)")),
+            }
+        }
+        fails
+    }
+
+    /// The committed authored levels must survive a walk-right-and-jump playthrough
+    /// in every backend. Runs in the normal suite (these levels are always present).
+    #[test]
+    fn authored_levels_survive_a_walkthrough() {
+        let mut files = Vec::new();
+        collect_lvls(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("levels"), &mut files);
+        assert!(!files.is_empty(), "no authored levels found to soak");
+        let fails = soak_all(&files, 1500);
+        assert!(fails.is_empty(), "authored levels crashed:\n  {}", fails.join("\n  "));
+    }
+
+    /// Full sweep of the locally-imported level set (gitignored, so absent in CI).
+    /// On-demand because it's hundreds of levels: `cargo test imported_levels -- --ignored`.
+    #[test]
+    #[ignore]
+    fn imported_levels_survive_a_walkthrough() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../imported/lvl");
+        if !root.is_dir() {
+            eprintln!("no imported/lvl — skipping (run `supermunchii import` first)");
+            return;
+        }
+        let mut files = Vec::new();
+        collect_lvls(&root, &mut files);
+        let fails = soak_all(&files, 800);
+        assert!(fails.is_empty(), "{} imported levels crashed:\n  {}", fails.len(), fails.join("\n  "));
+    }
 
     #[test]
     fn arena_is_a_closed_box_sized_to_window() {

@@ -80,7 +80,7 @@ impl LevelWorld {
             }
         }
 
-        let spawn = (lvl.spawn.0 as f64 * TILE, lvl.spawn.1 as f64 * TILE);
+        let spawn = resolve_spawn(&map, w, h, lvl.spawn.0, lvl.spawn.1);
         map.spawn = spawn;
         let goal = lvl.goal.as_ref().map(|g| (g.x as f64 * TILE, g.y as f64 * TILE));
 
@@ -125,6 +125,20 @@ impl LevelWorld {
         let cy = ((y + h / 2.0) / TILE).floor() as i32;
         self.warps.iter().find(|wp| wp.cx == cx && wp.cy == cy)
     }
+}
+
+/// Resolve a spawn cell to a player-box top-left (px) that isn't embedded in
+/// terrain. Imported levels put the Player node's Y on the ground *surface*, which
+/// maps to a solid cell — placing the ~1-tile box's top-left there starts the
+/// player inside the ground (stuck / unplayable). We lift the box straight up to
+/// the first clear cell; physics then settles it onto the floor under gravity.
+fn resolve_spawn(map: &TileMap, w: i32, h: i32, sx: i32, sy: i32) -> (f64, f64) {
+    let sx = sx.clamp(0, w - 1);
+    let mut sy = sy.clamp(0, h - 1);
+    while sy > 0 && map.is_solid(sx, sy) {
+        sy -= 1;
+    }
+    (sx as f64 * TILE, sy as f64 * TILE)
 }
 
 /// Clamped side-scroll camera: center the view on the player, but never scroll
@@ -184,6 +198,20 @@ mod tests {
         // center over the warp cell (14,9)
         let wp = w.warp_at(14.0 * TILE, 9.0 * TILE, 12.0, 16.0);
         assert!(wp.is_some() && wp.unwrap().target.as_deref() == Some("t2@3,9"));
+    }
+
+    #[test]
+    fn spawn_is_lifted_out_of_solid_terrain() {
+        let mut l = Level::new("t", "overworld", 10, 6);
+        l.tiles.push(TileSpan { x: 0, y: 4, len: 10, kind: TileKind::Ground });
+        l.tiles.push(TileSpan { x: 0, y: 5, len: 10, kind: TileKind::Ground });
+        l.spawn = (3, 4); // on the solid ground surface — would start embedded
+        let w = LevelWorld::from_level(&l);
+        assert_eq!(w.spawn, (3.0 * TILE, 3.0 * TILE), "spawn lifts to the first clear cell above ground");
+
+        // A spawn already in open air is left where it is.
+        l.spawn = (3, 1);
+        assert_eq!(LevelWorld::from_level(&l).spawn, (3.0 * TILE, 1.0 * TILE));
     }
 
     #[test]
