@@ -20,6 +20,9 @@ pub enum Gait {
     Careful,
     /// Inert (items / power-ups): gravity only, no walking.
     Still,
+    /// Fly horizontally at a fixed height — no gravity; reverses at walls. Used by
+    /// air creatures and (with a lifetime the game manages) projectiles.
+    Fly,
 }
 
 /// Per-tick physics constants, tuned for the 16px tile world.
@@ -37,11 +40,13 @@ pub struct Mob {
     pub speed: f64, // px/tick when walking
     pub gait: Gait,
     pub alive: bool,
+    pub age: u32,      // ticks lived (for timers / oscillation)
+    pub blocked: bool, // hit a wall on the last horizontal move (projectiles die on this)
 }
 
 impl Mob {
     pub fn new(x: f64, y: f64, w: f64, h: f64, facing: i8, speed: f64, gait: Gait) -> Self {
-        Mob { pos: vec2(x, y), vel: vec2(0.0, 0.0), w, h, facing, speed, gait, alive: true }
+        Mob { pos: vec2(x, y), vel: vec2(0.0, 0.0), w, h, facing, speed, gait, alive: true, age: 0, blocked: false }
     }
 
     /// Advance one tick against the solid tilemap.
@@ -49,9 +54,21 @@ impl Mob {
         if !self.alive {
             return;
         }
-        // Gravity always applies (even Still items settle onto the floor).
-        self.vel.y = (self.vel.y + GRAVITY).min(MAX_FALL);
+        self.age = self.age.wrapping_add(1);
+        self.blocked = false;
 
+        // Flyers ignore gravity: cruise horizontally, reverse at walls.
+        if self.gait == Gait::Fly {
+            let dir = if self.facing >= 0 { 1.0 } else { -1.0 };
+            if self.move_axis(map, dir * self.speed, 0.0) {
+                self.facing = -self.facing;
+                self.blocked = true;
+            }
+            return;
+        }
+
+        // Grounded gaits: gravity always applies (even Still items settle).
+        self.vel.y = (self.vel.y + GRAVITY).min(MAX_FALL);
         if self.gait != Gait::Still && self.speed != 0.0 {
             let dir = if self.facing >= 0 { 1.0 } else { -1.0 };
             // Careful gait: turn around rather than step off a ledge.
@@ -61,6 +78,7 @@ impl Mob {
             let dir = if self.facing >= 0 { 1.0 } else { -1.0 };
             if self.move_axis(map, dir * self.speed, 0.0) {
                 self.facing = -self.facing; // bumped a wall → turn back
+                self.blocked = true;
             }
         }
         self.move_axis(map, 0.0, self.vel.y);
@@ -175,6 +193,16 @@ mod tests {
         let mut wanderer = Mob::new(2.0 * TILE, 3.0 * TILE, 12.0, 14.0, 1, 1.0, Gait::Wander);
         settle(&mut wanderer, &map, 120);
         assert!(wanderer.pos.y > 5.0 * TILE, "wanderer walked off and fell into the gap");
+    }
+
+    #[test]
+    fn flyer_ignores_gravity_and_reverses_at_walls() {
+        let map = flat(); // wall pillar at x=8
+        let mut f = Mob::new(2.0 * TILE, 1.0 * TILE, 12.0, 12.0, 1, 1.0, Gait::Fly);
+        let y0 = f.pos.y;
+        settle(&mut f, &map, 200);
+        assert!((f.pos.y - y0).abs() < 0.01, "a flyer does not fall");
+        assert_eq!(f.facing, -1, "reversed at the wall");
     }
 
     #[test]
