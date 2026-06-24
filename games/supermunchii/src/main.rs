@@ -11,6 +11,7 @@ use scamper::level::art::{self, Theme};
 use scamper::level::ir::Level;
 use scamper::level::world::{camera, LevelWorld};
 use scamper::math::Vec2;
+use scamper::mob::{aabb_overlap, stomp, Gait, Mob};
 use scamper::player::{FeelParams, Player, State};
 use scamper::sim::{Sim, SIM_DT_NS};
 use scamper::time::{now_ns, sleep_until_ns, NS_PER_SEC};
@@ -375,6 +376,9 @@ fn run_play(path: &str) {
 
     let mut world = LevelWorld::from_level(&level);
     let mut sim = sim_at(world.spawn);
+    let mut actors = build_actors(&world);
+    let mut kibble: u32 = 0;
+    let mut invuln: u32 = 0; // ticks of post-hit invulnerability
 
     let (mut fb_w, mut fb_h, mut cols, mut rows) = play_view(terminal::query_winsize());
     let mut fb = Framebuffer::new(fb_w, fb_h);
@@ -439,6 +443,15 @@ fn run_play(path: &str) {
                 };
                 pending_jump = false;
                 sim.step(&world.map, inp);
+                // Step creatures/items and resolve pounces, pickups, and hits.
+                let hurt = step_actors(&mut actors, &world.map, &mut sim.player, &mut kibble);
+                if invuln > 0 {
+                    invuln -= 1;
+                } else if hurt {
+                    sim = sim_at(world.spawn);
+                    invuln = 90; // ~1.5s of grace so you don't re-hit instantly
+                    full_redraw = true;
+                }
                 acc -= SIM_DT_NS;
             }
         } else {
@@ -466,6 +479,7 @@ fn run_play(path: &str) {
                 level = lvl;
                 world = LevelWorld::from_level(&level);
                 sim = sim_at(world.spawn);
+                actors = build_actors(&world);
                 won = false;
                 full_redraw = true;
             }
@@ -478,15 +492,16 @@ fn run_play(path: &str) {
                     level = lvl;
                     world = LevelWorld::from_level(&level);
                     sim = sim_at(spawn);
+                    actors = build_actors(&world);
                     full_redraw = true;
                 }
             }
         }
 
         // --- render the camera window (shared with the headless soak harness) ---
-        draw_play_frame(&mut fb, backend.as_mut(), &mut out, &world, &sim, fb_w, fb_h, cols, rows, full_redraw, input.down_held());
+        draw_play_frame(&mut fb, backend.as_mut(), &mut out, &world, &sim, &actors, fb_w, fb_h, cols, rows, full_redraw, input.down_held());
         full_redraw = false;
-        render_play_status(&mut status, &level, sim.player.state, backend.name(), won, rows + 1, cols);
+        render_play_status(&mut status, &level, sim.player.state, backend.name(), won, kibble, rows + 1, cols);
         {
             let mut o = std::io::stdout().lock();
             let _ = o.write_all(&out);
@@ -505,9 +520,78 @@ fn run_play(path: &str) {
     eprintln!("scamp: play done.");
 }
 
-/// Draw one play frame — the camera window of tiles, the goal post, and Munchii —
-/// and present it through `backend` into `out`. Shared by `run_play` and the
-/// headless `soak` crash-hunt so both exercise the identical render path.
+/// A live creature or item in the level: an engine [`Mob`] plus the game meaning
+/// (its sprite id and whether it's a collectible). Built from the level's IR
+/// entities; stepped and collided each tick.
+struct Actor {
+    mob: Mob,
+    kind: String,
+    item: bool,
+}
+
+/// Item kinds collect on touch; everything else is a creature you pounce.
+fn is_item(kind: &str) -> bool {
+    matches!(kind, "kibble" | "big_kibble" | "bubble_bone" | "zoomies_treat" | "lucky_squeaky" | "flutter_collar")
+}
+
+/// Build the live actor list from a world's entities. The gait/size choices are
+/// game design: `_sun` (red) variants stay on ledges; the rest wander off them.
+fn build_actors(world: &LevelWorld) -> Vec<Actor> {
+    world
+        .ents
+        .iter()
+        .filter(|e| scamper::sprite::get(&e.kind).is_some())
+        .map(|e| {
+            let item = is_item(&e.kind);
+            let (gait, speed, w, h) = if item {
+                (Gait::Still, 0.0, 12.0, 12.0)
+            } else if e.kind.ends_with("_sun") {
+                (Gait::Careful, 0.45, 12.0, 14.0)
+            } else {
+                (Gait::Wander, 0.45, 12.0, 14.0)
+            };
+            Actor { mob: Mob::new(e.cx as f64 * TILE, e.cy as f64 * TILE, w, h, -1, speed, gait), kind: e.kind.clone(), item }
+        })
+        .collect()
+}
+
+/// Upward velocity (px/s) from a successful pounce — a little hop (~0.6× a jump).
+const POUNCE_BOUNCE: f64 = -220.0;
+
+/// Step every actor one tick and resolve player↔actor collisions. Returns true if
+/// the player took a non-pounce creature hit. On a pounce the creature pops (into
+/// a treat) and the player gets a bounce; items collect into `kibble`.
+fn step_actors(actors: &mut [Actor], map: &TileMap, player: &mut Player, kibble: &mut u32) -> bool {
+    for a in actors.iter_mut() {
+        a.mob.step(map);
+    }
+    let (px, py, pw, ph, pvy) = (player.pos.x, player.pos.y, player.w, player.h, player.vel.y);
+    let mut hurt = false;
+    for a in actors.iter_mut() {
+        if !a.mob.alive {
+            continue;
+        }
+        let (bx, by, bw, bh) = (a.mob.pos.x, a.mob.pos.y, a.mob.w, a.mob.h);
+        if !aabb_overlap(px, py, pw, ph, bx, by, bw, bh) {
+            continue;
+        }
+        if a.item {
+            a.mob.alive = false;
+            *kibble += if a.kind == "big_kibble" { 10 } else { 1 };
+        } else if stomp(px, py, pw, ph, pvy, bx, by, bw, bh) {
+            a.mob.alive = false; // pops into a treat
+            *kibble += 2;
+            player.vel.y = POUNCE_BOUNCE;
+        } else {
+            hurt = true;
+        }
+    }
+    hurt
+}
+
+/// Draw one play frame — the camera window of tiles, the goal post, the live
+/// actors, and Munchii — and present it through `backend` into `out`. Shared by
+/// `run_play` and the headless `soak` crash-hunt so both exercise the same path.
 #[allow(clippy::too_many_arguments)]
 fn draw_play_frame(
     fb: &mut Framebuffer,
@@ -515,6 +599,7 @@ fn draw_play_frame(
     out: &mut Vec<u8>,
     world: &LevelWorld,
     sim: &Sim,
+    actors: &[Actor],
     fb_w: usize,
     fb_h: usize,
     cols: u16,
@@ -562,23 +647,31 @@ fn draw_play_frame(
     type Drawable = (Vec<String>, f64, f64, fn(char) -> (u8, u8, u8));
     let mut sprites: Vec<Drawable> = Vec::new();
 
-    for e in &world.ents {
-        let sp = match scamper::sprite::get(&e.kind) {
+    for a in actors {
+        if !a.mob.alive {
+            continue;
+        }
+        let sp = match scamper::sprite::get(&a.kind) {
             Some(s) => s,
             None => continue, // a kind we haven't authored a sprite for yet
         };
-        let ex = (e.cx as f64 + 0.5) * TILE; // entity center-x, world px
-        if ex < cam_x - TILE || ex > cam_x + fb_w as f64 + TILE {
+        let exw = a.mob.pos.x + a.mob.w / 2.0; // entity center-x, world px
+        if exw < cam_x - TILE || exw > cam_x + fb_w as f64 + TILE {
             continue; // cull off-screen
         }
-        let a = sp.anim("walk");
-        let n = a.frames.len().max(1);
-        let fi = (sim.clock() / (NS_PER_SEC / a.fps.max(1) as u64)) as usize % n;
-        let elines: Vec<String> = a.frames[fi].iter().map(|s| s.to_string()).collect();
+        let an = sp.anim("walk");
+        let n = an.frames.len().max(1);
+        let fi = (sim.clock() / (NS_PER_SEC / an.fps.max(1) as u64)) as usize % n;
+        // Creatures face their walk direction; items don't flip.
+        let elines: Vec<String> = if !a.item && a.mob.facing < 0 {
+            an.frames[fi].iter().map(|l| flip_line(l)).collect()
+        } else {
+            an.frames[fi].iter().map(|s| s.to_string()).collect()
+        };
         let efw = elines.iter().map(|l| l.chars().count()).max().unwrap_or(1) as f64;
         let (emw, emh) = (efw * cpw, elines.len() as f64 * cph);
-        let elx = (ex - cam_x) - emw / 2.0;
-        let ely = ((e.cy as f64 + 1.0) * TILE - cam_y) - emh; // feet on the cell's bottom edge
+        let elx = (exw - cam_x) - emw / 2.0;
+        let ely = ((a.mob.pos.y + a.mob.h) - cam_y) - emh; // feet at the mob's bottom
         sprites.push((elines, elx, ely, sp.palette));
     }
 
@@ -679,6 +772,8 @@ fn soak_level(path: &str, ticks: u64) -> Result<(), String> {
     let level = load_level_file(path).map_err(|e| format!("load: {e}"))?;
     let world = LevelWorld::from_level(&level);
     let mut sim = sim_at(world.spawn);
+    let mut actors = build_actors(&world);
+    let mut kibble = 0u32;
     let ws = terminal::WinSize { cols: 80, rows: 24, xpix: 640, ypix: 384 };
     let (fb_w, fb_h, cols, rows) = play_view(ws);
     let mut fb = Framebuffer::new(fb_w, fb_h);
@@ -690,26 +785,27 @@ fn soak_level(path: &str, ticks: u64) -> Result<(), String> {
         // Hold right; tap jump on a ~18-tick cadence (held ~10) to clear gaps.
         let inp = InputFrame { axis_x: 1, jump_pressed: tick % 18 == 0, jump_held: tick % 18 < 10, down_held: false };
         sim.step(&world.map, inp);
+        let _ = step_actors(&mut actors, &world.map, &mut sim.player, &mut kibble);
         let (px, py, pw, ph) = (sim.player.pos.x, sim.player.pos.y, sim.player.w, sim.player.h);
         if world.hazard_overlap(px, py, pw, ph) {
             sim = sim_at(world.spawn);
         }
         if tick % 15 == 0 {
             for b in backends.iter_mut() {
-                draw_play_frame(&mut fb, b.as_mut(), &mut out, &world, &sim, fb_w, fb_h, cols, rows, true, false);
+                draw_play_frame(&mut fb, b.as_mut(), &mut out, &world, &sim, &actors, fb_w, fb_h, cols, rows, true, false);
             }
         }
     }
     Ok(())
 }
 
-fn render_play_status(buf: &mut String, level: &Level, st: State, backend: &str, won: bool, rows: u16, cols: u16) {
+fn render_play_status(buf: &mut String, level: &Level, st: State, backend: &str, won: bool, kibble: u32, rows: u16, cols: u16) {
     use std::fmt::Write;
     let mut plain = String::new();
     if won {
-        let _ = write!(plain, "★ LEVEL COMPLETE — {} ★   → next level…   gfx:{backend} · q quit", level.id);
+        let _ = write!(plain, "★ LEVEL COMPLETE — {} ★   kibble:{kibble}   → next level…   gfx:{backend} · q quit", level.id);
     } else {
-        let _ = write!(plain, "{}  [{}]  {}   A/D · jump · ↓ pipe · Tab gfx:{backend} · q quit", level.id, level.theme, state_letter(st));
+        let _ = write!(plain, "{}  [{}]  {}  kibble:{kibble}   A/D · jump · ↓ pipe · Tab gfx:{backend} · q quit", level.id, level.theme, state_letter(st));
     }
     let maxw = (cols as usize).saturating_sub(1);
     if plain.len() > maxw {
