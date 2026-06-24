@@ -8,11 +8,11 @@
 ## How to use it
 
 ```sh
-scamp record <name>          # play + capture per-tick inputs; q saves the capture
-scamp replay <name>          # visual replay (Tab cycles backends, q quits)
-scamp replay <name> --bless  # headless: write golden mono_text keyframes
-scamp replay <name> --check  # headless: replay + diff vs golden (exit 1 on drift)
-scamp captures               # list captures (and which have golden snapshots)
+supermunchii record <name>          # play + capture per-tick inputs; q saves the capture
+supermunchii replay <name>          # visual replay (Tab cycles backends, q quits)
+supermunchii replay <name> --bless  # headless: write golden mono_text keyframes
+supermunchii replay <name> --check  # headless: replay + diff vs golden (exit 1 on drift)
+supermunchii captures               # list captures (and which have golden snapshots)
 ```
 
 `run.sh -i` exposes all of this: *record a run* (name-before-record prompt) and
@@ -33,7 +33,7 @@ scamper/captures`); `SCAMP_CAPTURE_DIR` overrides it (used by the test fixtures)
   `<name>.snap`. The arena is **frozen during recording** (resizes ignored) so a
   capture has a single geometry; replay rebuilds it from the stored `WinSize`.
 - **Snapshots** — every 30 ticks (plus the final tick), `backend::mono_text`.
-- **CI invariant** — `fixtures/captures/ci-smoke.{scap,snap}` is committed; the
+- **CI invariant** — `games/supermunchii/fixtures/captures/ci-smoke.{scap,snap}` is committed; the
   `committed_fixture_matches_golden` test replays it headless and asserts the
   keyframes match. Regenerate intentionally with
   `cargo test bless_fixtures -- --ignored`.
@@ -48,7 +48,7 @@ text-snapshot keyframes turns "does it still feel/look right?" into a diff that
 CI (and the headless `verify` harness) can answer.
 
 This pairs with two things already in the tree:
-- `backend::mono_text` — renders a frame to plain text (the `scamp shot` path).
+- `backend::mono_text` — renders a frame to plain text (the `supermunchii shot` path).
   Reuse it for keyframe snapshots.
 - the headless `verify` harness (scripted scenarios → PNG dumps to `./scratch`).
 - the fixed-timestep f64 sim, which is intended to be **same-binary

@@ -49,7 +49,7 @@ colored ASCII, and full Kitty pixels.
 ....................................................
 ....................................................
 ```
-<sub>Generated with <code>scamp shot</code> — the engine rendering itself to text.</sub>
+<sub>Generated with <code>supermunchii shot</code> — the engine rendering itself to text.</sub>
 
 ## Run it
 
@@ -57,12 +57,14 @@ colored ASCII, and full Kitty pixels.
 ./install.sh               # one-time: ensure Rust + build (Linux or Termux)
 ./run.sh                   # build (release) + play
 # or
-cargo run --release
+cargo run -p supermunchii --release
 ```
 
+This repo is a Cargo **workspace**: `engine/` is the reusable engine crate
+(`scamper`) and `games/supermunchii/` is the sample game that exercises it.
 `./install.sh` ensures a Rust toolchain (`pkg install rust` on Termux, rustup on
-Linux) and builds the release binaries; `--link` also symlinks `scamp` onto your
-PATH. Both `install.sh` and `run.sh` are cross-platform (`#!/usr/bin/env bash`).
+Linux) and builds the release binaries; `--link` also symlinks `supermunchii`
+onto your PATH. Both `install.sh` and `run.sh` are cross-platform (`#!/usr/bin/env bash`).
 
 The **kitty** backend (the default) needs a terminal that speaks the Kitty
 graphics + keyboard protocols — **Kitty**, **Ghostty**, or **foot**. But the
@@ -122,27 +124,27 @@ not the wall clock), so a recording reproduces exactly. Used to catch movement /
 rendering regressions textually, headless, in CI. See `RECORD_REPLAY.md`.
 
 ```sh
-scamp record <name>          # play + capture per-tick inputs; q saves
-scamp replay <name>          # visual replay (Tab cycles backends, q quits)
-scamp replay <name> --bless  # write golden mono_text keyframes (headless)
-scamp replay <name> --check  # replay + diff vs golden, exit 1 on drift (CI)
-scamp captures               # list captures
+supermunchii record <name>          # play + capture per-tick inputs; q saves
+supermunchii replay <name>          # visual replay (Tab cycles backends, q quits)
+supermunchii replay <name> --bless  # write golden mono_text keyframes (headless)
+supermunchii replay <name> --check  # replay + diff vs golden, exit 1 on drift (CI)
+supermunchii captures               # list captures
 ```
 
 `./run.sh -i` has a **record a run** entry and a **replay browser** (play /
 check / bless / rename / delete). Captures live in `~/.local/state/scamper/
-captures`. A committed fixture (`fixtures/captures/ci-smoke.*`) is replayed by
-`cargo test` as a regression guard.
+captures`. A committed fixture (`games/supermunchii/fixtures/captures/ci-smoke.*`)
+is replayed by `cargo test` as a regression guard.
 
 ## Levels (importer + IR)
 
 The campaign uses an engine-native, line-oriented level format (`*.lvl`) — readable
-and hand-authorable (see `levels/yard-romp-1.lvl`). An **offline** dev tool imports
-Godot `.tscn` tile levels into it:
+and hand-authorable (see `games/supermunchii/levels/yard-romp-1.lvl`). An
+**offline** dev tool imports Godot `.tscn` tile levels into it:
 
 ```sh
-scamp import <in.tscn> <out.lvl>   # decode a Godot scene to our Level IR
-scamp level-info <file.lvl>        # stats + an ascii map of a level
+supermunchii import <in.tscn> <out.lvl>   # decode a Godot scene to our Level IR
+supermunchii level-info <file.lvl>        # stats + an ascii map of a level
 ```
 
 The importer is for **local** use only: imported third-party layouts are

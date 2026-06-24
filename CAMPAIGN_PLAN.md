@@ -3,26 +3,32 @@
 > Status: **runtime spine playable.** Importer, Level IR, semantic tile art (all
 > backends), and a playable runtime (camera / collision / hazard / goal / warp)
 > are in. Munchii renders in-level. Bestiary + power-ups + compact sprite are next.
-> Drafted 2026-06-22; updated 2026-06-23.
+> Drafted 2026-06-22; updated 2026-06-24.
+>
+> **Layout note (2026-06-24):** the tree is now a Cargo workspace — the engine
+> (incl. the shared sprite/tile/level/bestiary asset library) lives in `engine/`
+> (crate `scamper`), and this game lives in `games/supermunchii/` (crate
+> `supermunchii`). Paths below were updated where things actually moved; any
+> remaining bare `src/…` in the speculative sections is now under `engine/src/…`.
 
 ## Progress log (what's done)
 
-- **Importer** (`src/level/import.rs`): `.tscn` → Level IR. Full scene classifier
+- **Importer** (`engine/src/level/import.rs`): `.tscn` → Level IR. Full scene classifier
   (145 source types → 0 unmapped), semantic tile kinds from the atlas legend
   (`atlas_kind`). Validated locally over all 305 levels (gitignored).
-- **Level IR** (`src/level/ir.rs`): line-oriented `*.lvl`, round-trip + ascii
-  preview. Authored level shipped: `levels/yard-romp-1.lvl`.
-- **Tile art** (`src/level/art.rs`): a distinct 16×16 pattern per `TileKind`
+- **Level IR** (`engine/src/level/ir.rs`): line-oriented `*.lvl`, round-trip + ascii
+  preview. Authored level shipped: `games/supermunchii/levels/yard-romp-1.lvl`.
+- **Tile art** (`engine/src/level/art.rs`): a distinct 16×16 pattern per `TileKind`
   feeding all four tiers, 5 theme palettes, mono-distinctness enforced by test
   across every theme.
-- **Viewers**: `scamp tiles` (grid) and the `tile-lab` binary (stepper, like
+- **Viewers**: `supermunchii tiles` (grid) and the `tile-lab` binary (stepper, like
   sprite-lab); both in the `run.sh -i` menu.
-- **Runtime** (`src/level/world.rs` + `run_play` in `main.rs`): `LevelWorld`
+- **Runtime** (`engine/src/level/world.rs` + `run_play` in `games/supermunchii/src/main.rs`): `LevelWorld`
   projects IR → solid `TileMap` + hazard/goal/warp/kind data; clamped side-scroll
-  `camera`; `scamp play <level>` does collision, hazard/pit respawn, goal =
+  `camera`; `supermunchii play <level>` does collision, hazard/pit respawn, goal =
   LEVEL COMPLETE, pipe warps (`<id>@tx,ty`). Munchii renders via the sprite/pose
   system (overhangs the 1-tile hitbox — see next steps).
-- **Menus**: play campaign (`levels/` picker), **browse imported levels**
+- **Menus**: play campaign (`games/supermunchii/levels/` picker), **browse imported levels**
   (navigates `imported/lvl/<game>/<world>` tree), record/replay, sprite/tile labs.
 
 ## Next steps (pick up here)
@@ -45,14 +51,14 @@
    now; warp targets only exist on authored levels (imported pipes have none).
 
 > Build/run: `./run.sh` → menu. Headless tests: `cargo test`. Imported levels are
-> local-only (gitignored); re-import on a new machine with `scamp import`.
+> local-only (gitignored); re-import on a new machine with `supermunchii import`.
 
 ## Decisions (locked)
 
 - **IP path: A.** The `.tscn` → Level-IR importer is a **dev-only tool**. Imported
   Nintendo-derived layouts are tested **locally and never committed** (gitignored:
   `*.tscn`, `imported/`). We **ship our own authored levels** in the IR format.
-- **Importer: Rust parser** (`src/level/import.rs`), no Godot toolchain dependency.
+- **Importer: Rust parser** (`engine/src/level/import.rs`), no Godot toolchain dependency.
 - **Level IR is line-oriented text** (`*.lvl`), not JSON. Same rationale as the
   capture files: no serde dependency (single-dep ethos), diff-friendly, trivially
   hand-authorable and hand-parseable. The JSON sketch in §4 is superseded by §4a.
@@ -126,9 +132,9 @@ pass. Three distinct buckets:
 ```
 
 New or substantially-changed modules (proposed):
-- `src/level/import.rs` — **offline** `.tscn` → Level IR converter (dev-only).
-- `src/level/ir.rs` — the engine-native Level IR + JSON (de)serialization.
-- `src/level/world.rs` — extend `world.rs`: typed tiles (not just `solid`),
+- `engine/src/level/import.rs` — **offline** `.tscn` → Level IR converter (dev-only).
+- `engine/src/level/ir.rs` — the engine-native Level IR + JSON (de)serialization.
+- `engine/src/level/world.rs` — extend `world.rs`: typed tiles (not just `solid`),
   multiple layers, level bounds, entity spawn table, theme/BGM id.
 - `src/entity/*` — entity model + behaviors (creatures, items, blocks, boss).
 - `src/sprites.rs` — generalize `munchii.rs` into a sprite/animation **registry**
@@ -159,7 +165,7 @@ New or substantially-changed modules (proposed):
 
 ### Importer strategy
 Two viable parsers — decide in red-team:
-- **Rust parser** in `src/level/import.rs`: `.tscn` is INI-like text; parse
+- **Rust parser** in `engine/src/level/import.rs`: `.tscn` is INI-like text; parse
   sections, base64-decode `tile_map_data`, decode the cell stream, map atlas→kind
   via the TileSet, emit Level IR JSON. Self-contained, no Godot dependency.
 - **Godot headless export script** (GDScript) that loads each scene and dumps our
