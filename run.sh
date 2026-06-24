@@ -33,7 +33,7 @@ run_game() {
     local extra=()
     [[ "${SCAMP_NODEBUG:-0}" != "1" ]] && extra+=(--debug)
     tmux_warn
-    "target/$profile_dir/scamp" "${extra[@]}"
+    "target/$profile_dir/supermunchii" "${extra[@]}"
 }
 
 # Arrow-key TUI menu. Args: title, then item labels. Sets MENU_SEL to the chosen
@@ -110,12 +110,12 @@ record_run() {
         printf '\n  "%s" exists — overwrite? [y/N] ' "$name"
         IFS= read -rsn1 c; [[ "$c" == y || "$c" == Y ]] || return
     fi
-    "target/$profile_dir/scamp" record "$name"
+    "target/$profile_dir/supermunchii" record "$name"
 }
 
 # Per-capture action menu: play / rename / delete. (Snapshot golden check/bless
 # is a regression-testing tool, kept off the menu — use the flags directly:
-#   scamp replay <name> --check    scamp replay <name> --bless)
+#   supermunchii replay <name> --check    supermunchii replay <name> --bless)
 capture_actions() {
     local dir="$1" name="$2" new c
     while true; do
@@ -125,7 +125,7 @@ capture_actions() {
             "delete" \
             "back"
         case "$MENU_SEL" in
-            0) "target/$profile_dir/scamp" replay "$name" ;;
+            0) "target/$profile_dir/supermunchii" replay "$name" ;;
             1) printf '\033[2J\033[H\n  rename "%s" to (blank cancels):\n  > ' "$name"
                printf '\033[?25h'; read_name; new="$REPLY_NAME"; printf '\033[?25l'
                if [[ -n "$new" ]] && valid_name "$new"; then
@@ -169,10 +169,10 @@ replay_browser() {
     done
 }
 
-# Pick and play an authored campaign level from ./levels (imported levels stay
-# out of the tree; point `scamp play <file>` at them directly to test those).
+# Pick and play an authored campaign level from the game's levels dir (imported
+# levels stay out of the tree; point `supermunchii play <file>` at them to test).
 play_level() {
-    local dir="levels" f names
+    local dir="games/supermunchii/levels" f names
     names=()
     if [[ -d "$dir" ]]; then
         for f in "$dir"/*.lvl; do
@@ -186,21 +186,21 @@ play_level() {
         return
     fi
     if [[ ${#names[@]} -eq 1 ]]; then
-        "target/$profile_dir/scamp" play "$dir/${names[0]}.lvl"
+        "target/$profile_dir/supermunchii" play "$dir/${names[0]}.lvl"
         return
     fi
     menu "SCAMPER \xc2\xb7 play a level" "${names[@]}" "back"
     if [[ $MENU_SEL -ge 0 && $MENU_SEL -lt ${#names[@]} ]]; then
-        "target/$profile_dir/scamp" play "$dir/${names[$MENU_SEL]}.lvl"
+        "target/$profile_dir/supermunchii" play "$dir/${names[$MENU_SEL]}.lvl"
     fi
 }
 
 # Navigate the imported-levels tree (imported/lvl/<game>/<world>/*.lvl) and play
-# one. Directories descend; *.lvl files launch `scamp play`.
+# one. Directories descend; *.lvl files launch `supermunchii play`.
 import_browser() {
     local root="imported/lvl"
     if [[ ! -d "$root" ]]; then
-        printf '\033[2J\033[H\n  no imported levels at ./%s\n  import some first, e.g.:\n    scamp import <in.tscn> %s/demo.lvl\n\n  press a key…' "$root" "$root"
+        printf '\033[2J\033[H\n  no imported levels at ./%s\n  import some first, e.g.:\n    supermunchii import <in.tscn> %s/demo.lvl\n\n  press a key…' "$root" "$root"
         IFS= read -rsn1
         return
     fi
@@ -230,7 +230,7 @@ import_browser() {
         case "${kinds[$sel]}" in
             up) cur="$(dirname "$cur")" ;;
             dir) cur="${targets[$sel]}" ;;
-            file) "target/$profile_dir/scamp" play "${targets[$sel]}" ;;
+            file) "target/$profile_dir/supermunchii" play "${targets[$sel]}" ;;
             *) ;;
         esac
     done
@@ -244,9 +244,9 @@ debug_menu() {
             "screenshot to text  (shot)" \
             "back"
         case "$MENU_SEL" in
-            0) "target/$profile_dir/scamp" verify ./scratch ;;
-            1) "target/$profile_dir/scamp" gfxtest ;;
-            2) printf '\033[2J\033[H'; "target/$profile_dir/scamp" shot; read -rsn1 -p $'\npress a key…' ;;
+            0) "target/$profile_dir/supermunchii" verify ./scratch ;;
+            1) "target/$profile_dir/supermunchii" gfxtest ;;
+            2) printf '\033[2J\033[H'; "target/$profile_dir/supermunchii" shot; read -rsn1 -p $'\npress a key…' ;;
             *) return ;;
         esac
     done
@@ -290,16 +290,16 @@ case "${1:-}" in
         exec "target/$profile_dir/sprite-lab"
         ;;
     "")
-        cargo build "${profile_args[@]}" --bin scamp
+        cargo build "${profile_args[@]}" --bin supermunchii
         run_game
         ;;
     *)
-        cargo build "${profile_args[@]}" --bin scamp
+        cargo build "${profile_args[@]}" --bin supermunchii
         tmux_warn
         extra=()
         if [[ "${SCAMP_NODEBUG:-0}" != "1" ]] && [[ ! " $* " == *" --debug "* ]]; then
             extra+=(--debug)
         fi
-        exec "target/$profile_dir/scamp" "$@" "${extra[@]}"
+        exec "target/$profile_dir/supermunchii" "$@" "${extra[@]}"
         ;;
 esac

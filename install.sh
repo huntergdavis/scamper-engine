@@ -3,7 +3,7 @@
 #
 #   ./install.sh            # ensure Rust, then build (release)
 #   ./install.sh --debug    # build the faster-compiling debug profile instead
-#   ./install.sh --link     # also symlink `scamp` into a bin dir on your PATH
+#   ./install.sh --link     # also symlink `supermunchii` into a bin dir on your PATH
 #   ./install.sh --link-dir DIR   # symlink target dir (implies --link)
 #
 # On Termux, Rust comes from `pkg install rust`. On Linux, if cargo is missing
@@ -77,7 +77,7 @@ ensure_rust() {
 
 # ---- optional: symlink the game binary onto PATH -----------------------------
 link_binary() {
-    local src="$PWD/target/$profile_dir/scamp" dest_dir="$link_dir"
+    local src="$PWD/target/$profile_dir/supermunchii" dest_dir="$link_dir"
     if [[ -z "$dest_dir" ]]; then
         if [[ "$is_termux" == "1" ]]; then
             dest_dir="${PREFIX:-/data/data/com.termux/files/usr}/bin"
@@ -86,18 +86,18 @@ link_binary() {
         fi
     fi
     mkdir -p "$dest_dir"
-    ln -sf "$src" "$dest_dir/scamp"
-    say "linked: $dest_dir/scamp -> $src"
+    ln -sf "$src" "$dest_dir/supermunchii"
+    say "linked: $dest_dir/supermunchii -> $src"
     case ":$PATH:" in
         *":$dest_dir:"*) ;;
-        *) warn "$dest_dir is not on your PATH — add it to run \`scamp\` directly." ;;
+        *) warn "$dest_dir is not on your PATH — add it to run \`supermunchii\` directly." ;;
     esac
 }
 
 # ---- run ---------------------------------------------------------------------
 ensure_rust
 
-say "building scamp + sprite-lab (${profile_dir})"
+say "building scamper engine + supermunchii + asset labs (${profile_dir})"
 cargo build "${profile_args[@]}"
 
 [[ "$do_link" == "1" ]] && link_binary
