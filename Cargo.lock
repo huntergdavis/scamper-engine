@@ -14,3 +14,10 @@ version = "0.1.0"
 dependencies = [
  "libc",
 ]
+
+[[package]]
+name = "supermunchii"
+version = "0.1.0"
+dependencies = [
+ "scamper",
+]

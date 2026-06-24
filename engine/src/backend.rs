@@ -68,6 +68,16 @@ pub trait Backend {
         false
     }
 
+    /// True if this backend presents the framebuffer pixel-for-pixel (Kitty), as
+    /// opposed to nearest-neighbour sampling it onto a coarse character-cell grid
+    /// (text / ascii / mono). Cell-sampling backends must have the camera snapped
+    /// to whole cells; otherwise a sub-cell scroll offset makes static tiles
+    /// alias — the same tile samples different sub-pixels per cell and "flickers"
+    /// as the player moves. Pixel-exact backends scroll smoothly and need no snap.
+    fn pixel_exact(&self) -> bool {
+        false
+    }
+
     /// Encode `fb` into `out` for display. `cols`/`play_rows` are the terminal
     /// cell area the image fills. `full` requests a complete repaint. `overlays`
     /// are the character layers (player + effects) the character backends stamp
@@ -107,6 +117,10 @@ impl Default for KittyBackend {
 impl Backend for KittyBackend {
     fn name(&self) -> &'static str {
         "kitty"
+    }
+
+    fn pixel_exact(&self) -> bool {
+        true
     }
 
     fn present(&mut self, out: &mut Vec<u8>, fb: &Framebuffer, cols: u16, play_rows: u16, _full: bool, _overlays: &[Overlay]) {

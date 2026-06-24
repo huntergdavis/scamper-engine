@@ -19,6 +19,7 @@
 use super::ir::{Entity, Goal, Level, TileKind, TileSpan};
 use std::collections::HashMap;
 use std::io;
+use std::path::Path;
 
 const TILE_PX: f64 = 16.0;
 
@@ -29,18 +30,148 @@ pub struct Imported {
     pub warnings: Vec<String>,
 }
 
-/// Parse a `.tscn` text scene into a [`Level`]. `id`/`theme` are ours to supply
-/// (the scene doesn't carry our vocabulary).
+/// Parse a `.tscn` text scene into a [`Level`] with an explicit `theme`. This
+/// single-scene form does **not** resolve Godot scene inheritance (it has no way
+/// to load a base scene) — use [`import_scene_file`] for that. Kept for tests and
+/// callers that already hold self-contained scene text.
 pub fn import_tscn(text: &str, id: &str, theme: &str) -> io::Result<Imported> {
-    let mut ext: HashMap<String, String> = HashMap::new(); // ext_resource id -> scene basename
-    let mut nodes: Vec<NodeAcc> = Vec::new();
-    let mut cur: Option<NodeAcc> = None;
+    build_level(parse_scene(text).nodes, id, theme)
+}
+
+/// Import a `.tscn` *file*, **resolving Godot scene inheritance** and **inferring
+/// the theme** when `theme_override` is `None`.
+///
+/// Inherited scenes (a root `[node name="…" instance=ExtResource(base)]`) carry no
+/// geometry of their own — the base scene holds it and the derived scene only
+/// overrides properties / adds nodes. We load the base via a loader rooted at the
+/// Godot project (found from the `Scenes/` segment of `path`), recurse for chained
+/// inheritance, then overlay the derived scene's nodes by node-path.
+///
+/// Theme precedence: explicit `theme_override` → the scene's own `theme="…"`
+/// property (mapped from Godot's vocabulary onto our five) → a name-based guess.
+pub fn import_scene_file(path: &Path, id: &str, theme_override: Option<&str>) -> io::Result<Imported> {
+    let text = std::fs::read_to_string(path)?;
+    // Root the `res://` loader at the project dir: the path up to its `Scenes/`
+    // segment, so `res://Scenes/Levels/…` maps back to a real file on disk.
+    let path_str = path.to_string_lossy();
+    let root = match path_str.find("Scenes/") {
+        Some(i) => path_str[..i].to_string(),
+        None => String::new(),
+    };
+    let loader = |res: &str| -> io::Result<String> {
+        let rel = res.strip_prefix("res://").unwrap_or(res);
+        std::fs::read_to_string(format!("{root}{rel}"))
+    };
+    let resolved = resolve_text(&text, &loader, 0);
+
+    let theme: String = match theme_override {
+        Some(t) => t.to_string(),
+        None => resolved
+            .theme
+            .as_deref()
+            .map(godot_theme_to_ir)
+            .unwrap_or_else(|| guess_theme_from_name(id))
+            .to_string(),
+    };
+    build_level(resolved.nodes, id, &theme)
+}
+
+/// A scene reduced to what the level builder needs, before inheritance is flattened.
+struct ParsedScene {
+    /// `res://` path of the scene this one inherits from, if any.
+    base: Option<String>,
+    /// The scene's own `theme="…"` (Godot's vocabulary), if set.
+    theme: Option<String>,
+    nodes: Vec<RawNode>,
+}
+
+/// Nodes + theme after the inheritance chain has been flattened.
+struct ResolvedScene {
+    theme: Option<String>,
+    nodes: Vec<RawNode>,
+}
+
+/// Parse a scene, then recursively flatten its inheritance chain. `loader` maps a
+/// `res://` path to that scene's text; a base that can't be loaded is skipped (we
+/// still import whatever the derived scene itself defines). `depth` guards cycles.
+fn resolve_text(text: &str, loader: &dyn Fn(&str) -> io::Result<String>, depth: u32) -> ResolvedScene {
+    let ps = parse_scene(text);
+    if depth < 8 {
+        if let Some(base) = &ps.base {
+            if let Ok(btext) = loader(base) {
+                let base_res = resolve_text(&btext, loader, depth + 1);
+                return ResolvedScene {
+                    theme: ps.theme.or(base_res.theme),
+                    nodes: merge_nodes(base_res.nodes, ps.nodes),
+                };
+            }
+        }
+    }
+    ResolvedScene { theme: ps.theme, nodes: ps.nodes }
+}
+
+/// Overlay a derived scene's nodes onto its base's. A derived node sharing a base
+/// node's path (`parent` + `name`) overrides it (the derived scene's set fields
+/// win); any other derived node is appended after the inherited ones. This mirrors
+/// Godot's inherited-scene semantics closely enough for geometry + placements.
+fn merge_nodes(base: Vec<RawNode>, derived: Vec<RawNode>) -> Vec<RawNode> {
+    let key = |n: &RawNode| format!("{}\u{0}{}", n.parent.as_deref().unwrap_or(""), n.name);
+    let mut out = base;
+    let mut index: HashMap<String, usize> = out.iter().enumerate().map(|(i, n)| (key(n), i)).collect();
+    for d in derived {
+        let k = key(&d);
+        if let Some(&i) = index.get(&k) {
+            let b = &mut out[i];
+            if d.position.is_some() {
+                b.position = d.position;
+            }
+            if d.tile_map_data.is_some() {
+                b.tile_map_data = d.tile_map_data;
+            }
+            if d.instance_path.is_some() {
+                b.instance_path = d.instance_path;
+            }
+        } else {
+            index.insert(k, out.len());
+            out.push(d);
+        }
+    }
+    out
+}
+
+/// Finalize an accumulated node: record the scene theme (first seen) and detect
+/// inheritance. A root node (no `parent`) that is *itself* an instance marks scene
+/// inheritance — its `instance` is the base scene, not a placed actor — so it's
+/// stashed as `base` instead of being treated as a node.
+fn finalize_node(n: RawNode, nodes: &mut Vec<RawNode>, base: &mut Option<String>, theme: &mut Option<String>) {
+    if theme.is_none() {
+        if let Some(t) = &n.theme {
+            *theme = Some(t.clone());
+        }
+    }
+    if n.parent.is_none() && n.instance_path.is_some() {
+        if base.is_none() {
+            *base = n.instance_path.clone();
+        }
+        return;
+    }
+    nodes.push(n);
+}
+
+/// Parse one `.tscn`'s INI-like text into nodes + the scene's base/theme. No
+/// inheritance resolution here — that's [`resolve_text`]'s job.
+fn parse_scene(text: &str) -> ParsedScene {
+    let mut ext: HashMap<String, String> = HashMap::new(); // ext_resource id -> res:// path
+    let mut nodes: Vec<RawNode> = Vec::new();
+    let mut base: Option<String> = None;
+    let mut theme: Option<String> = None;
+    let mut cur: Option<RawNode> = None;
 
     for raw in text.lines() {
         let line = raw.trim();
         if line.starts_with('[') {
             if let Some(n) = cur.take() {
-                nodes.push(n);
+                finalize_node(n, &mut nodes, &mut base, &mut theme);
             }
             let inner = &line[1..line.rfind(']').unwrap_or(line.len() - 1)];
             let toks = split_ws_quoted(inner);
@@ -49,15 +180,16 @@ pub fn import_tscn(text: &str, id: &str, theme: &str) -> io::Result<Imported> {
             match kind {
                 "ext_resource" => {
                     if let (Some(id), Some(path)) = (attrs.get("id"), attrs.get("path")) {
-                        ext.insert(strip_quotes(id), scene_basename(&strip_quotes(path)));
+                        ext.insert(strip_quotes(id), strip_quotes(path));
                     }
                 }
                 "node" => {
-                    let mut n = NodeAcc::default();
+                    let mut n = RawNode::default();
                     n.name = attrs.get("name").map(|v| strip_quotes(v)).unwrap_or_default();
+                    n.parent = attrs.get("parent").map(|v| strip_quotes(v));
                     if let Some(inst) = attrs.get("instance") {
                         if let Some(rid) = extresource_id(inst) {
-                            n.instance_scene = ext.get(&rid).cloned();
+                            n.instance_path = ext.get(&rid).cloned();
                         }
                     }
                     cur = Some(n);
@@ -69,15 +201,20 @@ pub fn import_tscn(text: &str, id: &str, theme: &str) -> io::Result<Imported> {
                 match k.trim() {
                     "position" => n.position = parse_vector2(v.trim()),
                     "tile_map_data" => n.tile_map_data = parse_packed_byte_array(v.trim()),
+                    "theme" => n.theme = Some(strip_quotes(v.trim())),
                     _ => {}
                 }
             }
         }
     }
     if let Some(n) = cur.take() {
-        nodes.push(n);
+        finalize_node(n, &mut nodes, &mut base, &mut theme);
     }
+    ParsedScene { base, theme, nodes }
+}
 
+/// Classify a flattened node list (pixel-space placements) into our [`Level`].
+fn build_level(nodes: Vec<RawNode>, id: &str, theme: &str) -> io::Result<Imported> {
     // ---- classify nodes into raw (pixel-space) placements ----
     let mut cells: Vec<(i32, i32, TileKind)> = Vec::new(); // tile-space already
     let mut entities: Vec<Entity> = Vec::new();
@@ -119,7 +256,8 @@ pub fn import_tscn(text: &str, id: &str, theme: &str) -> io::Result<Imported> {
             }
             continue;
         }
-        if let Some(scene) = n.instance_scene {
+        if let Some(path) = &n.instance_path {
+            let scene = scene_basename(path);
             let (tx, ty) = px_to_tile(pos.unwrap_or((0.0, 0.0)));
             match classify_scene(&scene) {
                 SceneClass::Drop => {}
@@ -358,14 +496,58 @@ fn classify_scene(scene: &str) -> SceneClass {
     }
 }
 
+// ---- theme inference --------------------------------------------------------
+
+/// Map Godot's themed-tileset name (16 of them) onto our five art themes
+/// (CAMPAIGN_PLAN.md §4b / art.rs). Lossy by design — a theme only picks a
+/// palette, not gameplay — so visually-adjacent biomes collapse onto the nearest
+/// of overworld / underground / underwater / castle / snow.
+fn godot_theme_to_ir(godot: &str) -> &'static str {
+    match godot {
+        "Underground" | "Pipeland" => "underground",
+        "Underwater" | "CastleWater" => "underwater",
+        "Castle" | "Volcano" => "castle",
+        "Snow" => "snow",
+        // Desert, Beach, Jungle, Mountain, Skyland, Garden, Space, Autumn,
+        // Overworld, and anything unrecognized → the green default.
+        _ => "overworld",
+    }
+}
+
+/// Last-resort theme guess from the level id, used only when the scene (and any
+/// base it inherits) carries no `theme` — e.g. a plain overworld stage. Leans on
+/// the classic Super Mario world-stage convention as a weak hint.
+fn guess_theme_from_name(id: &str) -> &'static str {
+    let s = id.to_ascii_lowercase();
+    if s.contains("castle") {
+        "castle"
+    } else if s.contains("underground") {
+        "underground"
+    } else if s.contains("water") {
+        "underwater"
+    } else if s.contains("snow") || s.contains("ice") {
+        "snow"
+    } else if s.ends_with("-4") {
+        "castle" // x-4 is the end-of-world fortress
+    } else {
+        "overworld"
+    }
+}
+
 // ---- node accumulation ------------------------------------------------------
 
 #[derive(Default)]
-struct NodeAcc {
+struct RawNode {
     name: String,
-    instance_scene: Option<String>,
+    /// Parent node path (`.`, `Blocks`, …); `None` for the scene root.
+    parent: Option<String>,
+    /// `res://` path of the scene this node instances (an actor/tile, or — when
+    /// this is the root — the inheritance base).
+    instance_path: Option<String>,
     position: Option<(f64, f64)>,
     tile_map_data: Option<Vec<u8>>,
+    /// The `theme="…"` property, if this node carries one (the root level node does).
+    theme: Option<String>,
 }
 
 struct Cell {
@@ -620,6 +802,61 @@ mod tests {
 
         // And it round-trips through the IR text form.
         assert_eq!(Level::from_text(&l.to_text()).unwrap(), *l);
+    }
+
+    #[test]
+    fn resolves_scene_inheritance() {
+        // Base scene: a 2-cell ground row + a Goomba + a Player.
+        let data = cell_bytes(&[(0, 12, 0, 0, 0, 0), (1, 12, 0, 0, 0, 0)]);
+        let b64 = b64_encode(&data);
+        let base = format!(
+            "[gd_scene format=4]\n\
+             [ext_resource type=\"PackedScene\" path=\"res://E/Goomba.tscn\" id=\"1\"]\n\
+             [node name=\"Level\" type=\"Node\"]\n\
+             [node name=\"Tiles\" type=\"TileMapLayer\" parent=\".\"]\n\
+             tile_map_data = PackedByteArray(\"{b64}\")\n\
+             [node name=\"Player\" type=\"Node2D\" parent=\".\"]\n\
+             position = Vector2(16, 192)\n\
+             [node name=\"Goomba\" parent=\".\" instance=ExtResource(\"1\")]\n\
+             position = Vector2(32, 192)\n"
+        );
+        // Derived scene: inherits the base, overrides the theme, adds a Coin.
+        let derived = "[gd_scene format=4]\n\
+             [ext_resource type=\"PackedScene\" path=\"res://Scenes/Levels/Base.tscn\" id=\"1\"]\n\
+             [ext_resource type=\"PackedScene\" path=\"res://E/Coin.tscn\" id=\"2\"]\n\
+             [node name=\"Night\" instance=ExtResource(\"1\")]\n\
+             theme = \"Underground\"\n\
+             [node name=\"Coin\" parent=\".\" instance=ExtResource(\"2\")]\n\
+             position = Vector2(48, 192)\n";
+
+        let loader = |res: &str| -> io::Result<String> {
+            if res.ends_with("Base.tscn") {
+                Ok(base.clone())
+            } else {
+                Err(io::Error::new(io::ErrorKind::NotFound, "no such scene"))
+            }
+        };
+        let resolved = resolve_text(derived, &loader, 0);
+        // Derived theme wins; geometry + entities flow up from the base.
+        assert_eq!(resolved.theme.as_deref(), Some("Underground"));
+        let imp = build_level(resolved.nodes, "x", godot_theme_to_ir("Underground")).unwrap();
+        assert_eq!(imp.level.theme, "underground");
+        assert!(!imp.level.tiles.is_empty(), "base ground row should survive inheritance");
+        assert!(imp.level.entities.iter().any(|e| e.kind == "boneling"), "base Goomba");
+        assert!(imp.level.entities.iter().any(|e| e.kind == "kibble"), "derived Coin");
+        assert_ne!(imp.level.spawn, (2, 2), "Player from base should set spawn (not the default)");
+    }
+
+    #[test]
+    fn theme_mapping_collapses_to_five() {
+        assert_eq!(godot_theme_to_ir("Castle"), "castle");
+        assert_eq!(godot_theme_to_ir("Volcano"), "castle");
+        assert_eq!(godot_theme_to_ir("Underwater"), "underwater");
+        assert_eq!(godot_theme_to_ir("CastleWater"), "underwater");
+        assert_eq!(godot_theme_to_ir("Pipeland"), "underground");
+        assert_eq!(godot_theme_to_ir("Snow"), "snow");
+        assert_eq!(godot_theme_to_ir("Desert"), "overworld"); // no palette of its own → default
+        assert_eq!(guess_theme_from_name("smb1-world6-6-4"), "castle"); // x-4 fallback
     }
 
     #[test]

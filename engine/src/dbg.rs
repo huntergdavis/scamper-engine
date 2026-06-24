@@ -50,6 +50,38 @@ pub fn log(args: std::fmt::Arguments) {
     }
 }
 
+/// Install a panic hook that writes the panic — message, location, and a full
+/// backtrace — to the debug log before delegating to whatever hook was already
+/// set. Without this, a panic only reaches stderr, which is invisible behind the
+/// alt-screen/raw-mode terminal and never lands in `scamp.log`; a crash during
+/// play would leave no trace. Cheap no-op when logging is disabled.
+///
+/// Call this once, early (right after `init`), so it runs *before*
+/// `TerminalGuard::enter` wraps the hook with terminal teardown — that ordering
+/// makes the guard tear the terminal down first, then this logger records the
+/// crash, then the original hook prints to the now-restored stderr.
+pub fn install_panic_logger() {
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if enabled() {
+            let loc = info
+                .location()
+                .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+                .unwrap_or_else(|| "<unknown location>".into());
+            let msg = info
+                .payload()
+                .downcast_ref::<&str>()
+                .map(|s| s.to_string())
+                .or_else(|| info.payload().downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "<non-string panic payload>".into());
+            // force_capture always captures, regardless of RUST_BACKTRACE.
+            let bt = std::backtrace::Backtrace::force_capture();
+            log(format_args!("PANIC at {loc}: {msg}\n--- backtrace ---\n{bt}"));
+        }
+        prev(info);
+    }));
+}
+
 #[macro_export]
 macro_rules! dlog {
     ($($a:tt)*) => { $crate::dbg::log(format_args!($($a)*)) };

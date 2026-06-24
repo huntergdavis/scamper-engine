@@ -1,0 +1,23 @@
+[package]
+name = "scamper"
+version = "0.1.0"
+edition = "2021"
+description = "A terminal 2D game engine rendering via the Kitty graphics protocol: a tick-driven deterministic sim, four fidelity backends (kitty/text/ascii/mono), and a shared sprite/tile/level asset library reused across games."
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "scamper"
+path = "src/lib.rs"
+
+# Asset-preview dev tools — they exercise the engine's shared sprite/tile library,
+# so they ship with the engine rather than any one game.
+[[bin]]
+name = "sprite-lab"
+path = "src/sprite_lab.rs"
+
+[[bin]]
+name = "tile-lab"
+path = "src/tile_lab.rs"
+
+[dependencies]
+libc = "0.2"

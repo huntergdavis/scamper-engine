@@ -25,6 +25,9 @@ fn main() {
     let debug = args.iter().any(|a| a == "--debug");
     let log_path = std::env::var("SCAMP_LOG").unwrap_or_else(|_| "scamp.log".into());
     scamper::dbg::init(debug, &log_path);
+    // Capture panics into the log before the terminal guard wraps the hook with
+    // teardown — otherwise a crash behind the alt-screen leaves no trace.
+    scamper::dbg::install_panic_logger();
     dlog!("scamp start: args={:?} TERM={:?}", &args[1..], std::env::var("TERM").ok());
 
     // The first non-flag argument is the subcommand.
@@ -93,23 +96,18 @@ fn run_import(args: &[String]) {
     let (input, output) = match (nth_nonflag(args, 1), nth_nonflag(args, 2)) {
         (Some(i), Some(o)) => (i, o),
         _ => {
-            eprintln!("usage: scamp import <in.tscn> <out.lvl> [--theme <t>] [--id <id>]");
+            eprintln!("usage: scamp import <in.tscn> <out.lvl> [--theme <t>] [--id <id>]\n  (theme is auto-inferred from the scene if --theme is omitted; inheritance is resolved)");
             std::process::exit(2);
         }
     };
-    let theme = flag_value(args, "--theme").unwrap_or("overworld");
+    // `--theme` is now an optional override; without it the importer infers the
+    // theme from the scene (resolving inheritance) and falls back to a name guess.
+    let theme_override = flag_value(args, "--theme");
     // Default id from the output filename stem.
     let default_id = std::path::Path::new(output).file_stem().and_then(|s| s.to_str()).unwrap_or("level");
     let id = flag_value(args, "--id").unwrap_or(default_id);
 
-    let text = match std::fs::read_to_string(input) {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("import: cannot read {input}: {e}");
-            std::process::exit(2);
-        }
-    };
-    let imp = match scamper::level::import_tscn(&text, id, theme) {
+    let imp = match scamper::level::import_scene_file(std::path::Path::new(input), id, theme_override) {
         Ok(i) => i,
         Err(e) => {
             eprintln!("import: {input}: {e}");
@@ -122,8 +120,8 @@ fn run_import(args: &[String]) {
     }
     let l = &imp.level;
     eprintln!(
-        "imported {input} -> {output}: {}x{} tiles, {} tile-spans, {} entities, spawn {:?}, goal {}",
-        l.w, l.h, l.tiles.len(), l.entities.len(), l.spawn,
+        "imported {input} -> {output}: theme={}, {}x{} tiles, {} tile-spans, {} entities, spawn {:?}, goal {}",
+        l.theme, l.w, l.h, l.tiles.len(), l.entities.len(), l.spawn,
         l.goal.as_ref().map(|g| format!("({},{})", g.x, g.y)).unwrap_or_else(|| "none".into()),
     );
     for w in &imp.warnings {
@@ -316,6 +314,22 @@ fn load_level_file(path: &str) -> std::io::Result<Level> {
     Level::from_text(&std::fs::read_to_string(path)?)
 }
 
+/// The next `*.lvl` file (alphabetical) in the same directory as `current`, or
+/// `None` if `current` is the last one. Used to auto-advance on level completion.
+fn next_level_path(current: &str) -> Option<String> {
+    let p = std::path::Path::new(current);
+    let dir = p.parent()?;
+    let curname = p.file_name()?;
+    let mut sibs: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|q| q.extension().map(|x| x == "lvl").unwrap_or(false))
+        .collect();
+    sibs.sort();
+    let idx = sibs.iter().position(|q| q.file_name() == Some(curname))?;
+    sibs.get(idx + 1).map(|q| q.to_string_lossy().into_owned())
+}
+
 /// A fresh sim placing the player at `spawn` px (default ~1-tile hitbox).
 fn sim_at(spawn: (f64, f64)) -> Sim {
     Sim::new(Player::new(spawn.0, spawn.1), spawn)
@@ -344,6 +358,7 @@ fn run_play(path: &str) {
         }
     };
     let dir = std::path::Path::new(path).parent().map(|p| p.to_path_buf()).unwrap_or_default();
+    let mut cur_path = path.to_string();
 
     let guard = match terminal::TerminalGuard::enter() {
         Ok(g) => g,
@@ -367,6 +382,7 @@ fn run_play(path: &str) {
     let mut full_redraw = true;
     let mut pending_jump = false;
     let mut won = false;
+    let mut won_at: u64 = 0; // ns timestamp when the level was completed
 
     let spin = 1_000_000u64;
     let mut acc: u64 = 0;
@@ -434,11 +450,25 @@ fn run_play(path: &str) {
             sim = sim_at(world.spawn);
             full_redraw = true;
         }
-        // goal reached → level complete
-        if let Some((gx, _)) = world.goal {
-            if px + pw_ / 2.0 >= gx {
-                won = true;
+        // goal reached → level complete; after a short beat, auto-advance to the
+        // next sibling level (a debugging aid: walk the whole set without quitting).
+        if !won {
+            if let Some((gx, _)) = world.goal {
+                if px + pw_ / 2.0 >= gx {
+                    won = true;
+                    won_at = now;
+                }
             }
+        } else if now.saturating_sub(won_at) >= 700 * 1_000_000 {
+            if let Some((next, lvl)) = next_level_path(&cur_path).and_then(|p| load_level_file(&p).ok().map(|l| (p, l))) {
+                cur_path = next;
+                level = lvl;
+                world = LevelWorld::from_level(&level);
+                sim = sim_at(world.spawn);
+                won = false;
+                full_redraw = true;
+            }
+            // No next level → stay on the completed screen (q to quit).
         }
         // pipe warp: press down while standing on a warp with a destination
         if !won && (input.pressed(K_S) || input.pressed(K_DOWN)) {
@@ -457,7 +487,16 @@ fn run_play(path: &str) {
         let pcx = sim.player.pos.x + sim.player.w / 2.0;
         let pcy = sim.player.pos.y + sim.player.h / 2.0;
         let (cam_x, cam_y) = camera(pcx, pcy, fb_w as f64, fb_h as f64, world.px_w(), world.px_h());
-        let (cam_x, cam_y) = (cam_x.floor(), cam_y.floor());
+        let cpw = fb_w as f64 / cols.max(1) as f64; // px per terminal cell (w)
+        let cph = fb_h as f64 / rows.max(1) as f64; // px per terminal cell (h)
+        // Snap the camera so tiles always land on the same sample sub-grid. Pixel
+        // backends (Kitty) scroll per-pixel; cell-sampling backends must snap to a
+        // whole cell or static tiles flicker as you move (see Backend::pixel_exact).
+        let (cam_x, cam_y) = if backend.pixel_exact() {
+            (cam_x.floor(), cam_y.floor())
+        } else {
+            ((cam_x / cpw).floor() * cpw, (cam_y / cph).floor() * cph)
+        };
 
         fb.clear(pal.sky);
         let t = TILE as i32;
@@ -495,8 +534,6 @@ fn run_play(path: &str) {
             anim.frames[fi].iter().map(|s| s.to_string()).collect()
         };
         let fw = lines.iter().map(|l| l.chars().count()).max().unwrap_or(1) as f64;
-        let cpw = fb_w as f64 / cols.max(1) as f64; // px per terminal cell
-        let cph = fb_h as f64 / rows.max(1) as f64;
         let (mw, mh) = (fw * cpw, lines.len() as f64 * cph); // sprite footprint, px
         let cx = (sim.player.pos.x - cam_x) + sim.player.w / 2.0;
         let bottom = (sim.player.pos.y - cam_y) + sim.player.h;
@@ -537,7 +574,7 @@ fn render_play_status(buf: &mut String, level: &Level, st: State, backend: &str,
     use std::fmt::Write;
     let mut plain = String::new();
     if won {
-        let _ = write!(plain, "★ LEVEL COMPLETE — {} ★   gfx:{backend} · Tab gfx · q quit", level.id);
+        let _ = write!(plain, "★ LEVEL COMPLETE — {} ★   → next level…   gfx:{backend} · q quit", level.id);
     } else {
         let _ = write!(plain, "{}  [{}]  {}   A/D · jump · ↓ pipe · Tab gfx:{backend} · q quit", level.id, level.theme, state_letter(st));
     }

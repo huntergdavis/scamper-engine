@@ -1,31 +1,8 @@
-[package]
-name = "scamper"
-version = "0.1.0"
-edition = "2021"
-description = "A terminal 2D platformer engine rendering via the Kitty graphics protocol"
-license = "MIT OR Apache-2.0"
+[workspace]
+members = ["engine", "games/supermunchii"]
+resolver = "2"
 
-[lib]
-name = "scamper"
-path = "src/lib.rs"
-
-[[bin]]
-name = "scamp"
-path = "src/main.rs"
-
-# sprite-lab: standalone sprite/animation viewer built on the engine
-[[bin]]
-name = "sprite-lab"
-path = "src/sprite_lab.rs"
-
-# tile-lab: standalone tile-set viewer (the tile counterpart to sprite-lab)
-[[bin]]
-name = "tile-lab"
-path = "src/tile_lab.rs"
-
-[dependencies]
-libc = "0.2"
-
+# Profiles live in the workspace root (Cargo ignores them in member manifests).
 [profile.release]
 opt-level = 3
 lto = "thin"
