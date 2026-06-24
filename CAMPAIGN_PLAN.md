@@ -39,6 +39,14 @@
   camera to whole cells on non-pixel-exact backends — `Backend::pixel_exact`); added
   auto-advance to the next sibling level on completion (debugging aid). Crash
   debugging: panics now log message + backtrace to `scamp.log` (`dbg::install_panic_logger`).
+- **Sprite registry — item 3 (2026-06-24).** `engine/src/sprite.rs`: a `Sprite`
+  registry keyed by id (glyph-frame anims + per-glyph palette), generalizing
+  `munchii`. First originals authored: `boneling`, `rollo` (+curl), `kibble`,
+  `big_kibble`. Preview/lab wiring still TODO.
+- **Spawn fix + soak (2026-06-24).** `LevelWorld` lifts a spawn out of solid terrain
+  (imported Player-node Y lands on the ground surface → was starting embedded /
+  unplayable). Added `supermunchii soak [dir]` + walkthrough tests (hold right + jump,
+  all four backends): **all 306 imported levels pass with 0 crashes.**
 
 ## Next steps (pick up here)
 
