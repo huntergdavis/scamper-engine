@@ -8,19 +8,10 @@
 use scamper::backend::{AsciiBackend, Backend, KittyBackend, MonoBackend, Overlay, TextBackend};
 use scamper::framebuffer::{Framebuffer, Rgba};
 use scamper::input::{Input, K_ESC, K_Q, K_S, K_SPACE, K_TAB};
-use scamper::munchii::{self, Anim, ALL as MUNCHII};
+use scamper::sprite;
 use scamper::terminal;
 use scamper::time::{now_ns, sleep_until_ns, NS_PER_SEC};
 use std::io::Write;
-
-/// A named collection of animations (one character's sprite sheet).
-struct SpriteSet {
-    name: &'static str,
-    anims: &'static [Anim],
-}
-
-/// Everything the lab can show. Append sets here as the engine grows.
-const SETS: &[SpriteSet] = &[SpriteSet { name: "munchii", anims: MUNCHII }];
 
 const BG: Rgba = Rgba::rgb(18, 18, 26);
 
@@ -62,8 +53,8 @@ fn next_backend(name: &str) -> Box<dyn Backend> {
 }
 
 /// Rasterize a sprite frame into the framebuffer (pixel tiers): each glyph a
-/// cell-sized block in its beagle color, top-left at (`lx`,`ly`) px.
-fn rasterize(fb: &mut Framebuffer, frame: &[&str], lx: f64, ly: f64, cpw: f64, cph: f64) {
+/// cell-sized block in its sprite's color, top-left at (`lx`,`ly`) px.
+fn rasterize(fb: &mut Framebuffer, frame: &[&str], lx: f64, ly: f64, cpw: f64, cph: f64, palette: fn(char) -> (u8, u8, u8)) {
     let bw = cpw.ceil() as i32;
     let bh = cph.ceil() as i32;
     for (gr, line) in frame.iter().enumerate() {
@@ -71,7 +62,7 @@ fn rasterize(fb: &mut Framebuffer, frame: &[&str], lx: f64, ly: f64, cpw: f64, c
             if ch == ' ' {
                 continue;
             }
-            let (r, g, b) = munchii::beagle_rgb(ch);
+            let (r, g, b) = palette(ch);
             let px = (lx + gc as f64 * cpw).round() as i32;
             let py = (ly + gr as f64 * cph).round() as i32;
             fb.fill_rect(px, py, bw, bh, Rgba::rgb(r, g, b));
@@ -123,14 +114,14 @@ fn main() {
             backend = next_backend(backend.name());
             full = true;
         }
-        if input.pressed(K_S) && SETS.len() > 1 {
-            si = (si + 1) % SETS.len();
+        if input.pressed(K_S) && sprite::ALL.len() > 1 {
+            si = (si + 1) % sprite::ALL.len();
             ai = 0;
             fi = 0;
             last = now_ns();
         }
         if input.pressed(K_SPACE) {
-            ai = (ai + 1) % SETS[si].anims.len();
+            ai = (ai + 1) % sprite::ALL[si].anims.len();
             fi = 0;
             last = now_ns();
         }
@@ -145,7 +136,7 @@ fn main() {
             full = true;
         }
 
-        let set = &SETS[si];
+        let set = &sprite::ALL[si];
         let anim = &set.anims[ai];
         let now = now_ns();
         if anim.frames.is_empty() {
@@ -169,12 +160,12 @@ fn main() {
         fb.clear(BG);
         if backend.draws_overlay() {
             let lines: Vec<String> = frame.iter().map(|s| s.to_string()).collect();
-            let ov = [Overlay { lines: &lines, col: col0, row: row0, tint: None, palette: None, z: 0 }];
+            let ov = [Overlay { lines: &lines, col: col0, row: row0, tint: None, palette: Some(set.palette), z: 0 }];
             backend.present(&mut out, &fb, stage.cols, stage.play_rows, full, &ov);
         } else {
             let cpw = stage.fb_w as f64 / cols.max(1) as f64;
             let cph = stage.fb_h as f64 / prows.max(1) as f64;
-            rasterize(&mut fb, frame, col0 as f64 * cpw, row0 as f64 * cph, cpw, cph);
+            rasterize(&mut fb, frame, col0 as f64 * cpw, row0 as f64 * cph, cpw, cph, set.palette);
             backend.present(&mut out, &fb, stage.cols, stage.play_rows, full, &[]);
         }
         full = false;
@@ -184,7 +175,7 @@ fn main() {
         let _ = write!(
             status,
             "\x1b[{};1H\x1b[2K\x1b[2mSPRITE LAB  {}/{}  ({}f @ {}fps)  gfx:{}   \x1b[4mTab\x1b[24m gfx  space anim  q quit\x1b[0m",
-            stage.play_rows + 1, set.name, anim.name, anim.frames.len(), anim.fps, backend.name()
+            stage.play_rows + 1, set.id, anim.name, anim.frames.len(), anim.fps, backend.name()
         );
         {
             let mut o = std::io::stdout().lock();
