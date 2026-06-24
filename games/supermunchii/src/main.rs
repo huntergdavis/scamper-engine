@@ -459,11 +459,15 @@ fn run_play(path: &str) {
                 pending_jump = false;
                 sim.step(&world.map, inp);
                 // Step creatures/items and resolve pounces, pickups, and hits.
-                let hurt = step_actors(&mut actors, &world.map, &mut sim.player, &mut kibble, &mut power);
+                let hits = step_actors(&mut actors, &world.map, &mut sim.player, &mut kibble, &mut power);
                 step_projectiles(&mut projectiles, &mut actors, &world.map, &mut kibble);
+                if hits.plug && !won {
+                    won = true; // pulled the bath plug → level complete
+                    won_at = now;
+                }
                 if invuln > 0 {
                     invuln -= 1;
-                } else if hurt {
+                } else if hits.hurt {
                     if power == Power::Small {
                         sim = sim_at(world.spawn); // wipeout → back to spawn
                     } else {
@@ -593,8 +597,10 @@ fn is_flyer(kind: &str) -> bool {
 /// Game design: pick a gait/size for an entity kind. `_sun` (red) ground variants
 /// stay on ledges; air/water kinds fly; the rest wander.
 fn gait_for(kind: &str, item: bool) -> (Gait, f64, f64, f64) {
-    if item {
-        (Gait::Still, 0.0, 12.0, 12.0)
+    if item || kind == "bath_plug" || kind == "rescued_pup" {
+        (Gait::Still, 0.0, 12.0, 12.0) // inert: items, the plug, a rescued pup
+    } else if kind == "baron_whiskers" {
+        (Gait::Wander, 0.5, 22.0, 26.0) // the boss: a big box that paces the ledge
     } else if is_flyer(kind) {
         (Gait::Fly, 0.7, 12.0, 12.0)
     } else if kind.ends_with("_sun") {
@@ -645,12 +651,19 @@ const POUNCE_BOUNCE: f64 = -220.0;
 /// Step every actor one tick and resolve player↔actor collisions. Returns true if
 /// the player took a non-pounce creature hit. On a pounce the creature pops (into
 /// a treat) and the player gets a bounce; items collect into `kibble`.
-fn step_actors(actors: &mut [Actor], map: &TileMap, player: &mut Player, kibble: &mut u32, power: &mut Power) -> bool {
+/// What the player touched this tick.
+#[derive(Default)]
+struct Hits {
+    hurt: bool, // a non-pounce creature touch
+    plug: bool, // pulled the bath plug → win
+}
+
+fn step_actors(actors: &mut [Actor], map: &TileMap, player: &mut Player, kibble: &mut u32, power: &mut Power) -> Hits {
     for a in actors.iter_mut() {
         a.mob.step(map);
     }
     let (px, py, pw, ph, pvy) = (player.pos.x, player.pos.y, player.w, player.h, player.vel.y);
-    let mut hurt = false;
+    let mut hits = Hits::default();
     for a in actors.iter_mut() {
         if !a.mob.alive {
             continue;
@@ -659,23 +672,43 @@ fn step_actors(actors: &mut [Actor], map: &TileMap, player: &mut Player, kibble:
         if !aabb_overlap(px, py, pw, ph, bx, by, bw, bh) {
             continue;
         }
-        if a.item {
-            a.mob.alive = false;
-            match a.kind.as_str() {
-                // Big Kibble grows a small Munchii; if already big it's just treats.
-                "big_kibble" => *power = if *power == Power::Small { Power::Big } else { *power },
-                "bubble_bone" => *power = Power::Bubble, // gear up to lob Sudsballs
-                _ => *kibble += 1,
+        match a.kind.as_str() {
+            // Pull the plug → the bath drains and Baron Whiskers drops in: level won.
+            "bath_plug" => hits.plug = true,
+            // The boss can't be pounced away — a bonk just grumps him; a touch hurts.
+            "baron_whiskers" => {
+                if stomp(px, py, pw, ph, pvy, bx, by, bw, bh) {
+                    player.vel.y = POUNCE_BOUNCE;
+                } else {
+                    hits.hurt = true;
+                }
             }
-        } else if stomp(px, py, pw, ph, pvy, bx, by, bw, bh) {
-            a.mob.alive = false; // pops into a treat
-            *kibble += 2;
-            player.vel.y = POUNCE_BOUNCE;
-        } else {
-            hurt = true;
+            // Big Kibble grows a small Munchii; Bubble Bone gears up; else treats.
+            "big_kibble" if a.item => {
+                a.mob.alive = false;
+                *power = if *power == Power::Small { Power::Big } else { *power };
+            }
+            "bubble_bone" if a.item => {
+                a.mob.alive = false;
+                *power = Power::Bubble;
+            }
+            _ if a.item => {
+                a.mob.alive = false;
+                *kibble += 1;
+            }
+            // A normal creature: pounce pops it into a treat; a side touch hurts.
+            _ => {
+                if stomp(px, py, pw, ph, pvy, bx, by, bw, bh) {
+                    a.mob.alive = false;
+                    *kibble += 2;
+                    player.vel.y = POUNCE_BOUNCE;
+                } else {
+                    hits.hurt = true;
+                }
+            }
         }
     }
-    hurt
+    hits
 }
 
 /// Draw one play frame — the camera window of tiles, the goal post, the live

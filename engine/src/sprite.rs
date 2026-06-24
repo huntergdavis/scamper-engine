@@ -49,6 +49,8 @@ pub const ALL: &[Sprite] = &[
     Sprite { id: "kibble", role: Role::Item, w: 4, h: 2, anims: KIBBLE, palette: kibble_rgb },
     Sprite { id: "big_kibble", role: Role::Item, w: 6, h: 3, anims: BIG_KIBBLE, palette: kibble_rgb },
     Sprite { id: "sudsball", role: Role::Item, w: 3, h: 1, anims: SUDSBALL, palette: suds_rgb },
+    Sprite { id: "baron_whiskers", role: Role::Creature, w: 8, h: 4, anims: BARON, palette: baron_rgb },
+    Sprite { id: "bath_plug", role: Role::Item, w: 3, h: 2, anims: BATH_PLUG, palette: plug_rgb },
 ];
 
 /// Look up a sprite by id (the IR entity `kind`), if registered.
@@ -87,6 +89,22 @@ fn suds_rgb(ch: char) -> (u8, u8, u8) {
     match ch {
         'O' => (235, 245, 255), // highlight
         _ => (190, 220, 245),   // bubble
+    }
+}
+
+/// Baron Whiskers: a grumpy gray tomcat, dark scowling eyes.
+fn baron_rgb(ch: char) -> (u8, u8, u8) {
+    match ch {
+        '>' | '<' => (24, 22, 28), // scowling eyes
+        _ => (140, 138, 150),      // fur
+    }
+}
+
+/// Bath plug: dark rubber stopper on a gray chain.
+fn plug_rgb(ch: char) -> (u8, u8, u8) {
+    match ch {
+        'O' => (54, 50, 50),  // rubber stopper
+        _ => (158, 158, 168), // chain
     }
 }
 
@@ -135,6 +153,18 @@ const BIG_KIBBLE: &[Anim] = &[Anim { name: "idle", fps: 3, frames: BIG_KIBBLE_ID
 // Sudsball — a little soap bubble Munchii lobs in his bubble gear.
 const SUDSBALL_IDLE: &[&[&str]] = &[&["(o)"], &["(O)"]];
 const SUDSBALL: &[Anim] = &[Anim { name: "fly", fps: 10, frames: SUDSBALL_IDLE }];
+
+// Baron Whiskers — a giant grumpy tomcat boss who paces the tub ledge. Paws
+// shuffle as he paces (the only way to "beat" him is to pull the bath plug).
+const BARON_WALK: &[&[&str]] = &[
+    &[" /\\_/\\  ", "( >_< ) ", "(_____) ", " U    U "],
+    &[" /\\_/\\  ", "( >_< ) ", "(_____) ", "  U  U  "],
+];
+const BARON: &[Anim] = &[Anim { name: "walk", fps: 4, frames: BARON_WALK }];
+
+// Bath plug — the "axe": a rubber stopper on a chain. Reach it to win.
+const BATH_PLUG_IDLE: &[&[&str]] = &[&[" O ", "/|\\"]];
+const BATH_PLUG: &[Anim] = &[Anim { name: "idle", fps: 1, frames: BATH_PLUG_IDLE }];
 
 #[cfg(test)]
 mod tests {
