@@ -378,6 +378,7 @@ fn run_play(path: &str) {
     let mut sim = sim_at(world.spawn);
     let mut actors = build_actors(&world);
     let mut kibble: u32 = 0;
+    let mut power = Power::Small;
     let mut invuln: u32 = 0; // ticks of post-hit invulnerability
 
     let (mut fb_w, mut fb_h, mut cols, mut rows) = play_view(terminal::query_winsize());
@@ -444,11 +445,15 @@ fn run_play(path: &str) {
                 pending_jump = false;
                 sim.step(&world.map, inp);
                 // Step creatures/items and resolve pounces, pickups, and hits.
-                let hurt = step_actors(&mut actors, &world.map, &mut sim.player, &mut kibble);
+                let hurt = step_actors(&mut actors, &world.map, &mut sim.player, &mut kibble, &mut power);
                 if invuln > 0 {
                     invuln -= 1;
                 } else if hurt {
-                    sim = sim_at(world.spawn);
+                    if power == Power::Small {
+                        sim = sim_at(world.spawn); // wipeout → back to spawn
+                    } else {
+                        power = power.dropped(); // shed a tier of gear
+                    }
                     invuln = 90; // ~1.5s of grace so you don't re-hit instantly
                     full_redraw = true;
                 }
@@ -480,6 +485,7 @@ fn run_play(path: &str) {
                 world = LevelWorld::from_level(&level);
                 sim = sim_at(world.spawn);
                 actors = build_actors(&world);
+                power = Power::Small;
                 won = false;
                 full_redraw = true;
             }
@@ -493,6 +499,7 @@ fn run_play(path: &str) {
                     world = LevelWorld::from_level(&level);
                     sim = sim_at(spawn);
                     actors = build_actors(&world);
+                    power = Power::Small;
                     full_redraw = true;
                 }
             }
@@ -501,7 +508,7 @@ fn run_play(path: &str) {
         // --- render the camera window (shared with the headless soak harness) ---
         draw_play_frame(&mut fb, backend.as_mut(), &mut out, &world, &sim, &actors, fb_w, fb_h, cols, rows, full_redraw, input.down_held());
         full_redraw = false;
-        render_play_status(&mut status, &level, sim.player.state, backend.name(), won, kibble, rows + 1, cols);
+        render_play_status(&mut status, &level, sim.player.state, backend.name(), won, kibble, power, rows + 1, cols);
         {
             let mut o = std::io::stdout().lock();
             let _ = o.write_all(&out);
@@ -518,6 +525,33 @@ fn run_play(path: &str) {
     }
     drop(guard);
     eprintln!("scamp: play done.");
+}
+
+/// Munchii's power tier (gear, not damage): small → big (took a Big Kibble) →
+/// bubble (a Bubble Bone — can lob Sudsballs). A hit drops one tier; a hit while
+/// small is a wipeout (respawn). Mirrors the classic three-tier model.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Power {
+    Small,
+    Big,
+    Bubble,
+}
+
+impl Power {
+    /// The tier after taking a hit (Bubble→Big→Small).
+    fn dropped(self) -> Power {
+        match self {
+            Power::Bubble => Power::Big,
+            _ => Power::Small,
+        }
+    }
+    fn label(self) -> &'static str {
+        match self {
+            Power::Small => "small",
+            Power::Big => "big",
+            Power::Bubble => "bubble",
+        }
+    }
 }
 
 /// A live creature or item in the level: an engine [`Mob`] plus the game meaning
@@ -561,7 +595,7 @@ const POUNCE_BOUNCE: f64 = -220.0;
 /// Step every actor one tick and resolve player↔actor collisions. Returns true if
 /// the player took a non-pounce creature hit. On a pounce the creature pops (into
 /// a treat) and the player gets a bounce; items collect into `kibble`.
-fn step_actors(actors: &mut [Actor], map: &TileMap, player: &mut Player, kibble: &mut u32) -> bool {
+fn step_actors(actors: &mut [Actor], map: &TileMap, player: &mut Player, kibble: &mut u32, power: &mut Power) -> bool {
     for a in actors.iter_mut() {
         a.mob.step(map);
     }
@@ -577,7 +611,12 @@ fn step_actors(actors: &mut [Actor], map: &TileMap, player: &mut Player, kibble:
         }
         if a.item {
             a.mob.alive = false;
-            *kibble += if a.kind == "big_kibble" { 10 } else { 1 };
+            match a.kind.as_str() {
+                // Big Kibble grows a small Munchii; if already big it's just treats.
+                "big_kibble" => *power = if *power == Power::Small { Power::Big } else { *power },
+                "bubble_bone" => *power = Power::Bubble, // gear up to lob Sudsballs
+                _ => *kibble += 1,
+            }
         } else if stomp(px, py, pw, ph, pvy, bx, by, bw, bh) {
             a.mob.alive = false; // pops into a treat
             *kibble += 2;
@@ -774,6 +813,7 @@ fn soak_level(path: &str, ticks: u64) -> Result<(), String> {
     let mut sim = sim_at(world.spawn);
     let mut actors = build_actors(&world);
     let mut kibble = 0u32;
+    let mut power = Power::Small;
     let ws = terminal::WinSize { cols: 80, rows: 24, xpix: 640, ypix: 384 };
     let (fb_w, fb_h, cols, rows) = play_view(ws);
     let mut fb = Framebuffer::new(fb_w, fb_h);
@@ -785,7 +825,7 @@ fn soak_level(path: &str, ticks: u64) -> Result<(), String> {
         // Hold right; tap jump on a ~18-tick cadence (held ~10) to clear gaps.
         let inp = InputFrame { axis_x: 1, jump_pressed: tick % 18 == 0, jump_held: tick % 18 < 10, down_held: false };
         sim.step(&world.map, inp);
-        let _ = step_actors(&mut actors, &world.map, &mut sim.player, &mut kibble);
+        let _ = step_actors(&mut actors, &world.map, &mut sim.player, &mut kibble, &mut power);
         let (px, py, pw, ph) = (sim.player.pos.x, sim.player.pos.y, sim.player.w, sim.player.h);
         if world.hazard_overlap(px, py, pw, ph) {
             sim = sim_at(world.spawn);
@@ -799,13 +839,13 @@ fn soak_level(path: &str, ticks: u64) -> Result<(), String> {
     Ok(())
 }
 
-fn render_play_status(buf: &mut String, level: &Level, st: State, backend: &str, won: bool, kibble: u32, rows: u16, cols: u16) {
+fn render_play_status(buf: &mut String, level: &Level, st: State, backend: &str, won: bool, kibble: u32, power: Power, rows: u16, cols: u16) {
     use std::fmt::Write;
     let mut plain = String::new();
     if won {
         let _ = write!(plain, "★ LEVEL COMPLETE — {} ★   kibble:{kibble}   → next level…   gfx:{backend} · q quit", level.id);
     } else {
-        let _ = write!(plain, "{}  [{}]  {}  kibble:{kibble}   A/D · jump · ↓ pipe · Tab gfx:{backend} · q quit", level.id, level.theme, state_letter(st));
+        let _ = write!(plain, "{}  [{}]  {}  kibble:{kibble} {}   A/D · jump · ↓ pipe · Tab gfx:{backend} · q quit", level.id, level.theme, state_letter(st), power.label());
     }
     let maxw = (cols as usize).saturating_sub(1);
     if plain.len() > maxw {
