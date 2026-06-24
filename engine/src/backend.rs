@@ -26,7 +26,11 @@ pub struct Overlay<'a> {
     pub lines: &'a [String],
     pub col: i32,
     pub row: i32,
+    /// Uniform color for every glyph in this layer (effects use this).
     pub tint: Option<(u8, u8, u8)>,
+    /// Per-glyph palette (a sprite's own colors). Used when `tint` is `None`;
+    /// if both are `None` the colored backends fall back to Munchii's beagle palette.
+    pub palette: Option<fn(char) -> (u8, u8, u8)>,
     pub z: i32,
 }
 
@@ -47,15 +51,22 @@ impl Overlay<'_> {
     }
 }
 
-/// Highest-z glyph (+ its layer tint) covering cell (cx, cy), or None. Layers
-/// always cover the framebuffer scene, so any overlay draws over walls; `z`
-/// only orders the overlays against each other.
-fn top_glyph(overlays: &[Overlay], cx: usize, cy: usize) -> Option<(char, Option<(u8, u8, u8)>)> {
+/// Highest-z glyph (+ its resolved color) covering cell (cx, cy), or None. Layers
+/// always cover the framebuffer scene, so any overlay draws over walls; `z` only
+/// orders the overlays against each other. Color precedence: the layer's uniform
+/// `tint`, else its per-glyph `palette`, else Munchii's beagle palette.
+fn top_glyph(overlays: &[Overlay], cx: usize, cy: usize) -> Option<(char, (u8, u8, u8))> {
     overlays
         .iter()
-        .filter_map(|o| o.at(cx, cy).map(|g| (o.z, g, o.tint)))
+        .filter_map(|o| o.at(cx, cy).map(|g| (o.z, g, o)))
         .max_by_key(|(z, _, _)| *z)
-        .map(|(_, g, t)| (g, t))
+        .map(|(_, g, o)| {
+            let col = o
+                .tint
+                .or_else(|| o.palette.map(|p| p(g)))
+                .unwrap_or_else(|| crate::munchii::beagle_rgb(g));
+            (g, col)
+        })
 }
 
 pub trait Backend {
@@ -320,8 +331,7 @@ impl Backend for AsciiBackend {
                 // it covers a cell: effects use their tint, Munchii his beagle
                 // palette; otherwise the brightness-ramped scene.
                 let (glyph, col): (char, (u8, u8, u8)) = match top_glyph(overlays, cx, cy) {
-                    Some((g, Some(t))) => (g, t),
-                    Some((g, None)) => (g, crate::munchii::beagle_rgb(g)),
+                    Some((g, col)) => (g, col),
                     None => {
                         let c = sample(fb, cx, cy, cw, ch);
                         (ramp_glyph(RAMP_FINE, luma(c)) as char, c)
@@ -487,7 +497,7 @@ mod tests {
     #[test]
     fn overlay_stamps_munchii_over_the_scene() {
         let lines = ["@b".to_string(), "c .".to_string()];
-        let ov = [Overlay { lines: &lines, col: 1, row: 0, tint: None, z: 0 }];
+        let ov = [Overlay { lines: &lines, col: 1, row: 0, tint: None, palette: None, z: 0 }];
         let mut fb = Framebuffer::new(8, 8);
         fb.clear(Rgba::rgb(0, 0, 0));
         // mono: the sprite glyphs appear (transparent spaces don't erase)
@@ -509,8 +519,8 @@ mod tests {
         let player = ["X".to_string()];
         let fx = ["E".to_string()];
         let ovs = [
-            Overlay { lines: &player, col: 0, row: 0, tint: None, z: 0 },
-            Overlay { lines: &fx, col: 0, row: 0, tint: Some((9, 8, 7)), z: 5 },
+            Overlay { lines: &player, col: 0, row: 0, tint: None, palette: None, z: 0 },
+            Overlay { lines: &fx, col: 0, row: 0, tint: Some((9, 8, 7)), palette: None, z: 5 },
         ];
         let mut fb = Framebuffer::new(4, 4);
         fb.clear(Rgba::rgb(0, 0, 0));

@@ -556,6 +556,32 @@ fn draw_play_frame(
         fb.fill_rect(sx, 0, 2, fb_h as i32, Rgba::rgb(235, 235, 245));
         fb.fill_rect(sx - 7, (gy - cam_y) as i32, 7, 5, Rgba::rgb(232, 84, 84));
     }
+    // Build the on-screen sprites: world entities (creatures / items) first, then
+    // Munchii on top. Each carries its own palette so the colored tiers draw it in
+    // its own colors. A sprite = (glyph rows, top-left px, palette).
+    type Drawable = (Vec<String>, f64, f64, fn(char) -> (u8, u8, u8));
+    let mut sprites: Vec<Drawable> = Vec::new();
+
+    for e in &world.ents {
+        let sp = match scamper::sprite::get(&e.kind) {
+            Some(s) => s,
+            None => continue, // a kind we haven't authored a sprite for yet
+        };
+        let ex = (e.cx as f64 + 0.5) * TILE; // entity center-x, world px
+        if ex < cam_x - TILE || ex > cam_x + fb_w as f64 + TILE {
+            continue; // cull off-screen
+        }
+        let a = sp.anim("walk");
+        let n = a.frames.len().max(1);
+        let fi = (sim.clock() / (NS_PER_SEC / a.fps.max(1) as u64)) as usize % n;
+        let elines: Vec<String> = a.frames[fi].iter().map(|s| s.to_string()).collect();
+        let efw = elines.iter().map(|l| l.chars().count()).max().unwrap_or(1) as f64;
+        let (emw, emh) = (efw * cpw, elines.len() as f64 * cph);
+        let elx = (ex - cam_x) - emw / 2.0;
+        let ely = ((e.cy as f64 + 1.0) * TILE - cam_y) - emh; // feet on the cell's bottom edge
+        sprites.push((elines, elx, ely, sp.palette));
+    }
+
     // Munchii himself, centered on the hitbox with his feet on its bottom edge.
     let anim = munchii::anim(pose_for(&sim.player, down_held));
     let n = anim.frames.len().max(1);
@@ -574,17 +600,28 @@ fn draw_play_frame(
     let (mw, mh) = (fw * cpw, lines.len() as f64 * cph); // sprite footprint, px
     let cx = (sim.player.pos.x - cam_x) + sim.player.w / 2.0;
     let bottom = (sim.player.pos.y - cam_y) + sim.player.h;
-    let (lx, ly) = (cx - mw / 2.0, bottom - mh);
+    sprites.push((lines, cx - mw / 2.0, bottom - mh, munchii::beagle_rgb as fn(char) -> (u8, u8, u8)));
 
     if backend.draws_overlay() {
-        // character tiers: stamp Munchii's glyphs (one per cell) over the tiles
-        let col = (lx / cpw).round() as i32;
-        let row = (ly / cph).round() as i32;
-        let ov = [Overlay { lines: &lines, col, row, tint: None, z: 0 }];
-        backend.present(out, fb, cols, rows, full_redraw, &ov);
+        // character tiers: stamp each sprite's glyphs (one per cell) over the scene
+        let overlays: Vec<Overlay> = sprites
+            .iter()
+            .enumerate()
+            .map(|(i, (lns, lx, ly, pal))| Overlay {
+                lines: lns,
+                col: (lx / cpw).round() as i32,
+                row: (ly / cph).round() as i32,
+                tint: None,
+                palette: Some(*pal),
+                z: i as i32,
+            })
+            .collect();
+        backend.present(out, fb, cols, rows, full_redraw, &overlays);
     } else {
-        // pixel tiers: rasterize him into the framebuffer in his beagle colors
-        draw_sprite_pixels(fb, &lines, lx, ly, cpw, cph);
+        // pixel tiers: rasterize each sprite into the framebuffer in its colors
+        for (lns, lx, ly, pal) in &sprites {
+            draw_sprite_pixels(fb, lns, *lx, *ly, cpw, cph, *pal);
+        }
         backend.present(out, fb, cols, rows, full_redraw, &[]);
     }
 }
@@ -784,6 +821,7 @@ fn run_shot() {
         col: box_left + (munchii::W as i32 - fw) / 2,
         row: box_top,
         tint: None,
+        palette: None,
         z: 0,
     }];
     print!("{}", scamper::backend::mono_text(&fb, cols, disp_rows, &ov));
@@ -1038,13 +1076,13 @@ fn render(fb: &mut Framebuffer, map: &TileMap, rpos: Vec2, player: &Player) {
 /// Rasterize Munchii's sprite into the framebuffer (the pixel tiers' version of
 /// the character): each glyph becomes a cell-sized block in its beagle color,
 /// top-left at (`lx`,`ly`) px. Matches what mono/ascii stamp as the overlay.
-fn draw_sprite_pixels(fb: &mut Framebuffer, lines: &[String], lx: f64, ly: f64, cpw: f64, cph: f64) {
+fn draw_sprite_pixels(fb: &mut Framebuffer, lines: &[String], lx: f64, ly: f64, cpw: f64, cph: f64, palette: fn(char) -> (u8, u8, u8)) {
     for (gr, line) in lines.iter().enumerate() {
         for (gc, ch) in line.chars().enumerate() {
             if ch == ' ' {
                 continue;
             }
-            let (r, g, b) = munchii::beagle_rgb(ch);
+            let (r, g, b) = palette(ch);
             cell_block(fb, lx, ly, gc, gr, cpw, cph, Rgba::rgb(r, g, b));
         }
     }
@@ -1183,9 +1221,9 @@ fn present_scene(
     if backend.draws_overlay() {
         let fxr = fx_overlays_cells(arena, sim, clock);
         let mut overlays: Vec<Overlay> = Vec::with_capacity(1 + fxr.len());
-        overlays.push(Overlay { lines: &lines, col: pcol, row: prow, tint: None, z: 0 });
+        overlays.push(Overlay { lines: &lines, col: pcol, row: prow, tint: None, palette: None, z: 0 });
         for (fl, tint, z, col, row) in &fxr {
-            overlays.push(Overlay { lines: fl, col: *col, row: *row, tint: Some(*tint), z: *z });
+            overlays.push(Overlay { lines: fl, col: *col, row: *row, tint: Some(*tint), palette: None, z: *z });
         }
         backend.present(out, fb, arena.cols, disp_rows, full_redraw, &overlays);
     } else {
@@ -1197,7 +1235,7 @@ fn present_scene(
                 draw_effect_pixels(fb, frame, tint, x, y, cpw, cph);
             }
         }
-        draw_sprite_pixels(fb, &lines, pcol as f64 * cpw, prow as f64 * cph, cpw, cph);
+        draw_sprite_pixels(fb, &lines, pcol as f64 * cpw, prow as f64 * cph, cpw, cph, munchii::beagle_rgb);
         for &(frame, tint, z, x, y) in &fxr {
             if z >= 0 {
                 draw_effect_pixels(fb, frame, tint, x, y, cpw, cph);
@@ -1216,9 +1254,9 @@ fn snapshot_text(fb: &mut Framebuffer, arena: &Arena, sim: &Sim) -> String {
     let (lines, pcol, prow) = munchii_overlay(arena, sim, sim.player.pos, clock);
     let fxr = fx_overlays_cells(arena, sim, clock);
     let mut overlays: Vec<Overlay> = Vec::with_capacity(1 + fxr.len());
-    overlays.push(Overlay { lines: &lines, col: pcol, row: prow, tint: None, z: 0 });
+    overlays.push(Overlay { lines: &lines, col: pcol, row: prow, tint: None, palette: None, z: 0 });
     for (fl, tint, z, col, row) in &fxr {
-        overlays.push(Overlay { lines: fl, col: *col, row: *row, tint: Some(*tint), z: *z });
+        overlays.push(Overlay { lines: fl, col: *col, row: *row, tint: Some(*tint), palette: None, z: *z });
     }
     let cols = arena.cols as usize;
     let disp_rows = arena.rows.saturating_sub(1) as usize;

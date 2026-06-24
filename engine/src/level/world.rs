@@ -24,10 +24,21 @@ pub struct Warp {
     pub target: Option<String>,
 }
 
+/// A non-tile entity placed in the world (creature / item / power-up), at a tile
+/// cell. Rendered from the sprite registry by id; behavior (walk/turn, collect,
+/// pounce) comes in a later milestone.
+#[derive(Clone, Debug)]
+pub struct Ent {
+    pub kind: String,
+    pub cx: i32,
+    pub cy: i32,
+}
+
 pub struct LevelWorld {
     pub map: TileMap,                // solid cells, drives Player::step
     pub hazard: HashSet<(i32, i32)>, // cells that kill on contact
     pub kinds: HashMap<(i32, i32), TileKind>, // per-cell kind, for rendering
+    pub ents: Vec<Ent>,              // creatures / items, drawn from the sprite registry
     pub w: i32,
     pub h: i32,
     pub spawn: (f64, f64), // px (top-left of the player box)
@@ -63,6 +74,7 @@ impl LevelWorld {
 
         // Interactive blocks are IR entities, not tiles, but they're solid.
         let mut warps = Vec::new();
+        let mut ents = Vec::new();
         for e in &lvl.entities {
             match e.kind.as_str() {
                 "question" | "brick" => {
@@ -76,7 +88,9 @@ impl LevelWorld {
                     cy: e.y,
                     target: e.prop("warp").or_else(|| e.prop("to")).map(|s| s.to_string()),
                 }),
-                _ => {}
+                // Everything else (creatures, items, power-ups) is a renderable
+                // entity; the runtime draws whatever the sprite registry knows.
+                _ => ents.push(Ent { kind: e.kind.clone(), cx: e.x, cy: e.y }),
             }
         }
 
@@ -84,7 +98,7 @@ impl LevelWorld {
         map.spawn = spawn;
         let goal = lvl.goal.as_ref().map(|g| (g.x as f64 * TILE, g.y as f64 * TILE));
 
-        LevelWorld { map, hazard, kinds, w, h, spawn, goal, warps, theme: Theme::from_str(&lvl.theme) }
+        LevelWorld { map, hazard, kinds, ents, w, h, spawn, goal, warps, theme: Theme::from_str(&lvl.theme) }
     }
 
     /// The tile kind drawn at cell (x,y), if any (for rendering).

@@ -169,7 +169,7 @@ fn main() {
         fb.clear(BG);
         if backend.draws_overlay() {
             let lines: Vec<String> = frame.iter().map(|s| s.to_string()).collect();
-            let ov = [Overlay { lines: &lines, col: col0, row: row0, tint: None, z: 0 }];
+            let ov = [Overlay { lines: &lines, col: col0, row: row0, tint: None, palette: None, z: 0 }];
             backend.present(&mut out, &fb, stage.cols, stage.play_rows, full, &ov);
         } else {
             let cpw = stage.fb_w as f64 / cols.max(1) as f64;
