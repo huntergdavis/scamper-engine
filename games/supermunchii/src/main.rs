@@ -1668,8 +1668,16 @@ fn draw_play_frame(
         if exw < cam_x - TILE || exw > cam_x + view_w as f64 + TILE {
             continue; // cull off-screen
         }
-        // A curled rollo shows its "curl" frames (falls back to "walk" if none).
-        let an = sp.anim(if a.mode == Mode::Walk { "walk" } else { "curl" });
+        // A curled rollo shows its "curl" frames; a frozen (watched) haunt its
+        // eyes-shut "shy" frames; otherwise the walk cycle. (Each falls back to walk.)
+        let anim_name = if a.kind == "haunt" && a.mob.speed == 0.0 {
+            "shy"
+        } else if a.mode == Mode::Walk {
+            "walk"
+        } else {
+            "curl"
+        };
+        let an = sp.anim(anim_name);
         let n = an.frames.len().max(1);
         let fi = (sim.clock() / (NS_PER_SEC / an.fps.max(1) as u64)) as usize % n;
         // Creatures face their walk direction; items don't flip.

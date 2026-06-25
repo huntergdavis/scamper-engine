@@ -370,7 +370,9 @@ const CHASER: &[Anim] = &[Anim { name: "walk", fps: 10, frames: CHASER_F }];
 // Haunt — a shy ghost. Domed sheet with a wavy hem and round eyes; the hem ripples
 // between frames so it reads as floating.
 const HAUNT_F: &[&[&str]] = &[&[" __ ", "(oo)", "wwww"], &[" __ ", "(oo)", "}{}{"]];
-const HAUNT: &[Anim] = &[Anim { name: "walk", fps: 4, frames: HAUNT_F }];
+// "shy": eyes squeezed shut (-- ) while Munchii is watching — telegraphs the freeze.
+const HAUNT_SHY: &[&[&str]] = &[&[" __ ", "(--)", "wwww"]];
+const HAUNT: &[Anim] = &[Anim { name: "walk", fps: 4, frames: HAUNT_F }, Anim { name: "shy", fps: 2, frames: HAUNT_SHY }];
 
 const HARDHAT_F: &[&[&str]] = &[&["/####\\", "(o)(o)"]];
 const HARDHAT: &[Anim] = &[Anim { name: "walk", fps: 4, frames: HARDHAT_F }];
