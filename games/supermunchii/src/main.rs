@@ -947,6 +947,13 @@ fn run_play(path: &str) {
                 let card = format!(" {} — {} ", level.id, level.theme);
                 scamper::ui::center_card(&mut status, cols, (rows / 2).max(1), &[&card], true);
             }
+            // Game-over card during the brief hold before returning to the menu.
+            if game_over {
+                let l0 = "  ✗  GAME OVER  ✗  ".to_string();
+                let l1 = format!("  kibble {kibble}  ·  back to menu…  ");
+                scamper::ui::center_card(&mut status, cols, (rows / 2).saturating_sub(1).max(1), &[&l0, &l1], true);
+                full_redraw = true;
+            }
             // Results card on level clear: kibble collected, time, and a star rating
             // (faster = more stars). Shown during the win pause before auto-advance.
             if won && !game_over {
