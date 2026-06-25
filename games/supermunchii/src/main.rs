@@ -988,6 +988,19 @@ fn run_play(path: &str) {
             full_redraw = false;
             let secs = ((if won { won_at } else { now }).saturating_sub(level_start) / 1_000_000_000) as u32;
             render_play_status(&mut status, &level, sim.player.state, backend.name(), won, game_over, kibble, lives, power, zoomies > 0, glide, invincible > 0, secs, rows + 1, cols);
+            // Slim level-progress bar on the top row: a marker rides ─── toward a ⚑
+            // at the level's end. (Skipped during cards so they aren't cluttered.)
+            if !won && !game_over && !paused && now >= intro_until {
+                use std::fmt::Write;
+                let bw = (cols as usize).saturating_sub(6).max(4);
+                let frac = (sim.player.pos.x / world.px_w().max(1.0)).clamp(0.0, 1.0);
+                let pos = ((frac * (bw - 1) as f64) as usize).min(bw - 1);
+                let mut bar = String::new();
+                for i in 0..bw {
+                    bar.push(if i == pos { '◆' } else { '─' });
+                }
+                let _ = write!(status, "\x1b[1;3H\x1b[2m{bar}\x1b[0m\x1b[1;{}H⚑", bw + 3);
+            }
             if paused {
                 status.clear();
                 scamper::ui::status_line(&mut status, rows + 1, "⏸ PAUSED — p resume · q quit");
