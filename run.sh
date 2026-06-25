@@ -313,6 +313,7 @@ how_to_play() {
     Move / run     A D  or  <- ->   (hold to build speed; tap the other way to skid)
     Jump           Z / K / W / Up   (hold for height; jump again mid-air to double)
     Throw          Space (or C)     (lob a Sudsball — always ready)
+    Dash (dodge)   X                (quick burst + brief invulnerability)
     Crouch / pipe  S / Down          p pause  ·  h in-game help  ·  q quit
 
   Goal: reach the bath plug (or beat the boss). Pounce critters from above —

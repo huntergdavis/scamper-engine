@@ -6,7 +6,7 @@ use scamper::backend::{AsciiBackend, Backend, KittyBackend, MonoBackend, Overlay
 use scamper::capture::{self, InputFrame, Recording, Snapshots};
 use scamper::munchii;
 use scamper::framebuffer::{Framebuffer, Rgba};
-use scamper::input::{Input, K_DOWN, K_ESC, K_HELP, K_N, K_P, K_Q, K_S, K_T, K_TAB, K_Y};
+use scamper::input::{Input, K_DOWN, K_ESC, K_HELP, K_N, K_P, K_Q, K_S, K_T, K_TAB, K_X, K_Y};
 use scamper::level::art::{self, Theme};
 use scamper::level::ir::Level;
 use scamper::level::world::{Bonk, LevelWorld};
@@ -396,6 +396,11 @@ fn run_play(path: &str) {
     const ZOOMIES_TICKS: u32 = 360; // ~6s at the sim rate
     let mut glide = false; // Flutter Collar: hold jump while falling to glide
     let mut glide_t: u64 = 0; // last glide-feather emit (ns)
+    let mut dash_cd: u32 = 0; // dash cooldown (ticks)
+    let mut dashing: u32 = 0; // active dash window (ticks)
+    const DASH_SPEED: f64 = 405.0;
+    const DASH_FRAMES: u32 = 9;
+    const DASH_CD: u32 = 40;
     let mut combo: u32 = 0; // consecutive air-pounces (resets on landing)
     let mut boss_hp: i32 = 3; // Baron Whiskers' health (only matters if he's present)
     let mut boss_cd: u32 = 0; // boss i-frames between pounces (ticks)
@@ -514,6 +519,22 @@ fn run_play(path: &str) {
             fire_cd = cooldown;
         }
 
+        // Dash ('x'): a quick burst in the facing direction with brief i-frames
+        // (a dodge), on a cooldown. The burst itself runs in the physics block.
+        if dash_cd > 0 {
+            dash_cd -= 1;
+        }
+        if input.pressed(K_X) && dash_cd == 0 && !won && !game_over && !paused {
+            dashing = DASH_FRAMES;
+            dash_cd = DASH_CD;
+            sim.player.vel.x = sim.player.facing as f64 * DASH_SPEED;
+            invuln = invuln.max(DASH_FRAMES + 3); // dodge through contact
+            let cl = sim.clock();
+            sim.fx.spawn(&scamper::effects::DASH, sim.player.pos.x + sim.player.w / 2.0, sim.player.pos.y + sim.player.h * 0.4, cl);
+            sim.fx.spawn_word(scamper::strings::t("fx.dash"), (200, 230, 255), sim.player.pos.x + sim.player.w / 2.0, sim.player.pos.y - 8.0, cl);
+            shake.bump(0.25);
+        }
+
         // --- advance physics (fixed timestep) unless the level is finished ---
         let now = now_ns();
         let mut elapsed = now - prev_t;
@@ -542,6 +563,10 @@ fn run_play(path: &str) {
         } else {
             sim.fp.max_run = base_max_run;
             sim.fp.run_accel = base_run_accel;
+        }
+        // A dash in progress overrides the cap so the burst isn't clamped away.
+        if dashing > 0 {
+            sim.fp.max_run = sim.fp.max_run.max(DASH_SPEED);
         }
         // Ambient particles: snowfall / bubbles / drifting leaves, by theme — a
         // living backdrop, sprinkled across the visible band around Munchii.
@@ -598,6 +623,7 @@ fn run_play(path: &str) {
                 sim.step(&world.map, inp);
                 zoomies = zoomies.saturating_sub(1); // burst counts down per sim tick
                 invincible = invincible.saturating_sub(1); // star counts down per tick
+                dashing = dashing.saturating_sub(1); // dash burst window
                 // Touchdown after a real fall → a dust scuff + a soft thump.
                 if pre_air && sim.player.grounded && pre_vy > 220.0 {
                     sim.fx.spawn(&scamper::effects::DUST, sim.player.pos.x + sim.player.w / 2.0, sim.player.pos.y + sim.player.h, now);
@@ -2639,6 +2665,8 @@ fn render_play_help(out: &mut Vec<u8>, active_backend: &str) {
     hline(out, r, "Crouch / pipe     S / \u{2193}   (enter a pipe while standing on it)");
     r += 1;
     hline(out, r, "Throw Sudsball    Space (or C)  \u{2022}  always ready — bonks critters");
+    r += 1;
+    hline(out, r, "Dash (dodge)      X   \u{2022}  a quick burst with brief invulnerability");
     r += 2;
     hline(out, r, "\x1b[1mPower-ups (gear, not damage)\x1b[0m");
     r += 1;
