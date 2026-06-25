@@ -314,6 +314,19 @@ impl Player {
             let blocked = map.overlaps(nx, ny, self.w, self.h)
                 || (dy > 0.0 && map.lands_on_oneway(nx, self.w, self.pos.y + self.h, ny + self.h));
             if blocked {
+                // Head-bump corner correction: when rising into a ceiling corner, if
+                // a small sideways nudge clears it, slip past and keep rising instead
+                // of bonking dead — the forgiving feel modern platformers have.
+                if dy < 0.0 && sx == 0.0 {
+                    const MARGIN: i32 = 5;
+                    let nudge = (1..=MARGIN).flat_map(|p| [p as f64, -(p as f64)]).find(|&d| !map.overlaps(self.pos.x + d, ny, self.w, self.h));
+                    if let Some(d) = nudge {
+                        self.pos.x += d;
+                        self.pos.y = ny;
+                        rem -= s;
+                        continue;
+                    }
+                }
                 if dx != 0.0 {
                     self.vel.x = 0.0;
                 }
@@ -352,6 +365,34 @@ mod tests {
             "####################",
         ];
         TileMap::from_ascii(&rows)
+    }
+
+    #[test]
+    fn head_bump_corner_correction_lets_a_clipped_jump_through() {
+        let rows = [
+            "....................",
+            "....................",
+            "....................",
+            "....................",
+            "....................",
+            "........#...........", // ceiling block at col 8 → x[128,144], y[80,96]
+            "....................",
+            "....................",
+            "....................",
+            "....................",
+            "####################",
+        ];
+        let map = TileMap::from_ascii(&rows);
+        let fp = FeelParams::default();
+        // Just below the block, clipping its left corner by ~3px (right edge 131),
+        // rising fast with jump held.
+        let mut p = Player::new(119.0, 100.0);
+        p.vel.y = -320.0;
+        for _ in 0..8 {
+            p.step(&map, 1.0 / 60.0, 0.0, false, true, false, &fp);
+        }
+        assert!(p.pos.x < 119.0, "nudged sideways off the corner (x={})", p.pos.x);
+        assert!(p.pos.y < 80.0, "slipped past and kept rising (y={})", p.pos.y);
     }
 
     #[test]
