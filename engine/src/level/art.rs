@@ -194,34 +194,89 @@ pub const KINDS: [TileKind; 11] = [
 /// fraction of `cam_x` for depth. The humps are tinted only slightly off the sky
 /// so they add color-tier depth without muddying the mono ramp (whose darkest
 /// cells still read as sky). Call after clearing to sky, before the tiles.
-pub fn draw_backdrop(fb: &mut Framebuffer, p: &Palette, cam_x: f64, screen_w: usize, screen_h: usize) {
-    // Hills a small *additive* step above the sky — enough for color-tier depth, but
-    // a low enough luma bump that every theme's hill still samples to the blank mono
+pub fn draw_backdrop(fb: &mut Framebuffer, theme: Theme, p: &Palette, cam_x: f64, screen_w: usize, screen_h: usize) {
+    // Shapes are a small *additive* step above the sky — enough for color-tier
+    // depth, but a low enough luma bump that every theme samples to the blank mono
     // cell (the ramp's first step is luma≈64), so B&W stays clean.
     let bump = |d: u8| Rgba::rgb(p.sky.r.saturating_add(d), p.sky.g.saturating_add(d), p.sky.b.saturating_add(d));
-    let hill = bump(10); // near layer
-    let hill2 = bump(5); // farther, fainter layer behind
-    let spacing = 132i32;
-    let base_y = (screen_h as f64 * 0.66) as i32;
-    // Two layers at different parallax depths (farther = slower + fainter).
-    for (depth, color, off_h) in [(0.18f64, hill2, 30i32), (0.34f64, hill, 44i32)] {
-        let scroll = (cam_x * depth) as i32;
-        let phase = scroll.rem_euclid(spacing);
-        let count = screen_w as i32 / spacing + 2;
+    let near = bump(10);
+    let far = bump(5); // farther, fainter layer behind
+    let sw = screen_w as i32;
+    let count = sw / 132 + 2;
+    // Repeat a motif across the screen at a parallax `depth`, calling `draw` per
+    // instance with its on-screen x.
+    let mut layer = |depth: f64, spacing: i32, draw: &mut dyn FnMut(&mut Framebuffer, i32)| {
+        let phase = (cam_x * depth) as i32;
+        let phase = phase.rem_euclid(spacing.max(1));
         for i in -1..=count {
-            hump(fb, i * spacing - phase + spacing / 2, base_y, 96, off_h, color);
+            draw(fb, i * spacing - phase + spacing / 2);
+        }
+    };
+    let h = screen_h as i32;
+    match theme {
+        // Caves: stalactites hang from the ceiling, stalagmites rise from below.
+        Theme::Underground => {
+            layer(0.18, 150, &mut |fb, x| spike(fb, x, 0, 30, 26, far, true));
+            layer(0.34, 110, &mut |fb, x| {
+                spike(fb, x, 0, 26, 40, near, true); // stalactite
+                spike(fb, x + 55, (h as f64 * 0.74) as i32, 24, 32, near, false); // stalagmite
+            });
+        }
+        // Castle: tall columns marching past.
+        Theme::Castle => {
+            let base = (h as f64 * 0.78) as i32;
+            layer(0.18, 160, &mut |fb, x| pillar(fb, x, base, 18, (h as f64 * 0.5) as i32, far));
+            layer(0.34, 128, &mut |fb, x| pillar(fb, x, base, 24, (h as f64 * 0.62) as i32, near));
+        }
+        // Underwater: tall kelp fronds swaying up from the seabed.
+        Theme::Underwater => {
+            let base = (h as f64 * 0.8) as i32;
+            layer(0.18, 120, &mut |fb, x| kelp(fb, x, base, (h as f64 * 0.5) as i32, far));
+            layer(0.34, 96, &mut |fb, x| kelp(fb, x, base, (h as f64 * 0.66) as i32, near));
+        }
+        // Overworld / Snow: rolling hills.
+        _ => {
+            let base_y = (h as f64 * 0.66) as i32;
+            layer(0.18, 132, &mut |fb, x| hump(fb, x, base_y, 96, 30, far));
+            layer(0.34, 132, &mut |fb, x| hump(fb, x, base_y, 96, 44, near));
         }
     }
 }
 
-/// A single rounded hump (hill) with its base centered at (`cx`, `base_y`),
-/// approximated by stacked horizontal bars — width tapering toward the top.
+/// A rounded hump (hill) — base centered at (`cx`,`base_y`), tapering up.
 fn hump(fb: &mut Framebuffer, cx: i32, base_y: i32, base_w: i32, height: i32, color: Rgba) {
     let rows = height.max(1);
     for r in 0..rows {
-        let frac = r as f64 / rows as f64; // 0 at base → 1 at peak
+        let frac = r as f64 / rows as f64;
         let w = (base_w as f64 * (1.0 - frac * frac)) as i32; // round shoulders
         fb.fill_rect(cx - w / 2, base_y - r, w, 1, color);
+    }
+}
+
+/// A tapering spike: a triangle `height` tall, `base_w` wide at its root, pointing
+/// down from `root_y` (`down = true`, a stalactite) or up (a stalagmite/peak).
+fn spike(fb: &mut Framebuffer, cx: i32, root_y: i32, base_w: i32, height: i32, color: Rgba, down: bool) {
+    let rows = height.max(1);
+    for r in 0..rows {
+        let w = (base_w as f64 * (1.0 - r as f64 / rows as f64)) as i32;
+        let y = if down { root_y + r } else { root_y - r };
+        fb.fill_rect(cx - w / 2, y, w, 1, color);
+    }
+}
+
+/// A column with a slightly flared cap — a castle pillar from `base_y` up `height`.
+fn pillar(fb: &mut Framebuffer, cx: i32, base_y: i32, width: i32, height: i32, color: Rgba) {
+    fb.fill_rect(cx - width / 2, base_y - height, width, height, color);
+    fb.fill_rect(cx - width / 2 - 2, base_y - height, width + 4, 3, color); // cap
+    fb.fill_rect(cx - width / 2 - 2, base_y - 3, width + 4, 3, color); // base
+}
+
+/// A wavy kelp frond rising `height` from `base_y`, swaying side to side.
+fn kelp(fb: &mut Framebuffer, cx: i32, base_y: i32, height: i32, color: Rgba) {
+    let rows = height.max(1);
+    for r in 0..rows {
+        let sway = ((r as f64 / 7.0).sin() * 5.0) as i32;
+        fb.fill_rect(cx + sway - 1, base_y - r, 3, 1, color);
     }
 }
 
@@ -360,7 +415,7 @@ mod tests {
             let p = palette(theme);
             let mut fb = Framebuffer::new(320, 180);
             fb.clear(p.sky);
-            draw_backdrop(&mut fb, &p, 137.0, 320, 180);
+            draw_backdrop(&mut fb, theme, &p, 137.0, 320, 180);
             let max = (0..fb.px.len()).step_by(4).map(|i| luma(i, &fb)).max().unwrap_or(0);
             assert!(max < 64, "{:?} backdrop luma {} must stay under the mono threshold", theme, max);
         }

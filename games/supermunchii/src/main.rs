@@ -1438,9 +1438,9 @@ fn draw_play_frame(
     let mut wfb_store = Framebuffer::new(if zoom == 1 { 1 } else { view_w }, if zoom == 1 { 1 } else { view_h });
     let env: &mut Framebuffer = if zoom == 1 { fb } else { &mut wfb_store };
     env.clear(pal.sky);
-    // Parallax hills behind the tiles (scrolls slower than the world for depth).
+    // Parallax backdrop behind the tiles (theme-specific motif; scrolls slower).
     let (ew, eh) = (env.width, env.height);
-    art::draw_backdrop(env, &pal, cam_x, ew, eh);
+    art::draw_backdrop(env, world.theme, &pal, cam_x, ew, eh);
     let t = TILE as i32;
     let tx0 = (cam_x / TILE).floor() as i32;
     let tx1 = ((cam_x + view_w as f64) / TILE).ceil() as i32;
