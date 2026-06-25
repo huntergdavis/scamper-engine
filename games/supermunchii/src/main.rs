@@ -1442,7 +1442,7 @@ fn render_play_status(buf: &mut String, level: &Level, st: State, backend: &str,
     } else if won {
         let _ = write!(plain, "★ LEVEL COMPLETE — {} ★   ♥×{lives} kibble:{kibble}   → next level…   gfx:{backend} · q quit", level.id);
     } else {
-        let _ = write!(plain, "{}  [{}]  {}  ♥×{lives} kibble:{kibble} {}   h help · Tab gfx:{backend} · q quit", level.id, level.theme, state_letter(st), power.label());
+        let _ = write!(plain, "{}  [{}]  {}  ♥×{lives}  kibble {kibble} ({}/100→1up)  gear:{}   h help · Tab gfx:{backend} · q quit", level.id, level.theme, state_letter(st), kibble % 100, power.label());
     }
     let maxw = (cols as usize).saturating_sub(1);
     if plain.chars().count() > maxw {
