@@ -303,17 +303,47 @@ tools_menu() {
     done
 }
 
+# A quick how-to-play card (shown from the menu; in-game 'h' has the full list).
+how_to_play() {
+    printf '\033[2J\033[H'
+    cat <<'EOF'
+
+  SUPER MUNCHII — how to play
+
+    Move / run     A D  or  <- ->   (hold to build speed; tap the other way to skid)
+    Jump           Z / K / W / Up   (hold for height; jump again mid-air to double)
+    Throw          Space (or C)     (lob a Sudsball — always ready)
+    Crouch / pipe  S / Down          p pause  ·  h in-game help  ·  q quit
+
+  Goal: reach the bath plug (or beat the boss). Pounce critters from above —
+  but spiky ones must be popped with a Sudsball. Chain pounces for a COMBO.
+
+  Gear changes how you play:
+    Big Kibble  -> bigger & tougher        Bubble Bone -> fast, far Sudsballs
+    Zoomies     -> speed burst             Flutter Collar -> hold jump to glide
+    Star Bone   -> brief invincibility      100 kibble = an extra life
+
+  Watch for: trampolines (bounce high), lifts (ride them), crumbling planks
+  (stand and they drop!), and checkpoints (respawn there).
+
+  press a key to go back…
+EOF
+    IFS= read -rsn1
+}
+
 interactive_menu() {
     cargo build "${profile_args[@]}"
     while true; do
-        # Front door: play the game, or step into the engine tools.
+        # Front door: play the game, learn the controls, or step into the tools.
         menu "SCAMPER  (a terminal 2D game engine)" \
             "Play Super Munchii" \
+            "How to play" \
             "Engine tools" \
             "quit"
         case "$MENU_SEL" in
             0) munchii_menu ;;
-            1) tools_menu ;;
+            1) how_to_play ;;
+            2) tools_menu ;;
             *) break ;;
         esac
     done
