@@ -171,6 +171,15 @@ replay_browser() {
 
 # Pick and play an authored campaign level from the game's levels dir (imported
 # levels stay out of the tree; point `supermunchii play <file>` at them to test).
+# Play a fresh random megalevel (a stitch of many imported levels). `play` with
+# no level argument re-stitches one each launch.
+play_mega() {
+    tmux_warn
+    local extra=()
+    [[ "${SCAMP_NODEBUG:-0}" != "1" ]] && extra+=(--debug)
+    "target/$profile_dir/supermunchii" play "${extra[@]}"
+}
+
 play_level() {
     local dir="games/supermunchii/levels" f names
     names=()
@@ -256,6 +265,7 @@ interactive_menu() {
     cargo build "${profile_args[@]}"
     while true; do
         menu "SCAMPER  (munchii)" \
+            "megalevel  (random stitch \xc2\xb7 red-team romp)" \
             "play the game  (sandbox arena)" \
             "play a level  (campaign)" \
             "browse imported levels" \
@@ -266,14 +276,15 @@ interactive_menu() {
             "debug tools" \
             "quit"
         case "$MENU_SEL" in
-            0) run_game ;;
-            1) play_level ;;
-            2) import_browser ;;
-            3) record_run ;;
-            4) replay_browser ;;
-            5) "target/$profile_dir/sprite-lab" ;;
-            6) "target/$profile_dir/tile-lab" ;;
-            7) debug_menu ;;
+            0) play_mega ;;
+            1) run_game ;;
+            2) play_level ;;
+            3) import_browser ;;
+            4) record_run ;;
+            5) replay_browser ;;
+            6) "target/$profile_dir/sprite-lab" ;;
+            7) "target/$profile_dir/tile-lab" ;;
+            8) debug_menu ;;
             *) break ;;
         esac
     done

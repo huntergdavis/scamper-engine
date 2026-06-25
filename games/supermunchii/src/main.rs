@@ -86,7 +86,10 @@ fn main() {
         Some("import") => run_import(&args),
         Some("level-info") => run_level_info(&args),
         Some("tiles") => run_tiles(),
-        Some("play") => run_play(nth_nonflag(&args, 1).unwrap_or("levels/yard-romp-1.lvl")),
+        Some("play") => match nth_nonflag(&args, 1) {
+            Some(path) => run_play(path),
+            None => run_play(&default_test_level()), // no level given → a fresh random stitch
+        },
         Some("soak") => run_soak(nth_nonflag(&args, 1).unwrap_or("imported/lvl")),
         Some("mega") => run_mega(&args),
         _ => run_live(None),
@@ -1217,23 +1220,16 @@ fn collect_lvls(dir: &std::path::Path, out: &mut Vec<String>) {
     }
 }
 
-/// `supermunchii mega [out.lvl] [count] [seed]` — stitch a large random sampling
-/// of the imported levels into one giant goal-less test level (a red-team romp
-/// through every system; also our own remix, no longer any original's layout).
-fn run_mega(args: &[String]) {
-    let out = nth_nonflag(args, 1).unwrap_or("imported/lvl/megalevel.lvl").to_string();
-    let count: usize = nth_nonflag(args, 2).and_then(|s| s.parse().ok()).unwrap_or(16);
-    let seed: u64 = nth_nonflag(args, 3).and_then(|s| s.parse().ok()).unwrap_or(1);
-
+/// Stitch a random sampling of `count` imported levels (seeded) into one level.
+/// `None` if no imported levels exist yet.
+fn build_mega(count: usize, seed: u64) -> Option<Level> {
     let mut files = Vec::new();
     collect_lvls(std::path::Path::new("imported/lvl"), &mut files);
     files.retain(|f| !f.ends_with("megalevel.lvl")); // never fold a prior mega back in
     files.sort();
     if files.is_empty() {
-        eprintln!("mega: no levels under imported/lvl — run `supermunchii import` first");
-        std::process::exit(2);
+        return None;
     }
-
     // Seeded Fisher-Yates shuffle (a small LCG — no rng dependency).
     let mut state = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(1);
     let mut rng = || {
@@ -1243,18 +1239,51 @@ fn run_mega(args: &[String]) {
     for i in (1..files.len()).rev() {
         files.swap(i, rng() % (i + 1));
     }
-
     let picked: Vec<Level> = files.iter().take(count).filter_map(|f| load_level_file(f).ok()).collect();
-    let mega = scamper::level::stitch(&picked, 6);
+    Some(scamper::level::stitch(&picked, 6))
+}
+
+/// `supermunchii mega [out.lvl] [count] [seed]` — stitch a large random sampling
+/// of the imported levels into one giant goal-less test level (a red-team romp
+/// through every system; also our own remix, no longer any original's layout).
+fn run_mega(args: &[String]) {
+    let out = nth_nonflag(args, 1).unwrap_or("imported/lvl/megalevel.lvl").to_string();
+    let count: usize = nth_nonflag(args, 2).and_then(|s| s.parse().ok()).unwrap_or(16);
+    let seed: u64 = nth_nonflag(args, 3).and_then(|s| s.parse().ok()).unwrap_or(1);
+
+    let Some(mega) = build_mega(count, seed) else {
+        eprintln!("mega: no levels under imported/lvl — run `supermunchii import` first");
+        std::process::exit(2);
+    };
     if let Err(e) = std::fs::write(&out, mega.to_text()) {
         eprintln!("mega: cannot write {out}: {e}");
         std::process::exit(2);
     }
     eprintln!(
-        "mega: stitched {} levels (seed {seed}) -> {out}: {}x{} tiles, {} spans, {} entities",
-        picked.len(), mega.w, mega.h, mega.tiles.len(), mega.entities.len()
+        "mega: stitched (seed {seed}) -> {out}: {}x{} tiles, {} spans, {} entities",
+        mega.w, mega.h, mega.tiles.len(), mega.entities.len()
     );
     eprintln!("  play it:  ./run.sh play {out}");
+}
+
+/// The default play target: a fresh random megalevel (re-stitched each launch via
+/// a wall-clock seed) written to `imported/lvl/megalevel.lvl`. Falls back to the
+/// shipped authored level when nothing has been imported.
+fn default_test_level() -> String {
+    let authored = format!("{}/levels/yard-romp-1.lvl", env!("CARGO_MANIFEST_DIR"));
+    match build_mega(16, now_ns()) {
+        Some(mega) => {
+            let out = "imported/lvl/megalevel.lvl";
+            match std::fs::write(out, mega.to_text()) {
+                Ok(_) => {
+                    eprintln!("play: fresh random megalevel ({}x{}, {} entities)", mega.w, mega.h, mega.entities.len());
+                    out.to_string()
+                }
+                Err(_) => authored,
+            }
+        }
+        None => authored,
+    }
 }
 
 /// Run one level headlessly for `ticks` ticks through the same sim + render as
