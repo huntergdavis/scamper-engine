@@ -385,6 +385,7 @@ fn run_play(path: &str) {
     let mut lives: i32 = 3;
     let mut power = Power::Small;
     let mut invuln: u32 = 0; // ticks of post-hit invulnerability
+    let mut skid_cd: u32 = 0; // throttle for skid-dust effects
     play_bgm(&level);
 
     let (mut fb_w, mut fb_h, mut cols, mut rows) = play_view(terminal::query_winsize());
@@ -469,8 +470,11 @@ fn run_play(path: &str) {
                 if sim.player.bonked_head {
                     let cx = ((sim.player.pos.x + sim.player.w / 2.0) / TILE).floor() as i32;
                     let cy = ((sim.player.pos.y - 1.0) / TILE).floor() as i32;
+                    let now = sim.clock();
+                    let (bxw, byw) = (cx as f64 * TILE + TILE / 2.0, cy as f64 * TILE);
                     match world.bonk(cx, cy) {
                         Bonk::Released(item) => {
+                            sim.fx.spawn(&scamper::effects::SPARKLE, bxw, byw, now);
                             if item == "kibble" {
                                 kibble += 1;
                             } else {
@@ -479,10 +483,22 @@ fn run_play(path: &str) {
                                 actors.push(Actor { mob: m, kind: item, item: true, mode: Mode::Walk });
                             }
                         }
-                        Bonk::Broke => kibble += 1, // shards count as a little treat
-                        Bonk::Nothing => {}
+                        Bonk::Broke => {
+                            kibble += 1; // shards count as a little treat
+                            sim.fx.spawn(&scamper::effects::BONK, bxw, byw, now);
+                        }
+                        // Hit a solid that won't budge → a startled exclamation.
+                        Bonk::Nothing => sim.fx.spawn(&scamper::effects::BANG, sim.player.pos.x + sim.player.w / 2.0, sim.player.pos.y - 6.0, now),
                     }
                     full_redraw = true;
+                }
+                // Skid dust: reversing direction at speed kicks up a scuff (throttled).
+                if skid_cd > 0 {
+                    skid_cd -= 1;
+                }
+                if skid_cd == 0 && sim.player.grounded && inp.axis_x != 0 && (inp.axis_x as f64) * sim.player.vel.x < -1.0 && sim.player.vel.x.abs() > 70.0 {
+                    sim.fx.spawn(&scamper::effects::DUST, sim.player.pos.x + sim.player.w / 2.0, sim.player.pos.y + sim.player.h, sim.clock());
+                    skid_cd = 9;
                 }
                 // Step creatures/items and resolve pounces, pickups, and hits.
                 let hits = step_actors(&mut actors, &world.map, &mut sim.player, &mut kibble, &mut power);
@@ -499,6 +515,7 @@ fn run_play(path: &str) {
                 if hits.plug && !won {
                     won = true; // pulled the bath plug → level complete
                     won_at = now;
+                    sim.fx.spawn(&scamper::effects::CHEER, sim.player.pos.x + sim.player.w / 2.0, sim.player.pos.y, sim.clock());
                 }
                 if invuln > 0 {
                     invuln -= 1;
@@ -546,6 +563,7 @@ fn run_play(path: &str) {
                 if px + pw_ / 2.0 >= gx {
                     won = true;
                     won_at = now;
+                    sim.fx.spawn(&scamper::effects::CHEER, sim.player.pos.x + sim.player.w / 2.0, sim.player.pos.y, sim.clock());
                 }
             }
         } else if now.saturating_sub(won_at) >= 700 * 1_000_000 {
@@ -1043,9 +1061,12 @@ fn draw_play_frame(
     let bottom = (sim.player.pos.y - cam_y) + sim.player.h;
     sprites.push((lines, cx - mw / 2.0, bottom - mh, munchii::beagle_rgb as fn(char) -> (u8, u8, u8)));
 
+    // Transient effects (puffs, bonks, pops, sparkles) — world-anchored in sim.fx.
+    let fxr = sim.fx.render(sim.clock());
+
     if backend.draws_overlay() {
         // character tiers: stamp each sprite's glyphs (one per cell) over the scene
-        let overlays: Vec<Overlay> = sprites
+        let mut overlays: Vec<Overlay> = sprites
             .iter()
             .enumerate()
             .map(|(i, (lns, lx, ly, pal))| Overlay {
@@ -1057,11 +1078,22 @@ fn draw_play_frame(
                 z: i as i32,
             })
             .collect();
+        // Effect clips (uniform tint), composited on top, camera-offset.
+        let fx_lines: Vec<Vec<String>> = fxr.iter().map(|(frame, ..)| frame.iter().map(|s| s.to_string()).collect()).collect();
+        for ((frame, tint, z, fxx, fxy), lns) in fxr.iter().zip(fx_lines.iter()) {
+            let w = frame.iter().map(|l| l.chars().count()).max().unwrap_or(0) as f64;
+            let ex = (fxx - cam_x) - w * cpw / 2.0;
+            let ey = fxy - cam_y;
+            overlays.push(Overlay { lines: lns, col: (ex / cpw).round() as i32, row: (ey / cph).round() as i32, tint: Some(*tint), palette: None, z: 1000 + z });
+        }
         backend.present(out, fb, cols, rows, full_redraw, &overlays);
     } else {
         // pixel tiers: rasterize each sprite into the framebuffer in its colors
         for (lns, lx, ly, pal) in &sprites {
             draw_sprite_pixels(fb, lns, *lx, *ly, cpw, cph, *pal);
+        }
+        for &(frame, tint, _z, fxx, fxy) in &fxr {
+            draw_effect_pixels(fb, frame, tint, fxx - cam_x, fxy - cam_y, cpw, cph);
         }
         backend.present(out, fb, cols, rows, full_redraw, &[]);
     }

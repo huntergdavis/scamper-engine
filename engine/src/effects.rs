@@ -65,6 +65,51 @@ pub static DUST: Effect = Effect {
     ],
 };
 
+// Block bonk — a quick scuff that kicks up off the block's top.
+pub static BONK: Effect = Effect {
+    name: "bonk",
+    fps: 18,
+    tint: (226, 214, 188),
+    z: 1,
+    frames: &[&[" .. ", "    "], &["°  °", " .. "], &["    ", "    "]],
+};
+
+// A startled exclamation — bonking something solid that won't budge.
+pub static BANG: Effect = Effect {
+    name: "bang",
+    fps: 9,
+    tint: (255, 232, 120),
+    z: 2,
+    frames: &[&[" ! "], &[" ! "], &[" ! "], &[" . "]],
+};
+
+// Enemy bop — a bright burst when a critter pops into a treat.
+pub static BOP: Effect = Effect {
+    name: "bop",
+    fps: 18,
+    tint: (255, 236, 150),
+    z: 2,
+    frames: &[&[" \\*/ ", " /.\\ "], &["* . *", " . . "], &[" . . ", "     "]],
+};
+
+// Collect / block-release sparkle.
+pub static SPARKLE: Effect = Effect {
+    name: "sparkle",
+    fps: 16,
+    tint: (255, 245, 180),
+    z: 2,
+    frames: &[&[" + "], &["(+)"], &[" * "], &[" . "]],
+};
+
+// Level complete — a little cheer of rising stars.
+pub static CHEER: Effect = Effect {
+    name: "cheer",
+    fps: 8,
+    tint: (255, 240, 160),
+    z: 3,
+    frames: &[&["* . *", " . . "], &[" * * ", "*   *"], &["  *  ", " * * "], &[" . . ", "     "]],
+};
+
 struct Active {
     fx: &'static Effect,
     x: f64, // world (framebuffer-px) anchor: horizontal center
