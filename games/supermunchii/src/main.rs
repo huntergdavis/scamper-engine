@@ -939,36 +939,22 @@ fn run_play(path: &str) {
             let secs = ((if won { won_at } else { now }).saturating_sub(level_start) / 1_000_000_000) as u32;
             render_play_status(&mut status, &level, sim.player.state, backend.name(), won, game_over, kibble, lives, power, zoomies > 0, glide, invincible > 0, secs, rows + 1, cols);
             if paused {
-                use std::fmt::Write;
-                // Overwrite the status row with a pause banner (inverse video).
                 status.clear();
-                let _ = write!(status, "\x1b[{};1H\x1b[2K\x1b[7m⏸ PAUSED — p resume · q quit\x1b[0m", rows + 1);
+                scamper::ui::status_line(&mut status, rows + 1, "⏸ PAUSED — p resume · q quit");
             }
             // Level-title card: a centered banner for the first ~1.6s of a level.
             if now < intro_until {
-                use std::fmt::Write;
                 let card = format!(" {} — {} ", level.id, level.theme);
-                let col = ((cols as usize).saturating_sub(card.chars().count()) / 2).max(0) + 1;
-                let row = (rows / 2).max(1);
-                let _ = write!(status, "\x1b[{row};{col}H\x1b[1;7m{card}\x1b[0m");
+                scamper::ui::center_card(&mut status, cols, (rows / 2).max(1), &[&card], true);
             }
             // Results card on level clear: kibble collected, time, and a star rating
             // (faster = more stars). Shown during the win pause before auto-advance.
             if won && !game_over {
-                use std::fmt::Write;
                 let stars = if secs < 25 { "★★★" } else if secs < 55 { "★★ " } else { "★  " };
-                let lines = [
-                    format!("  ✦  {}  CLEAR!  ✦  ", level.id),
-                    format!("  kibble +{}   time {}:{:02}  ", kibble.saturating_sub(level_kibble0), secs / 60, secs % 60),
-                    format!("  rating {}  ", stars),
-                ];
-                let w = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
-                let col = ((cols as usize).saturating_sub(w) / 2).max(0) + 1;
-                let top = (rows / 2).saturating_sub(2).max(1);
-                for (i, l) in lines.iter().enumerate() {
-                    let pad = format!("{:^width$}", l, width = w);
-                    let _ = write!(status, "\x1b[{};{col}H\x1b[1;7m{pad}\x1b[0m", top + i as u16);
-                }
+                let l0 = format!("  ✦  {}  CLEAR!  ✦  ", level.id);
+                let l1 = format!("  kibble +{}   time {}:{:02}  ", kibble.saturating_sub(level_kibble0), secs / 60, secs % 60);
+                let l2 = format!("  rating {}  ", stars);
+                scamper::ui::center_card(&mut status, cols, (rows / 2).saturating_sub(2).max(1), &[&l0, &l1, &l2], true);
                 full_redraw = true;
             }
             let mut o = std::io::stdout().lock();

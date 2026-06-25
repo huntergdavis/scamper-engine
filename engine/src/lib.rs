@@ -19,6 +19,7 @@ pub mod sprite;
 pub mod sim;
 pub mod strings;
 pub mod terminal;
+pub mod ui;
 pub mod time;
 pub mod world;
 
