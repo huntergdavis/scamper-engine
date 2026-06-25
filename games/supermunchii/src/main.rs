@@ -580,19 +580,37 @@ impl Power {
     }
 }
 
+/// A rollo/hardhat's curl state: walking, a still curled ball, or a kicked ball
+/// rolling fast (which pops other critters).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Mode {
+    Walk,
+    ShellStill,
+    ShellRoll,
+}
+
 /// A live creature or item in the level: an engine [`Mob`] plus the game meaning
-/// (its sprite id and whether it's a collectible). Built from the level's IR
-/// entities; stepped and collided each tick.
+/// (its sprite id, whether it's a collectible, and its curl mode). Built from the
+/// level's IR entities; stepped and collided each tick.
 struct Actor {
     mob: Mob,
     kind: String,
     item: bool,
+    mode: Mode,
 }
 
 /// Item kinds collect on touch; everything else is a creature you pounce.
 fn is_item(kind: &str) -> bool {
     matches!(kind, "kibble" | "big_kibble" | "bubble_bone" | "zoomies_treat" | "lucky_squeaky" | "flutter_collar")
 }
+
+/// Creatures that curl into a kickable ball when pounced (instead of popping).
+fn is_curler(kind: &str) -> bool {
+    matches!(kind, "rollo" | "rollo_sun" | "hardhat")
+}
+
+/// Speed of a kicked shell, px/tick.
+const SHELL_SPEED: f64 = 2.6;
 
 /// Air & water creatures cruise on the `Fly` gait (no gravity, bob along a line).
 fn is_flyer(kind: &str) -> bool {
@@ -628,7 +646,7 @@ fn build_actors(world: &LevelWorld) -> Vec<Actor> {
         .map(|e| {
             let item = is_item(&e.kind);
             let (gait, speed, w, h) = gait_for(&e.kind, item);
-            Actor { mob: Mob::new(e.cx as f64 * TILE, e.cy as f64 * TILE, w, h, -1, speed, gait), kind: e.kind.clone(), item }
+            Actor { mob: Mob::new(e.cx as f64 * TILE, e.cy as f64 * TILE, w, h, -1, speed, gait), kind: e.kind.clone(), item, mode: Mode::Walk }
         })
         .collect()
 }
@@ -705,6 +723,26 @@ fn step_actors(actors: &mut [Actor], map: &TileMap, player: &mut Player, kibble:
     for a in actors.iter_mut() {
         a.mob.step(map);
     }
+
+    // A rolling shell pops any normal creature it overlaps (gathered first to dodge
+    // overlapping mutable borrows).
+    let shells: Vec<(f64, f64, f64, f64)> = actors
+        .iter()
+        .filter(|a| a.mode == Mode::ShellRoll && a.mob.alive)
+        .map(|a| (a.mob.pos.x, a.mob.pos.y, a.mob.w, a.mob.h))
+        .collect();
+    if !shells.is_empty() {
+        for a in actors.iter_mut() {
+            if a.mob.alive && !a.item && a.mode == Mode::Walk {
+                let (bx, by, bw, bh) = (a.mob.pos.x, a.mob.pos.y, a.mob.w, a.mob.h);
+                if shells.iter().any(|&(sx, sy, sw, sh)| aabb_overlap(sx, sy, sw, sh, bx, by, bw, bh)) {
+                    a.mob.alive = false;
+                    *kibble += 2;
+                }
+            }
+        }
+    }
+
     let (px, py, pw, ph, pvy) = (player.pos.x, player.pos.y, player.w, player.h, player.vel.y);
     let mut hits = Hits::default();
     for a in actors.iter_mut() {
@@ -713,6 +751,45 @@ fn step_actors(actors: &mut [Actor], map: &TileMap, player: &mut Player, kibble:
         }
         let (bx, by, bw, bh) = (a.mob.pos.x, a.mob.pos.y, a.mob.w, a.mob.h);
         if !aabb_overlap(px, py, pw, ph, bx, by, bw, bh) {
+            continue;
+        }
+        let stomped = stomp(px, py, pw, ph, pvy, bx, by, bw, bh);
+        // Curlers (rollo / hardhat): pounce curls them into a kickable shell.
+        if is_curler(&a.kind) {
+            match a.mode {
+                Mode::Walk => {
+                    if stomped {
+                        a.mode = Mode::ShellStill;
+                        a.mob.gait = Gait::Still;
+                        a.mob.speed = 0.0;
+                        player.vel.y = POUNCE_BOUNCE;
+                    } else {
+                        hits.hurt = true;
+                    }
+                }
+                Mode::ShellStill => {
+                    if stomped {
+                        player.vel.y = POUNCE_BOUNCE; // tap it again, stays put
+                    } else {
+                        // kick it away from Munchii
+                        let dir: i8 = if px + pw / 2.0 <= bx + bw / 2.0 { 1 } else { -1 };
+                        a.mode = Mode::ShellRoll;
+                        a.mob.gait = Gait::Wander;
+                        a.mob.speed = SHELL_SPEED;
+                        a.mob.facing = dir;
+                    }
+                }
+                Mode::ShellRoll => {
+                    if stomped {
+                        a.mode = Mode::ShellStill; // stomp stops a rolling shell
+                        a.mob.gait = Gait::Still;
+                        a.mob.speed = 0.0;
+                        player.vel.y = POUNCE_BOUNCE;
+                    } else {
+                        hits.hurt = true; // a rolling shell bonks you
+                    }
+                }
+            }
             continue;
         }
         match a.kind.as_str() {
@@ -826,7 +903,8 @@ fn draw_play_frame(
         if exw < cam_x - TILE || exw > cam_x + fb_w as f64 + TILE {
             continue; // cull off-screen
         }
-        let an = sp.anim("walk");
+        // A curled rollo shows its "curl" frames (falls back to "walk" if none).
+        let an = sp.anim(if a.mode == Mode::Walk { "walk" } else { "curl" });
         let n = an.frames.len().max(1);
         let fi = (sim.clock() / (NS_PER_SEC / an.fps.max(1) as u64)) as usize % n;
         // Creatures face their walk direction; items don't flip.
