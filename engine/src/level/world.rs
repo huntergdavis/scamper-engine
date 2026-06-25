@@ -47,8 +47,8 @@ pub struct Block {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Bonk {
     Nothing,
-    Broke,            // a brick shattered (removed from the world)
-    Released(String), // the block coughed up its contents (an item kind)
+    Broke(Option<String>), // a brick shattered, optionally dropping an item
+    Released(String),      // a (non-breakable) question block coughed up its contents and stays
 }
 
 pub struct LevelWorld {
@@ -126,9 +126,9 @@ impl LevelWorld {
         LevelWorld { map, hazard, kinds, ents, blocks, w, h, spawn, goal, warps, theme: Theme::from_str(&lvl.theme) }
     }
 
-    /// Head-bonk the block at cell (cx,cy) from below: release its contents once
-    /// (question / coin block → an item), else shatter a breakable brick. A spent
-    /// block stays solid but inert. Returns what happened.
+    /// Head-bonk the block at cell (cx,cy) from below. A breakable brick shatters
+    /// (and drops any coin it held); a non-breakable question block coughs up its
+    /// contents once and stays solid but inert. Returns what happened.
     pub fn bonk(&mut self, cx: i32, cy: i32) -> Bonk {
         let Some(b) = self.blocks.get_mut(&(cx, cy)) else {
             return Bonk::Nothing;
@@ -136,15 +136,16 @@ impl LevelWorld {
         if b.used {
             return Bonk::Nothing;
         }
-        if let Some(item) = b.contains.take() {
-            b.used = true;
-            return Bonk::Released(item);
-        }
+        let dropped = b.contains.take();
         if b.breakable {
             b.used = true;
             self.map.set(cx as usize, cy as usize, false);
             self.kinds.remove(&(cx, cy));
-            return Bonk::Broke;
+            return Bonk::Broke(dropped);
+        }
+        if let Some(item) = dropped {
+            b.used = true;
+            return Bonk::Released(item);
         }
         Bonk::Nothing
     }
@@ -276,9 +277,16 @@ mod tests {
         assert!(w.map.is_solid(3, 5), "a spent question block stays solid");
 
         // A plain brick (no contents) shatters and is removed from the world.
-        assert_eq!(w.bonk(5, 5), Bonk::Broke);
+        assert_eq!(w.bonk(5, 5), Bonk::Broke(None));
         assert!(!w.map.is_solid(5, 5), "a broken brick is gone");
         assert_eq!(w.bonk(5, 5), Bonk::Nothing);
+
+        // A coin brick shatters AND drops its coin.
+        let mut l2 = Level::new("t", "overworld", 10, 10);
+        l2.entities.push(Entity { kind: "brick".into(), x: 2, y: 2, props: vec![("contains".into(), "kibble".into())] });
+        let mut w2 = LevelWorld::from_level(&l2);
+        assert_eq!(w2.bonk(2, 2), Bonk::Broke(Some("kibble".into())));
+        assert!(!w2.map.is_solid(2, 2), "coin brick also shatters");
 
         assert_eq!(w.bonk(0, 0), Bonk::Nothing, "empty cell is not bonkable");
     }

@@ -472,23 +472,29 @@ fn run_play(path: &str) {
                     let cy = ((sim.player.pos.y - 1.0) / TILE).floor() as i32;
                     let now = sim.clock();
                     let (bxw, byw) = (cx as f64 * TILE + TILE / 2.0, cy as f64 * TILE);
-                    match world.bonk(cx, cy) {
-                        Bonk::Released(item) => {
-                            sim.fx.spawn(&scamper::effects::SPARKLE, bxw, byw, now);
-                            if item == "kibble" {
-                                kibble += 1;
-                            } else {
-                                // pop the power-up out onto the block top to grab
-                                let m = Mob::new(cx as f64 * TILE, (cy - 1) as f64 * TILE, 12.0, 12.0, 1, 0.0, Gait::Still);
-                                actors.push(Actor { mob: m, kind: item, item: true, mode: Mode::Walk });
-                            }
-                        }
-                        Bonk::Broke => {
-                            kibble += 1; // shards count as a little treat
+                    let dropped = match world.bonk(cx, cy) {
+                        // A brick shatters (scuff burst) and may drop a coin.
+                        Bonk::Broke(item) => {
                             sim.fx.spawn(&scamper::effects::BONK, bxw, byw, now);
+                            item
                         }
+                        // A question block coughs up its contents and stays.
+                        Bonk::Released(item) => Some(item),
                         // Hit a solid that won't budge → a startled exclamation.
-                        Bonk::Nothing => sim.fx.spawn(&scamper::effects::BANG, sim.player.pos.x + sim.player.w / 2.0, sim.player.pos.y - 6.0, now),
+                        Bonk::Nothing => {
+                            sim.fx.spawn(&scamper::effects::BANG, sim.player.pos.x + sim.player.w / 2.0, sim.player.pos.y - 6.0, now);
+                            None
+                        }
+                    };
+                    if let Some(item) = dropped {
+                        sim.fx.spawn(&scamper::effects::SPARKLE, bxw, byw, now);
+                        if item == "kibble" {
+                            kibble += 1;
+                        } else {
+                            // pop the power-up out onto the block top to grab
+                            let m = Mob::new(cx as f64 * TILE, (cy - 1) as f64 * TILE, 12.0, 12.0, 1, 0.0, Gait::Still);
+                            actors.push(Actor { mob: m, kind: item, item: true, mode: Mode::Walk });
+                        }
                     }
                     full_redraw = true;
                 }
@@ -2472,6 +2478,39 @@ fn run_verify(dir: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use scamper::level::ir::{Entity, TileKind, TileSpan};
+
+    /// Replicate run_play's head-bonk path: a brick directly above Munchii must
+    /// shatter when he jumps into it.
+    #[test]
+    fn head_bonk_shatters_a_brick() {
+        let mut l = Level::new("t", "overworld", 12, 12);
+        l.tiles.push(TileSpan { x: 0, y: 8, len: 12, kind: TileKind::Ground });
+        l.entities.push(Entity { kind: "brick".into(), x: 3, y: 5, props: vec![] });
+        l.spawn = (3, 7);
+        let mut world = LevelWorld::from_level(&l);
+        assert!(world.map.is_solid(3, 5), "brick starts solid");
+        let mut sim = sim_at(world.spawn);
+        // Place Munchii directly under the brick (brick bottom = 6*16 = 96) and launch up.
+        sim.player.pos = Vec2::new(3.0 * 16.0, 6.5 * 16.0);
+        sim.player.vel = Vec2::new(0.0, -320.0);
+
+        let mut result = Bonk::Nothing;
+        for _ in 0..40 {
+            sim.step(&world.map, InputFrame { axis_x: 0, jump_pressed: false, jump_held: false, down_held: false });
+            if sim.player.bonked_head {
+                let cx = ((sim.player.pos.x + sim.player.w / 2.0) / TILE).floor() as i32;
+                let cy = ((sim.player.pos.y - 1.0) / TILE).floor() as i32;
+                let b = world.bonk(cx, cy);
+                if b != Bonk::Nothing {
+                    result = b;
+                    break;
+                }
+            }
+        }
+        assert_eq!(result, Bonk::Broke(None), "head-bonk should shatter the brick, got {result:?}");
+        assert!(!world.map.is_solid(3, 5), "broken brick should no longer be solid");
+    }
 
     /// Soak each given level by holding right and jumping; collect any that panic
     /// or error so the assertion names the offenders rather than dying on the first.
