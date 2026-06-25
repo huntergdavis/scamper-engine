@@ -1020,7 +1020,7 @@ fn run_play(path: &str) {
                 let mut lines: Vec<&str> = vec![&card];
                 let best_line;
                 if let Some(&b) = bests.get(&level.id) {
-                    best_line = format!(" best {}:{:02} ", b / 60, b % 60);
+                    best_line = format!(" best {}:{:02}  {} ", b / 60, b % 60, medal_for(b).0);
                     lines.push(&best_line);
                 }
                 scamper::ui::center_card(&mut status, cols, (rows / 2).max(1), &lines, true);
@@ -1035,11 +1035,11 @@ fn run_play(path: &str) {
             // Results card on level clear: kibble collected, time, and a star rating
             // (faster = more stars). Shown during the win pause before auto-advance.
             if won && !game_over {
-                let stars = if secs < 25 { "★★★" } else if secs < 55 { "★★ " } else { "★  " };
+                let (medal, stars) = medal_for(secs);
                 let best = bests.get(&level.id).copied().unwrap_or(secs);
                 let l0 = format!("  ✦  {}  CLEAR!  ✦  ", level.id);
                 let l1 = format!("  kibble +{}   time {}:{:02}  ", kibble.saturating_sub(level_kibble0), secs / 60, secs % 60);
-                let l2 = format!("  rating {}  ", stars);
+                let l2 = format!("  {medal} {stars}  ");
                 let l3 = if is_new_best {
                     "  ☆ NEW BEST! ☆  ".to_string()
                 } else {
@@ -1189,6 +1189,17 @@ fn ambient_fx(theme: scamper::level::Theme) -> Option<&'static scamper::effects:
         Theme::Underwater => Some(&scamper::effects::BUBBLE),
         Theme::Overworld => Some(&scamper::effects::LEAF),
         _ => None,
+    }
+}
+
+/// The medal (name, ★ rating) earned for clearing in `secs` — a time-based reward.
+fn medal_for(secs: u32) -> (&'static str, &'static str) {
+    if secs < 25 {
+        ("GOLD", "★★★")
+    } else if secs < 55 {
+        ("SILVER", "★★")
+    } else {
+        ("BRONZE", "★")
     }
 }
 
