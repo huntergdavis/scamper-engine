@@ -60,6 +60,7 @@ pub const ALL: &[Sprite] = &[
     Sprite { id: "flutter_collar", role: Role::Item, w: 5, h: 2, anims: FLUTTER_COLLAR, palette: flutter_rgb },
     Sprite { id: "swooper", role: Role::Creature, w: 6, h: 2, anims: SWOOPER, palette: swooper_rgb },
     Sprite { id: "trampoline", role: Role::Creature, w: 5, h: 2, anims: TRAMPOLINE, palette: trampoline_rgb },
+    Sprite { id: "lift", role: Role::Creature, w: 6, h: 2, anims: LIFT, palette: lift_rgb },
     Sprite { id: "hardhat", role: Role::Creature, w: 6, h: 2, anims: HARDHAT, palette: hard_rgb },
     Sprite { id: "stick_squirrel", role: Role::Creature, w: 6, h: 3, anims: SQUIRREL, palette: squirrel_rgb },
     Sprite { id: "sudsfish", role: Role::Creature, w: 5, h: 2, anims: FISH, palette: fish_rgb },
@@ -176,6 +177,14 @@ fn trampoline_rgb(ch: char) -> (u8, u8, u8) {
     match ch {
         '=' | '~' => (90, 230, 200),            // springy surface
         _ => (60, 120, 110),                    // frame / legs
+    }
+}
+/// Lift: a warm-grey elevator deck on chains.
+fn lift_rgb(ch: char) -> (u8, u8, u8) {
+    match ch {
+        '#' | ':' => (196, 188, 170),           // deck
+        '|' => (130, 130, 138),                 // chains
+        _ => (150, 144, 132),                   // frame
     }
 }
 fn hard_rgb(ch: char) -> (u8, u8, u8) {
@@ -318,6 +327,11 @@ const SWOOPER: &[Anim] = &[Anim { name: "walk", fps: 9, frames: SWOOPER_F }];
 // Trampoline — a springy bounce pad. The surface flexes between frames (taut/sprung).
 const TRAMPOLINE_F: &[&[&str]] = &[&["[===]", "/   \\"], &["[~~~]", "/   \\"]];
 const TRAMPOLINE: &[Anim] = &[Anim { name: "idle", fps: 3, frames: TRAMPOLINE_F }];
+
+// Lift — a riding elevator platform. A solid deck with chain hangers; the deck
+// dots shift to read as motion.
+const LIFT_F: &[&[&str]] = &[&["|    |", "[####]"], &["|    |", "[::::]"]];
+const LIFT: &[Anim] = &[Anim { name: "idle", fps: 3, frames: LIFT_F }];
 
 const HARDHAT_F: &[&[&str]] = &[&["/####\\", "(o)(o)"]];
 const HARDHAT: &[Anim] = &[Anim { name: "walk", fps: 4, frames: HARDHAT_F }];

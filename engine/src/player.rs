@@ -273,6 +273,27 @@ impl Player {
         };
     }
 
+    /// Land on / ride a moving platform whose AABB is (`lx`,`ly`,`lw`,`lh`) and
+    /// which moved `dx` horizontally this frame. Top-only (you jump up through it):
+    /// if the player is descending (or resting) and his feet sit within the
+    /// platform's top band while overlapping it in x, snap his feet to the top,
+    /// zero vertical velocity, mark him grounded, and carry him along by `dx`.
+    /// Returns true if he's riding. Call once per platform, after [`step`](Self::step).
+    pub fn ride_platform(&mut self, lx: f64, ly: f64, lw: f64, lh: f64, dx: f64) -> bool {
+        let feet = self.pos.y + self.h;
+        let over_x = self.pos.x + self.w > lx && self.pos.x < lx + lw;
+        if self.vel.y >= 0.0 && over_x && feet >= ly - 2.0 && feet <= ly + lh * 0.6 + 2.0 {
+            self.pos.y = ly - self.h;
+            self.vel.y = 0.0;
+            self.grounded = true;
+            self.state = State::Grounded;
+            self.pos.x += dx;
+            true
+        } else {
+            false
+        }
+    }
+
     /// Move along one axis in <=1px sub-steps, stopping (and zeroing that axis'
     /// velocity) on the first solid contact. No tunneling since step < tile size.
     fn step_axis(&mut self, map: &TileMap, dx: f64, dy: f64) {
@@ -331,6 +352,26 @@ mod tests {
             "####################",
         ];
         TileMap::from_ascii(&rows)
+    }
+
+    #[test]
+    fn rides_a_moving_platform() {
+        let mut p = Player::new(100.0, 104.0); // feet at y=120, on the platform top
+        p.w = 12.0;
+        p.h = 16.0;
+        p.vel.y = 40.0; // descending toward the platform top
+        // Platform top at y=120 (player feet at 116, within the top band); it slid +3px.
+        let riding = p.ride_platform(96.0, 120.0, 28.0, 6.0, 3.0);
+        assert!(riding, "should land on and ride the platform");
+        assert_eq!(p.pos.y, 120.0 - p.h, "feet snapped to the platform top");
+        assert_eq!(p.vel.y, 0.0, "vertical velocity zeroed");
+        assert!(p.grounded);
+        assert_eq!(p.pos.x, 103.0, "carried along by the platform's +3px");
+
+        // Not overlapping in x → not riding.
+        let mut q = Player::new(200.0, 104.0);
+        q.vel.y = 40.0;
+        assert!(!q.ride_platform(96.0, 120.0, 28.0, 6.0, 3.0), "off to the side: no ride");
     }
 
     #[test]
