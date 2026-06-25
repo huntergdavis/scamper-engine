@@ -323,6 +323,36 @@ fn load_level_file(path: &str) -> std::io::Result<Level> {
 
 /// The next `*.lvl` file (alphabetical) in the same directory as `current`, or
 /// `None` if `current` is the last one. Used to auto-advance on level completion.
+/// Where per-level best clear-times persist (per-user home; falls back to cwd).
+fn bests_path() -> std::path::PathBuf {
+    let dir = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_else(|| std::path::PathBuf::from("."));
+    dir.join(".supermunchii_bests")
+}
+
+/// Load the `id<TAB>seconds` best-time table (a missing/garbled file → empty).
+fn load_bests() -> std::collections::HashMap<String, u32> {
+    let mut m = std::collections::HashMap::new();
+    if let Ok(text) = std::fs::read_to_string(bests_path()) {
+        for line in text.lines() {
+            if let Some((id, secs)) = line.split_once('\t') {
+                if let Ok(s) = secs.trim().parse::<u32>() {
+                    m.insert(id.to_string(), s);
+                }
+            }
+        }
+    }
+    m
+}
+
+/// Persist the best-time table (best-effort; write errors are ignored).
+fn save_bests(m: &std::collections::HashMap<String, u32>) {
+    let mut out = String::new();
+    for (id, secs) in m {
+        let _ = std::fmt::Write::write_fmt(&mut out, format_args!("{id}\t{secs}\n"));
+    }
+    let _ = std::fs::write(bests_path(), out);
+}
+
 fn next_level_path(current: &str) -> Option<String> {
     let p = std::path::Path::new(current);
     let dir = p.parent()?;
@@ -431,6 +461,8 @@ fn run_play(path: &str) {
     let mut won = false;
     let mut won_at: u64 = 0; // ns timestamp when the level was completed
     let mut celebrated = false; // win-flourish fired (edge-triggered off `won`)
+    let mut bests = load_bests(); // persisted best clear-time per level id
+    let mut is_new_best = false; // this clear beat the saved best
     let mut game_over = false;
     let mut over_at: u64 = 0;
 
@@ -871,6 +903,7 @@ fn run_play(path: &str) {
                 boss_cd = 0;
                 invincible = 0;
                 celebrated = false;
+                is_new_best = false;
                 intro_until = now + 1_600_000_000;
                 level_start = now;
                 level_kibble0 = kibble;
@@ -896,6 +929,7 @@ fn run_play(path: &str) {
                     boss_cd = 0;
                     invincible = 0;
                     celebrated = false;
+                    is_new_best = false;
                     intro_until = now + 1_600_000_000;
                     level_start = now;
                     level_kibble0 = kibble;
@@ -922,6 +956,13 @@ fn run_play(path: &str) {
                 }
                 sim.fx.spawn_word(scamper::strings::t("fx.clear"), (255, 240, 150), cxw, cyw - 16.0, cl);
                 shake.bump(0.5);
+                // Record the clear time; flag (and persist) a new personal best.
+                let fsec = (won_at.saturating_sub(level_start) / 1_000_000_000) as u32;
+                is_new_best = bests.get(&level.id).map_or(true, |&b| fsec < b);
+                if is_new_best {
+                    bests.insert(level.id.clone(), fsec);
+                    save_bests(&bests);
+                }
             }
             // --- render the camera window (shared with the headless soak harness) ---
             let shake_off = shake.offset(frame_ix, 7.0);
@@ -958,10 +999,16 @@ fn run_play(path: &str) {
             // (faster = more stars). Shown during the win pause before auto-advance.
             if won && !game_over {
                 let stars = if secs < 25 { "★★★" } else if secs < 55 { "★★ " } else { "★  " };
+                let best = bests.get(&level.id).copied().unwrap_or(secs);
                 let l0 = format!("  ✦  {}  CLEAR!  ✦  ", level.id);
                 let l1 = format!("  kibble +{}   time {}:{:02}  ", kibble.saturating_sub(level_kibble0), secs / 60, secs % 60);
                 let l2 = format!("  rating {}  ", stars);
-                scamper::ui::center_card(&mut status, cols, (rows / 2).saturating_sub(2).max(1), &[&l0, &l1, &l2], true);
+                let l3 = if is_new_best {
+                    "  ☆ NEW BEST! ☆  ".to_string()
+                } else {
+                    format!("  best {}:{:02}  ", best / 60, best % 60)
+                };
+                scamper::ui::center_card(&mut status, cols, (rows / 2).saturating_sub(2).max(1), &[&l0, &l1, &l2, &l3], true);
                 full_redraw = true;
             }
             let mut o = std::io::stdout().lock();
