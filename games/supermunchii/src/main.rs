@@ -433,6 +433,7 @@ fn run_play(path: &str) {
     let mut prev_t = now_ns();
     let mut next = now_ns();
     let mut intro_until = now_ns() + 1_600_000_000; // show the level-title card ~1.6s
+    let mut level_start = now_ns(); // for the on-screen level timer
 
     // A title card to open the session — any key starts, q quits, and it
     // auto-starts after a few seconds so it never blocks an unattended run.
@@ -837,6 +838,7 @@ fn run_play(path: &str) {
                 invincible = 0;
                 celebrated = false;
                 intro_until = now + 1_600_000_000;
+                level_start = now;
                 full_redraw = true;
             }
             // No next level → stay on the completed screen (q to quit).
@@ -860,6 +862,7 @@ fn run_play(path: &str) {
                     invincible = 0;
                     celebrated = false;
                     intro_until = now + 1_600_000_000;
+                    level_start = now;
                     full_redraw = true;
                 }
             }
@@ -897,7 +900,8 @@ fn run_play(path: &str) {
             }
             draw_play_frame(&mut fb, backend.as_mut(), &mut out, &world, &sim, &actors, &projectiles, &hostiles, fb_w, fb_h, cols, rows, full_redraw, input.down_held(), power.zoom(), shake_off, blink);
             full_redraw = false;
-            render_play_status(&mut status, &level, sim.player.state, backend.name(), won, game_over, kibble, lives, power, zoomies > 0, glide, invincible > 0, rows + 1, cols);
+            let secs = ((if won { won_at } else { now }).saturating_sub(level_start) / 1_000_000_000) as u32;
+            render_play_status(&mut status, &level, sim.player.state, backend.name(), won, game_over, kibble, lives, power, zoomies > 0, glide, invincible > 0, secs, rows + 1, cols);
             if paused {
                 use std::fmt::Write;
                 // Overwrite the status row with a pause banner (inverse video).
@@ -1890,7 +1894,7 @@ fn soak_level(path: &str, ticks: u64) -> Result<SoakStats, String> {
             let mut status = String::new();
             for w in [10u16, 28, 48, cols] {
                 let won = tick > ticks * 3 / 4; // exercise the LEVEL COMPLETE banner too
-                render_play_status(&mut status, &level, sim.player.state, "mono", won, false, kibble, 3, power, false, false, false, 1, w);
+                render_play_status(&mut status, &level, sim.player.state, "mono", won, false, kibble, 3, power, false, false, false, 0, 1, w);
             }
         }
     }
@@ -1902,18 +1906,20 @@ fn soak_level(path: &str, ticks: u64) -> Result<SoakStats, String> {
 
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_arguments)]
-fn render_play_status(buf: &mut String, level: &Level, st: State, backend: &str, won: bool, game_over: bool, kibble: u32, lives: i32, power: Power, boost: bool, glide: bool, inv: bool, rows: u16, cols: u16) {
+#[allow(clippy::too_many_arguments)]
+fn render_play_status(buf: &mut String, level: &Level, st: State, backend: &str, won: bool, game_over: bool, kibble: u32, lives: i32, power: Power, boost: bool, glide: bool, inv: bool, secs: u32, rows: u16, cols: u16) {
     use std::fmt::Write;
     let mut plain = String::new();
     let zoom = if boost { "  ⚡zoom" } else { "" }; // active Zoomies-Treat burst
     let wings = if glide { "  ~glide" } else { "" }; // Flutter Collar unlocked
     let star = if inv { "  ★star" } else { "" }; // invincibility burst
+    let clock = format!("{}:{:02}", secs / 60, secs % 60); // level timer
     if game_over {
         let _ = write!(plain, "✗ GAME OVER ✗   kibble:{kibble}   gfx:{backend} · q quit");
     } else if won {
-        let _ = write!(plain, "★ LEVEL COMPLETE — {} ★   ♥×{lives} kibble:{kibble}   → next level…   gfx:{backend} · q quit", level.id);
+        let _ = write!(plain, "★ LEVEL COMPLETE — {} ★   ♥×{lives} kibble:{kibble}  time {clock}   → next level…   gfx:{backend} · q quit", level.id);
     } else {
-        let _ = write!(plain, "{}  [{}]  {}  ♥×{lives}  kibble {kibble} ({}/100→1up)  gear:{}{zoom}{wings}{star}   h help · Tab gfx:{backend} · q quit", level.id, level.theme, state_letter(st), kibble % 100, power.label());
+        let _ = write!(plain, "{}  [{}]  {}  ♥×{lives}  kibble {kibble} ({}/100→1up)  gear:{}{zoom}{wings}{star}  t{clock}   h help · Tab gfx:{backend} · q quit", level.id, level.theme, state_letter(st), kibble % 100, power.label());
     }
     let maxw = (cols as usize).saturating_sub(1);
     if plain.chars().count() > maxw {
@@ -3263,7 +3269,7 @@ mod tests {
             let mut fb = Framebuffer::new(fb_w, fb_h);
             sim.step(&world.map, InputFrame { axis_x: 1, jump_pressed: false, jump_held: false, down_held: false });
             draw_play_frame(&mut fb, backend.as_mut(), &mut out, &world, &sim, &actors, &[], &[], fb_w, fb_h, vc, vr, true, false, 4, (0.0, 0.0), false);
-            render_play_status(&mut status, &l, sim.player.state, "mono", false, false, 0, 3, Power::Small, false, false, false, vr + 1, vc);
+            render_play_status(&mut status, &l, sim.player.state, "mono", false, false, 0, 3, Power::Small, false, false, false, 0, vr + 1, vc);
         }
     }
 
@@ -3593,7 +3599,7 @@ mod tests {
             let rows = cols.saturating_add(1);
             for &won in &[false, true] {
                 for &over in &[false, true] {
-                    render_play_status(&mut buf, &lvl, State::Grounded, "mono", won, over, 12_345, 3, Power::Bubble, true, true, true, rows, cols);
+                    render_play_status(&mut buf, &lvl, State::Grounded, "mono", won, over, 12_345, 3, Power::Bubble, true, true, true, 99, rows, cols);
                 }
             }
             render_tiles_status(&mut buf, Theme::Castle, "ascii", rows, cols);
