@@ -51,6 +51,19 @@ pub const ALL: &[Sprite] = &[
     Sprite { id: "sudsball", role: Role::Item, w: 3, h: 1, anims: SUDSBALL, palette: suds_rgb },
     Sprite { id: "baron_whiskers", role: Role::Creature, w: 8, h: 4, anims: BARON, palette: baron_rgb },
     Sprite { id: "bath_plug", role: Role::Item, w: 3, h: 2, anims: BATH_PLUG, palette: plug_rgb },
+    // The wider bestiary — so imported levels actually populate.
+    Sprite { id: "flutterbug", role: Role::Creature, w: 6, h: 2, anims: FLUTTERBUG, palette: bug_rgb },
+    Sprite { id: "hoppa", role: Role::Creature, w: 5, h: 2, anims: HOPPA, palette: bug_rgb },
+    Sprite { id: "pincher", role: Role::Creature, w: 6, h: 2, anims: PINCHER, palette: crab_rgb },
+    Sprite { id: "hardhat", role: Role::Creature, w: 6, h: 2, anims: HARDHAT, palette: hard_rgb },
+    Sprite { id: "stick_squirrel", role: Role::Creature, w: 6, h: 3, anims: SQUIRREL, palette: squirrel_rgb },
+    Sprite { id: "sudsfish", role: Role::Creature, w: 5, h: 2, anims: FISH, palette: fish_rgb },
+    Sprite { id: "puffer", role: Role::Creature, w: 6, h: 2, anims: PUFFER, palette: cloud_rgb },
+    Sprite { id: "zoomdisc", role: Role::Creature, w: 6, h: 1, anims: ZOOMDISC, palette: disc_rgb },
+    Sprite { id: "dandi", role: Role::Creature, w: 5, h: 2, anims: DANDI, palette: plant_rgb },
+    Sprite { id: "bubble_bone", role: Role::Item, w: 4, h: 2, anims: BUBBLE_BONE, palette: bubble_rgb },
+    Sprite { id: "zoomies_treat", role: Role::Item, w: 4, h: 2, anims: ZOOMIES, palette: treat_rgb },
+    Sprite { id: "lucky_squeaky", role: Role::Item, w: 4, h: 2, anims: LUCKY, palette: treat_rgb },
 ];
 
 /// Look up a sprite by id (the IR entity `kind`), if registered.
@@ -106,6 +119,70 @@ fn plug_rgb(ch: char) -> (u8, u8, u8) {
         'O' => (54, 50, 50),  // rubber stopper
         _ => (158, 158, 168), // chain
     }
+}
+
+// ---- wider bestiary palettes ----
+fn bug_rgb(ch: char) -> (u8, u8, u8) {
+    match ch {
+        'o' => (24, 28, 20),
+        _ => (120, 180, 72),
+    } // green bug, dark eyes
+}
+fn crab_rgb(ch: char) -> (u8, u8, u8) {
+    match ch {
+        'o' => (28, 20, 18),
+        _ => (210, 96, 56),
+    } // orange crab
+}
+fn hard_rgb(ch: char) -> (u8, u8, u8) {
+    match ch {
+        'o' => (20, 20, 24),
+        '#' => (214, 180, 72),
+        _ => (120, 124, 140),
+    } // gray shell, yellow helmet, dark eyes
+}
+fn squirrel_rgb(ch: char) -> (u8, u8, u8) {
+    match ch {
+        'o' => (28, 20, 14),
+        '\'' => (224, 196, 150),
+        _ => (150, 96, 52),
+    } // brown fur, tan belly
+}
+fn fish_rgb(ch: char) -> (u8, u8, u8) {
+    match ch {
+        'o' => (16, 28, 34),
+        _ => (96, 196, 210),
+    } // cyan fish, dark eye
+}
+fn cloud_rgb(ch: char) -> (u8, u8, u8) {
+    match ch {
+        '\'' => (120, 170, 235),
+        _ => (150, 156, 170),
+    } // gray cloud, blue drops
+}
+fn disc_rgb(ch: char) -> (u8, u8, u8) {
+    match ch {
+        '-' => (235, 245, 255),
+        _ => (120, 210, 225),
+    } // bright frisbee
+}
+fn plant_rgb(ch: char) -> (u8, u8, u8) {
+    match ch {
+        '*' => (236, 206, 72),
+        _ => (96, 176, 84),
+    } // yellow head, green stem
+}
+fn bubble_rgb(ch: char) -> (u8, u8, u8) {
+    match ch {
+        '=' => (235, 245, 255),
+        _ => (150, 210, 235),
+    } // soapy chew toy
+}
+fn treat_rgb(ch: char) -> (u8, u8, u8) {
+    match ch {
+        '*' => (255, 236, 150),
+        _ => (236, 196, 84),
+    } // gold treat
 }
 
 // ---- frames (original art) --------------------------------------------------
@@ -165,6 +242,43 @@ const BARON: &[Anim] = &[Anim { name: "walk", fps: 4, frames: BARON_WALK }];
 // Bath plug — the "axe": a rubber stopper on a chain. Reach it to win.
 const BATH_PLUG_IDLE: &[&[&str]] = &[&[" O ", "/|\\"]];
 const BATH_PLUG: &[Anim] = &[Anim { name: "idle", fps: 1, frames: BATH_PLUG_IDLE }];
+
+// ---- wider bestiary frames (original, compact) ----
+const FLUTTERBUG_F: &[&[&str]] = &[&["(\\oo/)", "  vv  "], &["(/oo\\)", "  vv  "]];
+const FLUTTERBUG: &[Anim] = &[Anim { name: "walk", fps: 8, frames: FLUTTERBUG_F }];
+
+const HOPPA_F: &[&[&str]] = &[&["(o o)", " ^^^ "], &["(o o)", " /^\\ "]];
+const HOPPA: &[Anim] = &[Anim { name: "walk", fps: 7, frames: HOPPA_F }];
+
+const PINCHER_F: &[&[&str]] = &[&[">(oo)<", " m  m "], &[">(oo)<", "  mm  "]];
+const PINCHER: &[Anim] = &[Anim { name: "walk", fps: 6, frames: PINCHER_F }];
+
+const HARDHAT_F: &[&[&str]] = &[&["/####\\", "(o)(o)"]];
+const HARDHAT: &[Anim] = &[Anim { name: "walk", fps: 4, frames: HARDHAT_F }];
+
+const SQUIRREL_F: &[&[&str]] = &[&[" (oo) ", "<|''|>", " /  \\ "], &[" (oo) ", "<|''|>", "  ||  "]];
+const SQUIRREL: &[Anim] = &[Anim { name: "walk", fps: 6, frames: SQUIRREL_F }];
+
+const FISH_F: &[&[&str]] = &[&["<oo>=", "  ^^ "], &["<oo>=", "  vv "]];
+const FISH: &[Anim] = &[Anim { name: "walk", fps: 8, frames: FISH_F }];
+
+const PUFFER_F: &[&[&str]] = &[&["(~~~~)", " '''' "], &["(~~~~)", "  ''  "]];
+const PUFFER: &[Anim] = &[Anim { name: "walk", fps: 5, frames: PUFFER_F }];
+
+const ZOOMDISC_F: &[&[&str]] = &[&["(====)"], &["(=--=)"]];
+const ZOOMDISC: &[Anim] = &[Anim { name: "walk", fps: 12, frames: ZOOMDISC_F }];
+
+const DANDI_F: &[&[&str]] = &[&["(***)", " ||| "], &["(***)", " |.| "]];
+const DANDI: &[Anim] = &[Anim { name: "walk", fps: 3, frames: DANDI_F }];
+
+const BUBBLE_BONE_F: &[&[&str]] = &[&["o==o", " <> "], &["o==o", " () "]];
+const BUBBLE_BONE: &[Anim] = &[Anim { name: "idle", fps: 4, frames: BUBBLE_BONE_F }];
+
+const ZOOMIES_F: &[&[&str]] = &[&["\\**/", "/**\\"], &["/**\\", "\\**/"]];
+const ZOOMIES: &[Anim] = &[Anim { name: "idle", fps: 8, frames: ZOOMIES_F }];
+
+const LUCKY_F: &[&[&str]] = &[&["(>o)", " \\/ "], &["(>o)", " vv "]];
+const LUCKY: &[Anim] = &[Anim { name: "idle", fps: 4, frames: LUCKY_F }];
 
 #[cfg(test)]
 mod tests {
