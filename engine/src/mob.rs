@@ -23,6 +23,11 @@ pub enum Gait {
     /// Fly horizontally at a fixed height — no gravity; reverses at walls. Used by
     /// air creatures and (with a lifetime the game manages) projectiles.
     Fly,
+    /// Bob up and down around the home position (rise-and-lower) — pipe plants.
+    Bob,
+    /// Free projectile: gravity-driven arc, moves by its own velocity, stops dead
+    /// on any solid (sets `blocked`). Used for thrown sticks.
+    Ballistic,
 }
 
 /// Per-tick physics constants, tuned for the 16px tile world.
@@ -42,11 +47,16 @@ pub struct Mob {
     pub alive: bool,
     pub age: u32,      // ticks lived (for timers / oscillation)
     pub blocked: bool, // hit a wall on the last horizontal move (projectiles die on this)
+    pub home_y: f64,   // anchor for the Bob gait (set to the spawn y)
 }
+
+/// Bob (pipe-plant) oscillation: rise this many px and back over this many ticks.
+const BOB_AMP: f64 = 26.0;
+const BOB_PERIOD: f64 = 150.0;
 
 impl Mob {
     pub fn new(x: f64, y: f64, w: f64, h: f64, facing: i8, speed: f64, gait: Gait) -> Self {
-        Mob { pos: vec2(x, y), vel: vec2(0.0, 0.0), w, h, facing, speed, gait, alive: true, age: 0, blocked: false }
+        Mob { pos: vec2(x, y), vel: vec2(0.0, 0.0), w, h, facing, speed, gait, alive: true, age: 0, blocked: false, home_y: y }
     }
 
     /// Advance one tick against the solid tilemap.
@@ -62,6 +72,26 @@ impl Mob {
             let dir = if self.facing >= 0 { 1.0 } else { -1.0 };
             if self.move_axis(map, dir * self.speed, 0.0) {
                 self.facing = -self.facing;
+                self.blocked = true;
+            }
+            return;
+        }
+
+        // Bob: rise from the home position and lower again (pipe plants). Set the
+        // position directly — a smooth raised-cosine so it eases at both ends.
+        if self.gait == Gait::Bob {
+            let w = std::f64::consts::TAU / BOB_PERIOD;
+            self.pos.y = self.home_y - BOB_AMP * 0.5 * (1.0 - (self.age as f64 * w).cos());
+            return;
+        }
+
+        // Ballistic: a free projectile — gravity-driven arc, dies on any solid.
+        if self.gait == Gait::Ballistic {
+            self.vel.y = (self.vel.y + GRAVITY).min(MAX_FALL);
+            if self.move_axis(map, self.vel.x, 0.0) {
+                self.blocked = true;
+            }
+            if self.move_axis(map, 0.0, self.vel.y) {
                 self.blocked = true;
             }
             return;
@@ -203,6 +233,33 @@ mod tests {
         settle(&mut f, &map, 200);
         assert!((f.pos.y - y0).abs() < 0.01, "a flyer does not fall");
         assert_eq!(f.facing, -1, "reversed at the wall");
+    }
+
+    #[test]
+    fn bob_rises_from_home_and_returns() {
+        let map = flat();
+        let home = 3.0 * TILE;
+        let mut d = Mob::new(2.0 * TILE, home, 12.0, 14.0, 1, 0.0, Gait::Bob);
+        assert!((d.pos.y - home).abs() < 0.01, "starts at home");
+        // Quarter-ish into the cycle it has risen above home.
+        settle(&mut d, &map, (BOB_PERIOD as usize) / 2);
+        assert!(d.pos.y < home - BOB_AMP * 0.5, "rose well above home at mid-cycle");
+        // A full period returns it home.
+        settle(&mut d, &map, (BOB_PERIOD as usize) / 2);
+        assert!((d.pos.y - home).abs() < 1.0, "back home after a full period");
+    }
+
+    #[test]
+    fn ballistic_arcs_and_dies_on_a_solid() {
+        let map = flat();
+        let mut s = Mob::new(2.0 * TILE, 1.0 * TILE, 4.0, 4.0, 1, 0.0, Gait::Ballistic);
+        s.vel = vec2(2.0, -4.0); // lobbed up and to the right
+        let y0 = s.pos.y;
+        s.step(&map);
+        assert!(s.pos.y < y0, "rises just after launch");
+        // Eventually it falls and lands on the floor → blocked.
+        settle(&mut s, &map, 200);
+        assert!(s.blocked, "a ballistic projectile dies when it hits a solid");
     }
 
     #[test]
