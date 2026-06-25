@@ -423,6 +423,7 @@ fn run_play(path: &str) {
     let mut dash_t: u64 = 0; // last zoomies dash-trail emit (ns)
     let mut shake = scamper::shake::Shake::new(); // camera juice on impacts
     let mut frame_ix: u64 = 0; // render-frame counter (drives the shake tremble)
+    let mut look_ahead: f64 = 0.0; // smoothed camera lead in the travel direction
     let mut zoomies: u32 = 0; // zoomies-treat speed burst, ticks remaining
     const ZOOMIES_TICKS: u32 = 360; // ~6s at the sim rate
     let mut glide = false; // Flutter Collar: hold jump while falling to glide
@@ -969,13 +970,17 @@ fn run_play(path: &str) {
             if shake.active() {
                 full_redraw = true; // a moving camera needs the whole scene repainted
             }
+            // Camera look-ahead: ease the view toward the way Munchii is moving so
+            // there's more room to see what's coming (only when he's actually moving).
+            let look_target = if sim.player.vel.x.abs() > 30.0 { sim.player.facing as f64 * 34.0 } else { 0.0 };
+            look_ahead += (look_target - look_ahead) * 0.08;
             frame_ix += 1;
             // Post-hit i-frames: flicker Munchii (hide on alternate ~4-frame beats).
             let blink = invuln > 0 && (frame_ix / 4) % 2 == 0;
             if invuln > 0 {
                 full_redraw = true; // blinking sprite needs a clean repaint each frame
             }
-            draw_play_frame(&mut fb, backend.as_mut(), &mut out, &world, &sim, &actors, &projectiles, &hostiles, fb_w, fb_h, cols, rows, full_redraw, input.down_held(), power.zoom(), shake_off, blink);
+            draw_play_frame(&mut fb, backend.as_mut(), &mut out, &world, &sim, &actors, &projectiles, &hostiles, fb_w, fb_h, cols, rows, full_redraw, input.down_held(), power.zoom(), shake_off, blink, look_ahead);
             full_redraw = false;
             let secs = ((if won { won_at } else { now }).saturating_sub(level_start) / 1_000_000_000) as u32;
             render_play_status(&mut status, &level, sim.player.state, backend.name(), won, game_over, kibble, lives, power, zoomies > 0, glide, invincible > 0, secs, rows + 1, cols);
@@ -1545,10 +1550,11 @@ fn draw_play_frame(
     zoom: usize,
     shake: (f64, f64),
     hide_player: bool,
+    look_ahead: f64,
 ) {
     let zoom = zoom.max(1);
     let pal = art::palette(world.theme);
-    let pcx = sim.player.pos.x + sim.player.w / 2.0;
+    let pcx = sim.player.pos.x + sim.player.w / 2.0 + look_ahead;
     let pcy = sim.player.pos.y + sim.player.h / 2.0;
     let cpw = fb_w as f64 / cols.max(1) as f64; // px per terminal cell (w)
     let cph = fb_h as f64 / rows.max(1) as f64; // px per terminal cell (h)
@@ -1988,7 +1994,7 @@ fn soak_level(path: &str, ticks: u64) -> Result<SoakStats, String> {
             // 1× render paths headlessly.
             let z = if (tick / 15) % 2 == 0 { 4 } else { 1 };
             for b in backends.iter_mut() {
-                draw_play_frame(&mut fb, b.as_mut(), &mut out, &world, &sim, &actors, &[], &hostiles, fb_w, fb_h, cols, rows, true, false, z, (0.0, 0.0), false);
+                draw_play_frame(&mut fb, b.as_mut(), &mut out, &world, &sim, &actors, &[], &hostiles, fb_w, fb_h, cols, rows, true, false, z, (0.0, 0.0), false, 0.0);
             }
             // Also render the status line like run_play does — at narrow widths too,
             // so status formatting (multibyte truncation, etc.) is exercised, not
@@ -3372,7 +3378,7 @@ mod tests {
             assert!(fb_w > 0 && fb_h > 0 && vc > 0 && vr > 0, "play_view degenerate at {cols}x{rows}");
             let mut fb = Framebuffer::new(fb_w, fb_h);
             sim.step(&world.map, InputFrame { axis_x: 1, jump_pressed: false, jump_held: false, down_held: false });
-            draw_play_frame(&mut fb, backend.as_mut(), &mut out, &world, &sim, &actors, &[], &[], fb_w, fb_h, vc, vr, true, false, 4, (0.0, 0.0), false);
+            draw_play_frame(&mut fb, backend.as_mut(), &mut out, &world, &sim, &actors, &[], &[], fb_w, fb_h, vc, vr, true, false, 4, (0.0, 0.0), false, 0.0);
             render_play_status(&mut status, &l, sim.player.state, "mono", false, false, 0, 3, Power::Small, false, false, false, 0, vr + 1, vc);
         }
     }
@@ -3443,7 +3449,7 @@ mod tests {
             let mut be: Box<dyn Backend> = Box::new(Cap(cap.clone()));
             let mut fb = Framebuffer::new(fb_w, fb_h);
             let actors = build_actors(&world);
-            draw_play_frame(&mut fb, be.as_mut(), &mut Vec::new(), &world, &sim, &actors, &[], &[], fb_w, fb_h, cols, rows, true, false, zoom, (0.0, 0.0), false);
+            draw_play_frame(&mut fb, be.as_mut(), &mut Vec::new(), &world, &sim, &actors, &[], &[], fb_w, fb_h, cols, rows, true, false, zoom, (0.0, 0.0), false, 0.0);
             let b = ground_band(&cap.borrow());
             b
         };
