@@ -286,8 +286,8 @@ fn render_tiles_status(buf: &mut String, theme: Theme, backend: &str, rows: u16,
     let mut plain = String::new();
     let _ = write!(plain, "TILES  theme:{} (t)  ·  Tab gfx:{backend}  ·  q quit   [{grid}]", theme.name());
     let maxw = (cols as usize).saturating_sub(1);
-    if plain.len() > maxw {
-        plain.truncate(maxw);
+    if plain.chars().count() > maxw {
+        plain = plain.chars().take(maxw).collect(); // clamp by chars: multibyte-safe
     }
     buf.clear();
     let _ = write!(buf, "\x1b[{rows};1H\x1b[2K\x1b[7m{plain}\x1b[0m");
@@ -1143,8 +1143,8 @@ fn render_play_status(buf: &mut String, level: &Level, st: State, backend: &str,
         let _ = write!(plain, "{}  [{}]  {}  ♥×{lives} kibble:{kibble} {}   A/D·jump·↓pipe·C suds·Tab gfx:{backend}·q", level.id, level.theme, state_letter(st), power.label());
     }
     let maxw = (cols as usize).saturating_sub(1);
-    if plain.len() > maxw {
-        plain.truncate(maxw);
+    if plain.chars().count() > maxw {
+        plain = plain.chars().take(maxw).collect(); // clamp by chars: multibyte-safe
     }
     buf.clear();
     let _ = write!(buf, "\x1b[{rows};1H\x1b[2K\x1b[7m{plain}\x1b[0m");
@@ -1727,8 +1727,8 @@ fn render_status(buf: &mut String, p: &Player, score: u32, fps: f64, backend: &s
     );
     // Truncate to fit (leave 1 col of slack so the cursor never forces a wrap).
     let maxw = (cols as usize).saturating_sub(1);
-    if plain.len() > maxw {
-        plain.truncate(maxw);
+    if plain.chars().count() > maxw {
+        plain = plain.chars().take(maxw).collect(); // clamp by chars: multibyte-safe
     }
 
     buf.clear();
@@ -2208,8 +2208,8 @@ fn render_replay_status(buf: &mut String, name: &str, tick: u64, total: u64, bac
     let mut plain = String::new();
     let _ = write!(plain, "REPLAY {name}  |  tick {tick}/{total}  |  Tab gfx:{backend}  |  {tail}");
     let maxw = (cols as usize).saturating_sub(1);
-    if plain.len() > maxw {
-        plain.truncate(maxw);
+    if plain.chars().count() > maxw {
+        plain = plain.chars().take(maxw).collect(); // clamp by chars: multibyte-safe
     }
     buf.clear();
     let _ = write!(buf, "\x1b[{rows};1H\x1b[2K\x1b[7m{plain}\x1b[0m");
@@ -2439,6 +2439,29 @@ mod tests {
         collect_lvls(&root, &mut files);
         let fails = soak_all(&files, 800);
         assert!(fails.is_empty(), "{} imported levels crashed:\n  {}", fails.len(), fails.join("\n  "));
+    }
+
+    /// Status lines hold multibyte glyphs (♥ ★ ✗ · → ↓), so clamping them to the
+    /// terminal width must count characters, not bytes — a byte split panics
+    /// (`is_char_boundary`). The soak renders the *scene* but never the status
+    /// line, so this slipped through and crashed real play / level-complete.
+    /// Hammer every status renderer at every width and mode here.
+    #[test]
+    fn status_lines_never_split_a_glyph_at_any_width() {
+        let lvl = Level::new("yard-1-1", "overworld", 40, 12);
+        let p = Player::new(32.0, 32.0);
+        let mut buf = String::new();
+        for cols in 0..=200u16 {
+            let rows = cols.saturating_add(1);
+            for &won in &[false, true] {
+                for &over in &[false, true] {
+                    render_play_status(&mut buf, &lvl, State::Grounded, "mono", won, over, 12_345, 3, Power::Bubble, rows, cols);
+                }
+            }
+            render_tiles_status(&mut buf, Theme::Castle, "ascii", rows, cols);
+            render_replay_status(&mut buf, "run-1", 30, 120, "text", rows, cols, true);
+            render_status(&mut buf, &p, 999, 60.0, "kitty", rows, cols, true);
+        }
     }
 
     #[test]
