@@ -1196,7 +1196,9 @@ fn step_actors(actors: &mut [Actor], map: &TileMap, player: &mut Player, kibble:
             _ if a.item => {
                 a.mob.alive = false;
                 *kibble += 1;
-                hits.fx.push((&scamper::effects::SPARKLE, bx + bw / 2.0, by));
+                // A loose kibble pops a coin like a coin-block does (consistent feedback).
+                let fx = if a.kind == "kibble" { &scamper::effects::COIN } else { &scamper::effects::SPARKLE };
+                hits.fx.push((fx, bx + bw / 2.0, by));
             }
             // Spiky critters can't be pounced — landing on the spines hurts. The
             // only safe answer is a Sudsball (see step_projectiles), so they teach
