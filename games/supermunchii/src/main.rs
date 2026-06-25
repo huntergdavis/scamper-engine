@@ -389,6 +389,7 @@ fn run_play(path: &str) {
     let mut fire_cd: u32 = 0; // throw cooldown (frames)
     let mut aura_t: u64 = 0; // last bubble-aura emit (ns)
     let mut ambient_t: u64 = 0; // last ambient-particle emit (ns)
+    let mut wallspark_t: u64 = 0; // last wall-slide friction spark (ns)
     let mut dash_t: u64 = 0; // last zoomies dash-trail emit (ns)
     let mut shake = scamper::shake::Shake::new(); // camera juice on impacts
     let mut frame_ix: u64 = 0; // render-frame counter (drives the shake tremble)
@@ -567,6 +568,12 @@ fn run_play(path: &str) {
         // A dash in progress overrides the cap so the burst isn't clamped away.
         if dashing > 0 {
             sim.fp.max_run = sim.fp.max_run.max(DASH_SPEED);
+        }
+        // Wall-slide friction sparks — surface the engine's wall-slide/jump in play.
+        if sim.player.state == State::WallSliding && now.saturating_sub(wallspark_t) > 60 * 1_000_000 {
+            let side = if sim.player.wall_dir > 0 { sim.player.w } else { 0.0 };
+            sim.fx.spawn(&scamper::effects::SPARK, sim.player.pos.x + side, sim.player.pos.y + sim.player.h * 0.5, now);
+            wallspark_t = now;
         }
         // Ambient particles: snowfall / bubbles / drifting leaves, by theme — a
         // living backdrop, sprinkled across the visible band around Munchii.
