@@ -64,6 +64,7 @@ pub const ALL: &[Sprite] = &[
     Sprite { id: "bubble_bone", role: Role::Item, w: 4, h: 2, anims: BUBBLE_BONE, palette: bubble_rgb },
     Sprite { id: "zoomies_treat", role: Role::Item, w: 4, h: 2, anims: ZOOMIES, palette: treat_rgb },
     Sprite { id: "lucky_squeaky", role: Role::Item, w: 4, h: 2, anims: LUCKY, palette: treat_rgb },
+    Sprite { id: "stick", role: Role::Item, w: 3, h: 1, anims: STICK, palette: squirrel_rgb },
 ];
 
 /// Look up a sprite by id (the IR entity `kind`), if registered.
@@ -279,6 +280,10 @@ const ZOOMIES: &[Anim] = &[Anim { name: "idle", fps: 8, frames: ZOOMIES_F }];
 
 const LUCKY_F: &[&[&str]] = &[&["(>o)", " \\/ "], &["(>o)", " vv "]];
 const LUCKY: &[Anim] = &[Anim { name: "idle", fps: 4, frames: LUCKY_F }];
+
+// A tumbling thrown stick (Stick Squirrel's projectile).
+const STICK_F: &[&[&str]] = &[&["==="], &["\\=/"]];
+const STICK: &[Anim] = &[Anim { name: "fly", fps: 10, frames: STICK_F }];
 
 #[cfg(test)]
 mod tests {

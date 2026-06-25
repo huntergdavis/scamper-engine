@@ -377,7 +377,8 @@ fn run_play(path: &str) {
     let mut world = LevelWorld::from_level(&level);
     let mut sim = sim_at(world.spawn);
     let mut actors = build_actors(&world);
-    let mut projectiles: Vec<Mob> = Vec::new();
+    let mut projectiles: Vec<Mob> = Vec::new(); // Munchii's Sudsballs
+    let mut hostiles: Vec<Mob> = Vec::new(); // enemy thrown sticks
     let mut fire_cd: u32 = 0; // throw cooldown (frames)
     let mut kibble: u32 = 0;
     let mut power = Power::Small;
@@ -461,13 +462,15 @@ fn run_play(path: &str) {
                 // Step creatures/items and resolve pounces, pickups, and hits.
                 let hits = step_actors(&mut actors, &world.map, &mut sim.player, &mut kibble, &mut power);
                 step_projectiles(&mut projectiles, &mut actors, &world.map, &mut kibble);
+                emit_thrower_sticks(&actors, &mut hostiles, &sim.player);
+                let stick_hit = step_hostiles(&mut hostiles, &world.map, &sim.player);
                 if hits.plug && !won {
                     won = true; // pulled the bath plug → level complete
                     won_at = now;
                 }
                 if invuln > 0 {
                     invuln -= 1;
-                } else if hits.hurt {
+                } else if hits.hurt || stick_hit {
                     if power == Power::Small {
                         sim = sim_at(world.spawn); // wipeout → back to spawn
                     } else {
@@ -505,6 +508,7 @@ fn run_play(path: &str) {
                 sim = sim_at(world.spawn);
                 actors = build_actors(&world);
                 projectiles.clear();
+                hostiles.clear();
                 power = Power::Small;
                 won = false;
                 full_redraw = true;
@@ -520,6 +524,7 @@ fn run_play(path: &str) {
                     sim = sim_at(spawn);
                     actors = build_actors(&world);
                     projectiles.clear();
+                    hostiles.clear();
                     power = Power::Small;
                     full_redraw = true;
                 }
@@ -527,7 +532,7 @@ fn run_play(path: &str) {
         }
 
         // --- render the camera window (shared with the headless soak harness) ---
-        draw_play_frame(&mut fb, backend.as_mut(), &mut out, &world, &sim, &actors, &projectiles, fb_w, fb_h, cols, rows, full_redraw, input.down_held());
+        draw_play_frame(&mut fb, backend.as_mut(), &mut out, &world, &sim, &actors, &projectiles, &hostiles, fb_w, fb_h, cols, rows, full_redraw, input.down_held());
         full_redraw = false;
         render_play_status(&mut status, &level, sim.player.state, backend.name(), won, kibble, power, rows + 1, cols);
         {
@@ -601,6 +606,10 @@ fn gait_for(kind: &str, item: bool) -> (Gait, f64, f64, f64) {
         (Gait::Still, 0.0, 12.0, 12.0) // inert: items, the plug, a rescued pup
     } else if kind == "baron_whiskers" {
         (Gait::Wander, 0.5, 22.0, 26.0) // the boss: a big box that paces the ledge
+    } else if kind == "dandi" || kind == "dandi_sun" {
+        (Gait::Bob, 0.0, 12.0, 14.0) // snapping dandelion: rises/lowers from a pipe
+    } else if kind == "hardhat" {
+        (Gait::Careful, 0.4, 12.0, 14.0) // hard-hat acorn: stays on its ledge
     } else if is_flyer(kind) {
         (Gait::Fly, 0.7, 12.0, 12.0)
     } else if kind.ends_with("_sun") {
@@ -643,6 +652,40 @@ fn step_projectiles(projectiles: &mut Vec<Mob>, actors: &mut [Actor], map: &Tile
         }
     }
     projectiles.retain(|p| p.alive);
+}
+
+/// Stick Squirrels lob arcing sticks at Munchii. On a cadence, each on-screen-ish
+/// thrower spawns a hostile Ballistic stick aimed at the player.
+fn emit_thrower_sticks(actors: &[Actor], hostiles: &mut Vec<Mob>, player: &Player) {
+    for a in actors {
+        if a.kind == "stick_squirrel" && a.mob.alive && a.mob.age % 96 == 48
+            && (a.mob.pos.x - player.pos.x).abs() < 220.0
+        {
+            let dir = if player.pos.x >= a.mob.pos.x { 1.0 } else { -1.0 };
+            let mut s = Mob::new(a.mob.pos.x + a.mob.w / 2.0, a.mob.pos.y, 4.0, 4.0, dir as i8, 0.0, Gait::Ballistic);
+            s.vel = Vec2::new(dir * 1.6, -3.2);
+            hostiles.push(s);
+        }
+    }
+}
+
+/// Step hostile projectiles (thrown sticks): fly, expire on a wall or lifetime,
+/// and report a hit if one touches the player.
+fn step_hostiles(hostiles: &mut Vec<Mob>, map: &TileMap, player: &Player) -> bool {
+    let mut hurt = false;
+    for h in hostiles.iter_mut() {
+        h.step(map);
+        if h.blocked || h.age > 150 {
+            h.alive = false;
+            continue;
+        }
+        if aabb_overlap(player.pos.x, player.pos.y, player.w, player.h, h.pos.x, h.pos.y, h.w, h.h) {
+            hurt = true;
+            h.alive = false;
+        }
+    }
+    hostiles.retain(|h| h.alive);
+    hurt
 }
 
 /// Upward velocity (px/s) from a successful pounce — a little hop (~0.6× a jump).
@@ -723,6 +766,7 @@ fn draw_play_frame(
     sim: &Sim,
     actors: &[Actor],
     projectiles: &[Mob],
+    hostiles: &[Mob],
     fb_w: usize,
     fb_h: usize,
     cols: u16,
@@ -810,6 +854,21 @@ fn draw_play_frame(
             let plx = (p.pos.x + p.w / 2.0 - cam_x) - pmw / 2.0;
             let ply = (p.pos.y + p.h / 2.0 - cam_y) - pmh / 2.0;
             sprites.push((pl, plx, ply, sp.palette));
+        }
+    }
+
+    // Hostile thrown sticks.
+    if let Some(sp) = scamper::sprite::get("stick") {
+        let an = sp.anim("fly");
+        let n = an.frames.len().max(1);
+        let fi = (sim.clock() / (NS_PER_SEC / an.fps.max(1) as u64)) as usize % n;
+        for h in hostiles {
+            let hl: Vec<String> = an.frames[fi].iter().map(|s| s.to_string()).collect();
+            let hfw = hl.iter().map(|l| l.chars().count()).max().unwrap_or(1) as f64;
+            let (hmw, hmh) = (hfw * cpw, hl.len() as f64 * cph);
+            let hlx = (h.pos.x + h.w / 2.0 - cam_x) - hmw / 2.0;
+            let hly = (h.pos.y + h.h / 2.0 - cam_y) - hmh / 2.0;
+            sprites.push((hl, hlx, hly, sp.palette));
         }
     }
 
@@ -911,6 +970,7 @@ fn soak_level(path: &str, ticks: u64) -> Result<(), String> {
     let world = LevelWorld::from_level(&level);
     let mut sim = sim_at(world.spawn);
     let mut actors = build_actors(&world);
+    let mut hostiles: Vec<Mob> = Vec::new();
     let mut kibble = 0u32;
     let mut power = Power::Small;
     let ws = terminal::WinSize { cols: 80, rows: 24, xpix: 640, ypix: 384 };
@@ -925,13 +985,15 @@ fn soak_level(path: &str, ticks: u64) -> Result<(), String> {
         let inp = InputFrame { axis_x: 1, jump_pressed: tick % 18 == 0, jump_held: tick % 18 < 10, down_held: false };
         sim.step(&world.map, inp);
         let _ = step_actors(&mut actors, &world.map, &mut sim.player, &mut kibble, &mut power);
+        emit_thrower_sticks(&actors, &mut hostiles, &sim.player);
+        let _ = step_hostiles(&mut hostiles, &world.map, &sim.player);
         let (px, py, pw, ph) = (sim.player.pos.x, sim.player.pos.y, sim.player.w, sim.player.h);
         if world.hazard_overlap(px, py, pw, ph) {
             sim = sim_at(world.spawn);
         }
         if tick % 15 == 0 {
             for b in backends.iter_mut() {
-                draw_play_frame(&mut fb, b.as_mut(), &mut out, &world, &sim, &actors, &[], fb_w, fb_h, cols, rows, true, false);
+                draw_play_frame(&mut fb, b.as_mut(), &mut out, &world, &sim, &actors, &[], &hostiles, fb_w, fb_h, cols, rows, true, false);
             }
         }
     }
