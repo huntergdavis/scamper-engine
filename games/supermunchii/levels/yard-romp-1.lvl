@@ -34,6 +34,7 @@ T 59 11 ground
 T 59 12 ground
 # --- critters + a few kibble to grab ---
 E boneling 16 12
+E springer 22 12
 E boneling 24 12
 E kibble 10 8
 E kibble 14 8

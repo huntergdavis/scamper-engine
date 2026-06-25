@@ -56,6 +56,7 @@ pub const ALL: &[Sprite] = &[
     Sprite { id: "hoppa", role: Role::Creature, w: 5, h: 2, anims: HOPPA, palette: bug_rgb },
     Sprite { id: "pincher", role: Role::Creature, w: 6, h: 2, anims: PINCHER, palette: crab_rgb },
     Sprite { id: "prickle", role: Role::Creature, w: 5, h: 2, anims: PRICKLE, palette: prickle_rgb },
+    Sprite { id: "springer", role: Role::Creature, w: 5, h: 2, anims: SPRINGER, palette: springer_rgb },
     Sprite { id: "hardhat", role: Role::Creature, w: 6, h: 2, anims: HARDHAT, palette: hard_rgb },
     Sprite { id: "stick_squirrel", role: Role::Creature, w: 6, h: 3, anims: SQUIRREL, palette: squirrel_rgb },
     Sprite { id: "sudsfish", role: Role::Creature, w: 5, h: 2, anims: FISH, palette: fish_rgb },
@@ -142,6 +143,13 @@ fn prickle_rgb(ch: char) -> (u8, u8, u8) {
         'o' => (18, 14, 22),                    // eye
         '^' | '/' | '\\' => (198, 90, 178),     // bright spikes
         _ => (122, 60, 120),                    // body
+    }
+}
+/// Springer: a grass-green bouncing frog, dark eyes.
+fn springer_rgb(ch: char) -> (u8, u8, u8) {
+    match ch {
+        'o' => (16, 22, 14),    // eyes
+        _ => (96, 184, 86),     // green body
     }
 }
 fn hard_rgb(ch: char) -> (u8, u8, u8) {
@@ -267,6 +275,11 @@ const PINCHER: &[Anim] = &[Anim { name: "walk", fps: 6, frames: PINCHER_F }];
 // Sudsball. The `^`/`/`/`\` crown reads as spikes even in mono B&W.
 const PRICKLE_F: &[&[&str]] = &[&["\\^^^/", "(>o<)"], &["/^^^\\", "(>o<)"]];
 const PRICKLE: &[Anim] = &[Anim { name: "walk", fps: 6, frames: PRICKLE_F }];
+
+// Springer — a bouncing frog. The walk frame crouches (legs tucked), the second
+// frame stretches as it springs, telegraphing the hop.
+const SPRINGER_F: &[&[&str]] = &[&["(o o)", " \\_/ "], &["(o o)", " /\"\\ "]];
+const SPRINGER: &[Anim] = &[Anim { name: "walk", fps: 5, frames: SPRINGER_F }];
 
 const HARDHAT_F: &[&[&str]] = &[&["/####\\", "(o)(o)"]];
 const HARDHAT: &[Anim] = &[Anim { name: "walk", fps: 4, frames: HARDHAT_F }];

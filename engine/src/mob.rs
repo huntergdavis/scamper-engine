@@ -25,6 +25,9 @@ pub enum Gait {
     Fly,
     /// Bob up and down around the home position (rise-and-lower) — pipe plants.
     Bob,
+    /// Like [`Wander`](Gait::Wander), but springs into a periodic hop whenever it's
+    /// on the ground — a bouncing critter (frog / spring).
+    Hop,
     /// Free projectile: gravity-driven arc, moves by its own velocity, stops dead
     /// on any solid (sets `blocked`). Used for thrown sticks.
     Ballistic,
@@ -53,6 +56,10 @@ pub struct Mob {
 /// Bob (pipe-plant) oscillation: rise this many px and back over this many ticks.
 const BOB_AMP: f64 = 26.0;
 const BOB_PERIOD: f64 = 150.0;
+
+/// Hop gait: spring up with this velocity every `HOP_PERIOD` ticks while grounded.
+const HOP_VY: f64 = 3.6; // px/tick (≈1.3-tile arc under GRAVITY)
+const HOP_PERIOD: u32 = 84;
 
 impl Mob {
     pub fn new(x: f64, y: f64, w: f64, h: f64, facing: i8, speed: f64, gait: Gait) -> Self {
@@ -99,6 +106,10 @@ impl Mob {
 
         // Grounded gaits: gravity always applies (even Still items settle).
         self.vel.y = (self.vel.y + GRAVITY).min(MAX_FALL);
+        // Hop: spring off the ground on a fixed cadence (a bouncing critter).
+        if self.gait == Gait::Hop && self.age % HOP_PERIOD == 0 && self.on_ground(map) {
+            self.vel.y = -HOP_VY;
+        }
         if self.gait != Gait::Still && self.speed != 0.0 {
             let dir = if self.facing >= 0 { 1.0 } else { -1.0 };
             // Careful gait: turn around rather than step off a ledge.
@@ -226,6 +237,21 @@ mod tests {
         let mut wanderer = Mob::new(2.0 * TILE, 3.0 * TILE, 12.0, 14.0, 1, 1.0, Gait::Wander);
         settle(&mut wanderer, &map, 120);
         assert!(wanderer.pos.y > 5.0 * TILE, "wanderer walked off and fell into the gap");
+    }
+
+    #[test]
+    fn hop_springs_off_the_ground_periodically() {
+        let map = flat();
+        let mut m = Mob::new(2.0 * TILE, 3.0 * TILE, 12.0, 14.0, 1, 0.8, Gait::Hop);
+        settle(&mut m, &map, 10); // let it land
+        let resting = m.pos.y;
+        // Within one hop period it should have left the ground (risen above rest).
+        let mut peaked = resting;
+        for _ in 0..super::HOP_PERIOD + 4 {
+            m.step(&map);
+            peaked = peaked.min(m.pos.y);
+        }
+        assert!(peaked < resting - 6.0, "hop should lift the critter off the floor (rest {resting}, peak {peaked})");
     }
 
     #[test]
