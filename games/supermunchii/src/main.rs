@@ -1013,6 +1013,12 @@ fn run_play(path: &str) {
                 use std::fmt::Write;
                 let _ = write!(status, "\x1b[1;{}H\x1b[1;7m ⛑ ASSIST \x1b[0m", (cols as usize).saturating_sub(10).max(1));
             }
+            // Boss health bar: only while Baron Whiskers is present and the fight's on.
+            if !won && !game_over && actors.iter().any(|a| a.kind == "baron_whiskers" && a.mob.alive) {
+                let pips: String = (0..3).map(|i| if (i as i32) < boss_hp { '♥' } else { '·' }).collect();
+                let bar = format!(" BARON WHISKERS  {pips} ");
+                scamper::ui::center_card(&mut status, cols, 2, &[&bar], true);
+            }
             if paused {
                 status.clear();
                 scamper::ui::status_line(&mut status, rows + 1, "⏸ PAUSED — p resume · q quit");
