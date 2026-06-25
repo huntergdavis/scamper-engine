@@ -329,28 +329,18 @@ fn bests_path() -> std::path::PathBuf {
     dir.join(".supermunchii_bests")
 }
 
-/// Load the `id<TAB>seconds` best-time table (a missing/garbled file → empty).
+/// Load the best-time table (id → seconds) from the engine key-value store.
 fn load_bests() -> std::collections::HashMap<String, u32> {
-    let mut m = std::collections::HashMap::new();
-    if let Ok(text) = std::fs::read_to_string(bests_path()) {
-        for line in text.lines() {
-            if let Some((id, secs)) = line.split_once('\t') {
-                if let Ok(s) = secs.trim().parse::<u32>() {
-                    m.insert(id.to_string(), s);
-                }
-            }
-        }
-    }
-    m
+    scamper::store::load(&bests_path())
+        .into_iter()
+        .filter_map(|(id, secs)| secs.trim().parse::<u32>().ok().map(|s| (id, s)))
+        .collect()
 }
 
-/// Persist the best-time table (best-effort; write errors are ignored).
+/// Persist the best-time table via the engine store (best-effort).
 fn save_bests(m: &std::collections::HashMap<String, u32>) {
-    let mut out = String::new();
-    for (id, secs) in m {
-        let _ = std::fmt::Write::write_fmt(&mut out, format_args!("{id}\t{secs}\n"));
-    }
-    let _ = std::fs::write(bests_path(), out);
+    let kv = m.iter().map(|(id, secs)| (id.clone(), secs.to_string())).collect();
+    scamper::store::save(&bests_path(), &kv);
 }
 
 fn next_level_path(current: &str) -> Option<String> {

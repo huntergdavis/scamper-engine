@@ -17,6 +17,7 @@ pub mod png;
 pub mod shake;
 pub mod sprite;
 pub mod sim;
+pub mod store;
 pub mod strings;
 pub mod terminal;
 pub mod ui;
