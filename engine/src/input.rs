@@ -20,6 +20,7 @@ pub const K_Q: u32 = 113;
 pub const K_T: u32 = 116;
 pub const K_Y: u32 = 121;
 pub const K_N: u32 = 110;
+pub const K_P: u32 = 112;
 pub const K_TAB: u32 = 9;
 pub const K_HELP: u32 = 104; // 'h'
 pub const K_LEFT: u32 = 1_000;
@@ -192,7 +193,7 @@ impl Input {
                 let code = b as u32;
                 match code {
                     K_A | K_D | K_W | K_S | K_SPACE | K_Z | K_K | K_TAB | K_HELP | K_Q
-                    | K_Y | K_N | K_T => self.legacy_byte(code),
+                    | K_Y | K_N | K_T | K_P => self.legacy_byte(code),
                     _ => {}
                 }
                 i += 1;

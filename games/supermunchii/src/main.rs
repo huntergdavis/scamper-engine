@@ -6,7 +6,7 @@ use scamper::backend::{AsciiBackend, Backend, KittyBackend, MonoBackend, Overlay
 use scamper::capture::{self, InputFrame, Recording, Snapshots};
 use scamper::munchii;
 use scamper::framebuffer::{Framebuffer, Rgba};
-use scamper::input::{Input, K_DOWN, K_ESC, K_HELP, K_N, K_Q, K_S, K_T, K_TAB, K_Y};
+use scamper::input::{Input, K_DOWN, K_ESC, K_HELP, K_N, K_P, K_Q, K_S, K_T, K_TAB, K_Y};
 use scamper::level::art::{self, Theme};
 use scamper::level::ir::Level;
 use scamper::level::world::{Bonk, LevelWorld};
@@ -405,6 +405,7 @@ fn run_play(path: &str) {
     let mut invuln: u32 = 0; // ticks of post-hit invulnerability
     let mut skid_cd: u32 = 0; // throttle for skid-dust effects
     let mut help = false; // controls overlay (h)
+    let mut paused = false; // freeze on 'p'
     play_bgm(&level);
 
     let (mut fb_w, mut fb_h, mut cols, mut rows) = play_view(terminal::query_winsize());
@@ -451,6 +452,10 @@ fn run_play(path: &str) {
             } else {
                 break;
             }
+        }
+        if input.pressed(K_P) && !help {
+            paused = !paused;
+            full_redraw = true;
         }
         if input.pressed(K_TAB) {
             switch_backend(&mut backend);
@@ -533,7 +538,7 @@ fn run_play(path: &str) {
             sim.fx.spawn(&scamper::effects::FEATHER, fx, sim.player.pos.y + sim.player.h * 0.5, now);
             glide_t = now;
         }
-        if !won && !game_over && !help {
+        if !won && !game_over && !help && !paused {
             acc += elapsed;
             while acc >= SIM_DT_NS {
                 let inp = InputFrame {
@@ -758,6 +763,12 @@ fn run_play(path: &str) {
             draw_play_frame(&mut fb, backend.as_mut(), &mut out, &world, &sim, &actors, &projectiles, &hostiles, fb_w, fb_h, cols, rows, full_redraw, input.down_held(), power.zoom(), shake_off);
             full_redraw = false;
             render_play_status(&mut status, &level, sim.player.state, backend.name(), won, game_over, kibble, lives, power, zoomies > 0, glide, rows + 1, cols);
+            if paused {
+                use std::fmt::Write;
+                // Overwrite the status row with a pause banner (inverse video).
+                status.clear();
+                let _ = write!(status, "\x1b[{};1H\x1b[2K\x1b[7m⏸ PAUSED — p resume · q quit\x1b[0m", rows + 1);
+            }
             let mut o = std::io::stdout().lock();
             let _ = o.write_all(&out);
             let _ = o.write_all(status.as_bytes());
@@ -2334,7 +2345,7 @@ fn render_play_help(out: &mut Vec<u8>, active_backend: &str) {
     r += 1;
     hline(out, r, "Pounce critters from above  \u{2022}  reach the bath plug to finish");
     r += 2;
-    hline(out, r, &format!("Tab  switch graphics [now: {active_backend}]   \u{2022}   h  close   \u{2022}   Q  quit"));
+    hline(out, r, &format!("Tab  switch graphics [now: {active_backend}]   \u{2022}   p  pause   \u{2022}   h  close   \u{2022}   Q  quit"));
 }
 
 // ---------------------------------------------------------------------------
