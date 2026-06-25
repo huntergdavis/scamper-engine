@@ -1126,6 +1126,14 @@ fn soak_level(path: &str, ticks: u64) -> Result<(), String> {
             for b in backends.iter_mut() {
                 draw_play_frame(&mut fb, b.as_mut(), &mut out, &world, &sim, &actors, &[], &hostiles, fb_w, fb_h, cols, rows, true, false);
             }
+            // Also render the status line like run_play does — at narrow widths too,
+            // so status formatting (multibyte truncation, etc.) is exercised, not
+            // just the scene. (This is the gap that hid the is_char_boundary crash.)
+            let mut status = String::new();
+            for w in [10u16, 28, 48, cols] {
+                let won = tick > ticks * 3 / 4; // exercise the LEVEL COMPLETE banner too
+                render_play_status(&mut status, &level, sim.player.state, "mono", won, false, kibble, 3, power, 1, w);
+            }
         }
     }
     Ok(())
