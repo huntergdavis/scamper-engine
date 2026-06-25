@@ -381,6 +381,8 @@ fn run_play(path: &str) {
 
     let mut world = LevelWorld::from_level(&level);
     let mut sim = sim_at(world.spawn);
+    let mut respawn = world.spawn; // advances to the last checkpoint passed
+    let mut next_cp = 0usize; // index of the next un-passed checkpoint
     let mut actors = build_actors(&world);
     let mut projectiles: Vec<Mob> = Vec::new(); // Munchii's Sudsballs
     let mut hostiles: Vec<Mob> = Vec::new(); // enemy thrown sticks
@@ -642,8 +644,8 @@ fn run_play(path: &str) {
                     invuln -= 1;
                 } else if hits.hurt || stick_hit {
                     if power == Power::Small {
-                        lives -= 1; // wipeout → lose a life, back to spawn
-                        sim = sim_at(world.spawn);
+                        lives -= 1; // wipeout → lose a life, back to the last checkpoint
+                        sim = sim_at(respawn);
                     } else {
                         power = power.dropped(); // shed a tier of gear
                     }
@@ -673,11 +675,18 @@ fn run_play(path: &str) {
                 game_over = true;
                 over_at = now;
             } else {
-                sim = sim_at(world.spawn);
+                sim = sim_at(respawn);
                 power = Power::Small;
                 invuln = 90;
             }
             full_redraw = true;
+        }
+        // Advance the respawn point as Munchii crosses each checkpoint (a flag-raise
+        // sparkle marks it). One-way: passing right of a checkpoint banks it.
+        while next_cp < world.checkpoints.len() && sim.player.pos.x + sim.player.w / 2.0 >= world.checkpoints[next_cp].0 {
+            respawn = world.checkpoints[next_cp];
+            sim.fx.spawn(&scamper::effects::SPARKLE, respawn.0, respawn.1 - TILE, now);
+            next_cp += 1;
         }
         // goal reached → level complete; after a short beat, auto-advance to the
         // next sibling level (a debugging aid: walk the whole set without quitting).
@@ -695,6 +704,8 @@ fn run_play(path: &str) {
                 level = lvl;
                 world = LevelWorld::from_level(&level);
                 sim = sim_at(world.spawn);
+                respawn = world.spawn;
+                next_cp = 0;
                 actors = build_actors(&world);
                 projectiles.clear();
                 hostiles.clear();
@@ -712,6 +723,8 @@ fn run_play(path: &str) {
                     level = lvl;
                     world = LevelWorld::from_level(&level);
                     sim = sim_at(spawn);
+                    respawn = spawn;
+                    next_cp = 0;
                     actors = build_actors(&world);
                     projectiles.clear();
                     hostiles.clear();

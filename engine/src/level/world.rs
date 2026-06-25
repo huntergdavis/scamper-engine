@@ -60,6 +60,7 @@ pub struct LevelWorld {
     pub w: i32,
     pub h: i32,
     pub spawn: (f64, f64), // px (top-left of the player box)
+    pub checkpoints: Vec<(f64, f64)>, // resolved respawn points, in px, left→right
     pub goal: Option<(f64, f64)>,
     pub warps: Vec<Warp>,
     pub theme: Theme,
@@ -134,8 +135,12 @@ impl LevelWorld {
         let spawn = resolve_spawn(&map, w, h, lvl.spawn.0, lvl.spawn.1);
         map.spawn = spawn;
         let goal = lvl.goal.as_ref().map(|g| (g.x as f64 * TILE, g.y as f64 * TILE));
+        // Checkpoints, resolved onto standable ground and ordered left→right so the
+        // runtime can advance the respawn point as the player progresses.
+        let mut checkpoints: Vec<(f64, f64)> = lvl.checkpoints.iter().map(|&(cx, cy)| resolve_spawn(&map, w, h, cx, cy)).collect();
+        checkpoints.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
-        LevelWorld { map, hazard, kinds, ents, blocks, w, h, spawn, goal, warps, theme: Theme::from_str(&lvl.theme) }
+        LevelWorld { map, hazard, kinds, ents, blocks, w, h, spawn, checkpoints, goal, warps, theme: Theme::from_str(&lvl.theme) }
     }
 
     /// Is there a live (un-bonked) bonkable block at this cell?
@@ -341,6 +346,19 @@ mod tests {
         assert_eq!(w.theme, Theme::Castle);
         assert_eq!(w.warps.len(), 1);
         assert_eq!(w.warps[0].target.as_deref(), Some("t2@3,9"));
+    }
+
+    #[test]
+    fn checkpoints_resolve_to_ground_and_sort_left_to_right() {
+        let mut l = Level::new("t", "overworld", 40, 12);
+        l.tiles.push(TileSpan { x: 0, y: 10, len: 40, kind: TileKind::Ground });
+        l.checkpoints.push((30, 10)); // on the solid ground row — lifts to stand on top
+        l.checkpoints.push((10, 10));
+        let w = LevelWorld::from_level(&l);
+        assert_eq!(w.checkpoints.len(), 2);
+        assert!(w.checkpoints[0].0 < w.checkpoints[1].0, "ordered left→right");
+        // Lifted out of the solid ground to the clear cell above (row 9).
+        assert_eq!(w.checkpoints[0], (10.0 * TILE, 9.0 * TILE));
     }
 
     #[test]
