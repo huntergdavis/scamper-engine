@@ -69,10 +69,24 @@
     in its own palette across all four backends.
   - All 306 imported levels still pass the hold-right + jump soak with every system live.
 
+- **Polish pass (2026-06-25).**
+  - **Mono red-team fix:** lava read identical to ground in B&W. The distinctness
+    test was a block-average proxy; rewrote it to mirror the real `MonoBackend`
+    (one pixel/cell at `(cx*4,cy*8)`, Rec.601 luma, `RAMP_COARSE`) with a ≥2-cell
+    margin across all themes, and redesigned Hazard/Brick/CoinBrick/Deco so their
+    sampled pixels diverge. `dump_mono` diagnostic added.
+  - **Wider bestiary authored** (`engine/src/sprite.rs`): flutterbug, hoppa,
+    pincher, hardhat, stick_squirrel, sudsfish, puffer, zoomdisc, dandi + items
+    bubble_bone/zoomies_treat/lucky_squeaky (+ `stick`, `sudsball`) — so levels
+    populate. **sprite-lab** previews them all.
+  - **New engine gaits** `Bob` (pipe plants) + `Ballistic` (thrown). Game wiring:
+    dandi rises/lowers from pipes; hardhat stays on ledges; **Stick Squirrels lob
+    arcing sticks** that hurt on contact.
+
 > **Plan status:** milestones 1–9 are substantially in. Remaining polish/TODOs:
-> enemy-thrower AI, dandi/piranha rise-from-pipe, one-way platforms, compact-Munchii
-> sprite + jump-feel asserts (§5), hi-fi per-creature Kitty art, and a campaign
-> world-map / lives / BGM flow (§10.9).
+> rollo curl-and-nudge after a pounce, one-way (semisolid) platforms, compact-Munchii
+> sprite + jump-feel asserts (§5, owner deferred to playtest), hi-fi per-creature
+> Kitty art, and a campaign world-map / lives / BGM flow (§10.9).
 
 ## Next steps (pick up here)
 
