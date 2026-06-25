@@ -9,7 +9,7 @@ use scamper::framebuffer::{Framebuffer, Rgba};
 use scamper::input::{Input, K_C, K_DOWN, K_ESC, K_HELP, K_N, K_Q, K_S, K_T, K_TAB, K_Y};
 use scamper::level::art::{self, Theme};
 use scamper::level::ir::Level;
-use scamper::level::world::{camera, LevelWorld};
+use scamper::level::world::{camera, Bonk, LevelWorld};
 use scamper::math::Vec2;
 use scamper::mob::{aabb_overlap, stomp, Gait, Mob};
 use scamper::player::{FeelParams, Player, State};
@@ -464,6 +464,26 @@ fn run_play(path: &str) {
                 };
                 pending_jump = false;
                 sim.step(&world.map, inp);
+                // Head-bonk a block from below: questions/coin-blocks cough up an
+                // item, breakable bricks shatter.
+                if sim.player.bonked_head {
+                    let cx = ((sim.player.pos.x + sim.player.w / 2.0) / TILE).floor() as i32;
+                    let cy = ((sim.player.pos.y - 1.0) / TILE).floor() as i32;
+                    match world.bonk(cx, cy) {
+                        Bonk::Released(item) => {
+                            if item == "kibble" {
+                                kibble += 1;
+                            } else {
+                                // pop the power-up out onto the block top to grab
+                                let m = Mob::new(cx as f64 * TILE, (cy - 1) as f64 * TILE, 12.0, 12.0, 1, 0.0, Gait::Still);
+                                actors.push(Actor { mob: m, kind: item, item: true, mode: Mode::Walk });
+                            }
+                        }
+                        Bonk::Broke => kibble += 1, // shards count as a little treat
+                        Bonk::Nothing => {}
+                    }
+                    full_redraw = true;
+                }
                 // Step creatures/items and resolve pounces, pickups, and hits.
                 let hits = step_actors(&mut actors, &world.map, &mut sim.player, &mut kibble, &mut power);
                 step_projectiles(&mut projectiles, &mut actors, &world.map, &mut kibble);

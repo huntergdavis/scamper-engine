@@ -80,6 +80,7 @@ pub struct Player {
     pub jumping: bool, // in a held jump rise (controls dual gravity)
     pub did_double: bool,
     pub was_engaged: bool, // was engaging a wall last frame (for rising-edge regrant)
+    pub bonked_head: bool, // hit a ceiling/block from below this step (head-bonk)
 }
 
 const PROBE: f64 = 1.0;
@@ -103,6 +104,7 @@ impl Player {
             jumping: false,
             did_double: false,
             was_engaged: false,
+            bonked_head: false,
         }
     }
 
@@ -241,6 +243,7 @@ impl Player {
         }
 
         // --- integrate with collision ---
+        self.bonked_head = false;
         self.step_axis(map, self.vel.x * dt, 0.0);
         self.step_axis(map, 0.0, self.vel.y * dt);
 
@@ -281,6 +284,9 @@ impl Player {
                 }
                 if dy != 0.0 {
                     self.vel.y = 0.0;
+                }
+                if dy < 0.0 {
+                    self.bonked_head = true; // hit something above (a block to bonk)
                 }
                 return;
             }

@@ -34,11 +34,29 @@ pub struct Ent {
     pub cy: i32,
 }
 
+/// A bonkable block (brick / question). Head-bonking it releases its `contains`
+/// (once), or shatters it if it's a breakable brick with nothing inside.
+#[derive(Clone, Debug)]
+pub struct Block {
+    pub breakable: bool,
+    pub contains: Option<String>,
+    pub used: bool,
+}
+
+/// What a head-bonk produced.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Bonk {
+    Nothing,
+    Broke,            // a brick shattered (removed from the world)
+    Released(String), // the block coughed up its contents (an item kind)
+}
+
 pub struct LevelWorld {
     pub map: TileMap,                // solid cells, drives Player::step
     pub hazard: HashSet<(i32, i32)>, // cells that kill on contact
     pub kinds: HashMap<(i32, i32), TileKind>, // per-cell kind, for rendering
     pub ents: Vec<Ent>,              // creatures / items, drawn from the sprite registry
+    pub blocks: HashMap<(i32, i32), Block>, // bonkable blocks (bricks / question), by cell
     pub w: i32,
     pub h: i32,
     pub spawn: (f64, f64), // px (top-left of the player box)
@@ -77,12 +95,17 @@ impl LevelWorld {
         // Interactive blocks are IR entities, not tiles, but they're solid.
         let mut warps = Vec::new();
         let mut ents = Vec::new();
+        let mut blocks = HashMap::new();
         for e in &lvl.entities {
             match e.kind.as_str() {
                 "question" | "brick" => {
                     if in_bounds(e.x, e.y) {
                         map.set(e.x as usize, e.y as usize, true);
                         kinds.insert((e.x, e.y), if e.kind == "question" { TileKind::Question } else { TileKind::Brick });
+                        blocks.insert(
+                            (e.x, e.y),
+                            Block { breakable: e.kind == "brick", contains: e.prop("contains").map(|s| s.to_string()), used: false },
+                        );
                     }
                 }
                 "warp" | "pipe" => warps.push(Warp {
@@ -100,7 +123,30 @@ impl LevelWorld {
         map.spawn = spawn;
         let goal = lvl.goal.as_ref().map(|g| (g.x as f64 * TILE, g.y as f64 * TILE));
 
-        LevelWorld { map, hazard, kinds, ents, w, h, spawn, goal, warps, theme: Theme::from_str(&lvl.theme) }
+        LevelWorld { map, hazard, kinds, ents, blocks, w, h, spawn, goal, warps, theme: Theme::from_str(&lvl.theme) }
+    }
+
+    /// Head-bonk the block at cell (cx,cy) from below: release its contents once
+    /// (question / coin block → an item), else shatter a breakable brick. A spent
+    /// block stays solid but inert. Returns what happened.
+    pub fn bonk(&mut self, cx: i32, cy: i32) -> Bonk {
+        let Some(b) = self.blocks.get_mut(&(cx, cy)) else {
+            return Bonk::Nothing;
+        };
+        if b.used {
+            return Bonk::Nothing;
+        }
+        if let Some(item) = b.contains.take() {
+            b.used = true;
+            return Bonk::Released(item);
+        }
+        if b.breakable {
+            b.used = true;
+            self.map.set(cx as usize, cy as usize, false);
+            self.kinds.remove(&(cx, cy));
+            return Bonk::Broke;
+        }
+        Bonk::Nothing
     }
 
     /// The tile kind drawn at cell (x,y), if any (for rendering).
@@ -214,6 +260,27 @@ mod tests {
         // center over the warp cell (14,9)
         let wp = w.warp_at(14.0 * TILE, 9.0 * TILE, 12.0, 16.0);
         assert!(wp.is_some() && wp.unwrap().target.as_deref() == Some("t2@3,9"));
+    }
+
+    #[test]
+    fn bonking_blocks_releases_contents_then_breaks() {
+        let mut l = Level::new("t", "overworld", 10, 10);
+        l.entities.push(Entity { kind: "question".into(), x: 3, y: 5, props: vec![("contains".into(), "big_kibble".into())] });
+        l.entities.push(Entity { kind: "brick".into(), x: 5, y: 5, props: vec![] });
+        let mut w = LevelWorld::from_level(&l);
+        assert!(w.map.is_solid(3, 5) && w.map.is_solid(5, 5));
+
+        // A question block coughs up its item once, then is inert but still solid.
+        assert_eq!(w.bonk(3, 5), Bonk::Released("big_kibble".into()));
+        assert_eq!(w.bonk(3, 5), Bonk::Nothing);
+        assert!(w.map.is_solid(3, 5), "a spent question block stays solid");
+
+        // A plain brick (no contents) shatters and is removed from the world.
+        assert_eq!(w.bonk(5, 5), Bonk::Broke);
+        assert!(!w.map.is_solid(5, 5), "a broken brick is gone");
+        assert_eq!(w.bonk(5, 5), Bonk::Nothing);
+
+        assert_eq!(w.bonk(0, 0), Bonk::Nothing, "empty cell is not bonkable");
     }
 
     #[test]
