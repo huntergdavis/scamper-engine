@@ -572,7 +572,12 @@ fn run_play(path: &str) {
                 }
                 if sim.player.grounded {
                     combo = 0; // touching down ends the air combo
+                    // Standing on a crumbling plank starts it shaking.
+                    let fcx = ((sim.player.pos.x + sim.player.w / 2.0) / TILE).floor() as i32;
+                    let fcy = ((sim.player.pos.y + sim.player.h + 1.0) / TILE).floor() as i32;
+                    world.touch_crumble(fcx, fcy);
                 }
+                world.tick_crumbles(); // advance shake → drop → regrow
                 // Glide: holding jump while falling (with the Flutter Collar) caps
                 // the descent to a gentle float.
                 if glide && !sim.player.grounded && inp.jump_held && sim.player.vel.y > GLIDE_FALL {

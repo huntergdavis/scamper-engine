@@ -9,6 +9,10 @@ R 0 13 28 ground
 R 0 14 28 ground
 R 32 13 32 ground
 R 32 14 32 ground
+# --- a crumbling-plank shelf (optional high route; collapses underfoot) ---
+T 16 10 crumble
+T 17 10 crumble
+T 18 10 crumble
 # --- a brick shelf and a couple of treat-blocks (entities carry contents) ---
 R 9 9 3 brick
 E question 6 9 contains=kibble

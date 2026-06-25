@@ -64,7 +64,20 @@ pub struct LevelWorld {
     pub goal: Option<(f64, f64)>,
     pub warps: Vec<Warp>,
     pub theme: Theme,
+    crumbles: HashMap<(i32, i32), CrumblePhase>, // crumbling-plank state, by cell
 }
+
+/// Lifecycle of a crumbling plank: solid until stepped on, then it shakes, drops
+/// away (non-solid) for a beat, and regrows.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CrumblePhase {
+    Intact,
+    Shaking(u32),
+    Gone(u32),
+}
+
+const CRUMBLE_SHAKE: u32 = 24; // ticks of warning shake before it drops (~0.4s)
+const CRUMBLE_GONE: u32 = 110; // ticks it stays gone before regrowing (~1.8s)
 
 impl LevelWorld {
     pub fn from_level(lvl: &Level) -> Self {
@@ -74,6 +87,7 @@ impl LevelWorld {
         let mut hazard = HashSet::new();
         let mut kinds = HashMap::new();
         let mut blocks = HashMap::new();
+        let mut crumbles = HashMap::new();
         let in_bounds = |x: i32, y: i32| x >= 0 && y >= 0 && x < w && y < h;
 
         for span in &lvl.tiles {
@@ -101,6 +115,9 @@ impl LevelWorld {
                             used: false,
                         },
                     );
+                }
+                if span.kind == TileKind::Crumble {
+                    crumbles.insert((x, y), CrumblePhase::Intact);
                 }
                 kinds.insert((x, y), span.kind);
             }
@@ -140,7 +157,7 @@ impl LevelWorld {
         let mut checkpoints: Vec<(f64, f64)> = lvl.checkpoints.iter().map(|&(cx, cy)| resolve_spawn(&map, w, h, cx, cy)).collect();
         checkpoints.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
-        LevelWorld { map, hazard, kinds, ents, blocks, w, h, spawn, checkpoints, goal, warps, theme: Theme::from_str(&lvl.theme) }
+        LevelWorld { map, hazard, kinds, ents, blocks, w, h, spawn, checkpoints, goal, warps, theme: Theme::from_str(&lvl.theme), crumbles }
     }
 
     /// Is there a live (un-bonked) bonkable block at this cell?
@@ -173,6 +190,56 @@ impl LevelWorld {
             return Bonk::Released(item);
         }
         Bonk::Nothing
+    }
+
+    /// Trigger the crumbling plank at (cx,cy) if it's intact — call when the player
+    /// is standing on that cell. It starts to shake; [`tick_crumbles`](Self::tick_crumbles)
+    /// then drops and regrows it.
+    pub fn touch_crumble(&mut self, cx: i32, cy: i32) {
+        if let Some(p) = self.crumbles.get_mut(&(cx, cy)) {
+            if *p == CrumblePhase::Intact {
+                *p = CrumblePhase::Shaking(CRUMBLE_SHAKE);
+            }
+        }
+    }
+
+    /// True if a crumbling plank at (cx,cy) is in its warning shake (for a wobble
+    /// cue). Cheap; returns false for non-crumble or settled cells.
+    pub fn crumble_shaking(&self, cx: i32, cy: i32) -> bool {
+        matches!(self.crumbles.get(&(cx, cy)), Some(CrumblePhase::Shaking(_)))
+    }
+
+    /// Advance every crumbling plank one tick: shake → drop away (non-solid) →
+    /// regrow (solid again). Flips both collision and the rendered kind. Call once
+    /// per sim step.
+    pub fn tick_crumbles(&mut self) {
+        if self.crumbles.is_empty() {
+            return;
+        }
+        let mut flips: Vec<(i32, i32, bool)> = Vec::new();
+        for (&(cx, cy), p) in self.crumbles.iter_mut() {
+            *p = match *p {
+                CrumblePhase::Intact => CrumblePhase::Intact,
+                CrumblePhase::Shaking(0) => {
+                    flips.push((cx, cy, false));
+                    CrumblePhase::Gone(CRUMBLE_GONE)
+                }
+                CrumblePhase::Shaking(t) => CrumblePhase::Shaking(t - 1),
+                CrumblePhase::Gone(0) => {
+                    flips.push((cx, cy, true));
+                    CrumblePhase::Intact
+                }
+                CrumblePhase::Gone(t) => CrumblePhase::Gone(t - 1),
+            };
+        }
+        for (cx, cy, solid) in flips {
+            self.map.set(cx as usize, cy as usize, solid);
+            if solid {
+                self.kinds.insert((cx, cy), TileKind::Crumble);
+            } else {
+                self.kinds.remove(&(cx, cy));
+            }
+        }
     }
 
     /// The tile kind drawn at cell (x,y), if any (for rendering).
@@ -346,6 +413,29 @@ mod tests {
         assert_eq!(w.theme, Theme::Castle);
         assert_eq!(w.warps.len(), 1);
         assert_eq!(w.warps[0].target.as_deref(), Some("t2@3,9"));
+    }
+
+    #[test]
+    fn crumble_plank_shakes_drops_then_regrows() {
+        let mut l = Level::new("t", "overworld", 10, 10);
+        l.tiles.push(TileSpan { x: 3, y: 5, len: 1, kind: TileKind::Crumble });
+        let mut w = LevelWorld::from_level(&l);
+        assert!(w.map.is_solid(3, 5), "starts solid");
+        // Step on it: it shakes (still solid) for a beat.
+        w.touch_crumble(3, 5);
+        assert!(w.crumble_shaking(3, 5));
+        for _ in 0..=super::CRUMBLE_SHAKE {
+            w.tick_crumbles();
+        }
+        // After the shake it drops away (non-solid, not drawn).
+        assert!(!w.map.is_solid(3, 5), "drops away after shaking");
+        assert_eq!(w.kind_at(3, 5), None);
+        // After the gone window it regrows solid.
+        for _ in 0..=super::CRUMBLE_GONE {
+            w.tick_crumbles();
+        }
+        assert!(w.map.is_solid(3, 5), "regrows");
+        assert_eq!(w.kind_at(3, 5), Some(TileKind::Crumble));
     }
 
     #[test]

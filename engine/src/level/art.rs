@@ -176,7 +176,7 @@ fn light(col: Rgba, num: u32, den: u32) -> Rgba {
 }
 
 /// All kinds in a stable order (for the preview tool + tests).
-pub const KINDS: [TileKind; 10] = [
+pub const KINDS: [TileKind; 11] = [
     TileKind::Ground,
     TileKind::Platform,
     TileKind::Brick,
@@ -187,6 +187,7 @@ pub const KINDS: [TileKind; 10] = [
     TileKind::Hazard,
     TileKind::Deco,
     TileKind::Spent,
+    TileKind::Crumble,
 ];
 
 /// Draw one tile's 16×16 art with its top-left at (`ox`,`oy`). Non-solid kinds
@@ -272,6 +273,20 @@ pub fn draw_tile(fb: &mut Framebuffer, ox: i32, oy: i32, kind: TileKind, p: &Pal
                 fb.fill_rect(ox + rx, oy + ry, 2, 2, shade(g, 2, 3)); // dim rivets (off-grid)
             }
             fb.fill_rect(ox + 6, oy + 6, 2, 2, shade(g, 3, 4)); // a sunken center dimple (off-grid)
+        }
+        TileKind::Crumble => {
+            // A cracked plank: platform-colored body with a dark diagonal fissure.
+            // The fissure crosses sample columns to give a broken-up mono signature
+            // distinct from the solid Platform/Ground caps.
+            let body = p.platform;
+            fb.fill_rect(ox, oy, TILE, TILE, shade(body, 5, 6));
+            fb.fill_rect(ox, oy, TILE, 3, body); // top lip
+            let crack = shade(body, 1, 3);
+            // a jagged seam down the middle (hits the sample grid on both rows)
+            fb.fill_rect(ox + 7, oy, 2, 6, crack);
+            fb.fill_rect(ox + 4, oy + 6, 2, 4, crack);
+            fb.fill_rect(ox + 10, oy + 8, 2, 6, crack);
+            fb.fill_rect(ox + 1, oy + 11, 3, 2, crack);
         }
     }
 }
