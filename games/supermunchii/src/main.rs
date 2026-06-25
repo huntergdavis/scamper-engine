@@ -488,6 +488,10 @@ fn run_play(path: &str) {
         if input.jump_pressed() {
             pending_jump = true;
         }
+        // Munchii's hitbox tracks his gear (tiny when small, full when powered),
+        // anchored at the feet so a power-up grows him upward off the ground.
+        let (hw, hh) = power.hitbox();
+        resize_player(&mut sim.player, hw, hh);
         if !won && !game_over && !help {
             acc += elapsed;
             while acc >= SIM_DT_NS {
@@ -658,7 +662,7 @@ fn run_play(path: &str) {
             let _ = o.flush();
         } else {
             // --- render the camera window (shared with the headless soak harness) ---
-            draw_play_frame(&mut fb, backend.as_mut(), &mut out, &world, &sim, &actors, &projectiles, &hostiles, fb_w, fb_h, cols, rows, full_redraw, input.down_held());
+            draw_play_frame(&mut fb, backend.as_mut(), &mut out, &world, &sim, &actors, &projectiles, &hostiles, fb_w, fb_h, cols, rows, full_redraw, input.down_held(), power.zoom());
             full_redraw = false;
             render_play_status(&mut status, &level, sim.player.state, backend.name(), won, game_over, kibble, lives, power, rows + 1, cols);
             let mut o = std::io::stdout().lock();
@@ -703,6 +707,41 @@ impl Power {
             Power::Bubble => "bubble",
         }
     }
+    /// How much the *environment* is magnified while wearing this gear. Tiny
+    /// Munchii is a flea in a 4× world; powering up snaps the tiles down to 1× so
+    /// he's suddenly the big one — the whole twist, with no character resize.
+    fn zoom(self) -> usize {
+        match self {
+            Power::Small => 4,
+            _ => 1,
+        }
+    }
+    /// Munchii's hitbox (world px) for this gear: it shrinks with the world (base
+    /// ÷ zoom) so his *on-screen* size stays constant. Physics is untouched, so a
+    /// jump clears the same number of tiles whatever size he is.
+    fn hitbox(self) -> (f64, f64) {
+        let z = self.zoom() as f64;
+        (BODY_W / z, BODY_H / z)
+    }
+}
+
+/// Munchii's base hitbox (the powered "big" size, = `Player::new`'s default).
+const BODY_W: f64 = 12.0;
+const BODY_H: f64 = 16.0;
+
+/// Resize Munchii's hitbox to `(w, h)`, keeping his feet planted and horizontally
+/// centered (so growing on a power-up lifts him off the ground rather than
+/// sinking him into it). A no-op when already that size.
+fn resize_player(p: &mut Player, w: f64, h: f64) {
+    if (p.w - w).abs() < 1e-6 && (p.h - h).abs() < 1e-6 {
+        return;
+    }
+    let center = p.pos.x + p.w / 2.0;
+    let feet = p.pos.y + p.h;
+    p.w = w;
+    p.h = h;
+    p.pos.x = center - w / 2.0;
+    p.pos.y = feet - h;
 }
 
 /// A rollo/hardhat's curl state: walking, a still curled ball, or a kicked ball
@@ -1008,40 +1047,60 @@ fn draw_play_frame(
     rows: u16,
     full_redraw: bool,
     down_held: bool,
+    zoom: usize,
 ) {
+    let zoom = zoom.max(1);
+    let zf = zoom as f64;
     let pal = art::palette(world.theme);
     let pcx = sim.player.pos.x + sim.player.w / 2.0;
     let pcy = sim.player.pos.y + sim.player.h / 2.0;
-    let (cam_x, cam_y) = camera(pcx, pcy, fb_w as f64, fb_h as f64, world.px_w(), world.px_h());
+    // When zoomed in, the visible slice of the world is 1/zoom of the screen, so
+    // the camera operates on that smaller world viewport (it follows Munchii more
+    // tightly). The environment is rendered into a small buffer at 1× and then
+    // magnified ×zoom; only the tiles grow, so a constant-size Munchii is dwarfed.
+    let (view_w, view_h) = ((fb_w / zoom).max(1), (fb_h / zoom).max(1));
+    let (cam_x, cam_y) = camera(pcx, pcy, view_w as f64, view_h as f64, world.px_w(), world.px_h());
     let cpw = fb_w as f64 / cols.max(1) as f64; // px per terminal cell (w)
     let cph = fb_h as f64 / rows.max(1) as f64; // px per terminal cell (h)
-    // Snap the camera so tiles always land on the same sample sub-grid. Pixel
-    // backends (Kitty) scroll per-pixel; cell-sampling backends must snap to a
-    // whole cell or static tiles flicker as you move (see Backend::pixel_exact).
+    // Snap the camera so tiles land on the same sample sub-grid. Pixel backends
+    // (Kitty) scroll per-pixel; cell-sampling backends must snap to a whole *screen*
+    // cell — which, in the pre-magnified world buffer, is cpw/zoom (see pixel_exact).
     let (cam_x, cam_y) = if backend.pixel_exact() {
         (cam_x.floor(), cam_y.floor())
     } else {
-        ((cam_x / cpw).floor() * cpw, (cam_y / cph).floor() * cph)
+        let (gw, gh) = (cpw / zf, cph / zf);
+        ((cam_x / gw).floor() * gw, (cam_y / gh).floor() * gh)
     };
+    // Map a world point to its on-screen pixel (the environment is magnified, so
+    // world offsets from the camera scale by zoom).
+    let sx = |wx: f64| (wx - cam_x) * zf;
+    let sy = |wy: f64| (wy - cam_y) * zf;
 
-    fb.clear(pal.sky);
+    // Render the environment (tiles + goal) into a small buffer, then magnify.
+    // (At zoom 1 the buffer is unused — a 1×1 placeholder keeps the binding live.)
+    let mut wfb_store = Framebuffer::new(if zoom == 1 { 1 } else { view_w }, if zoom == 1 { 1 } else { view_h });
+    let env: &mut Framebuffer = if zoom == 1 { fb } else { &mut wfb_store };
+    env.clear(pal.sky);
     let t = TILE as i32;
     let tx0 = (cam_x / TILE).floor() as i32;
-    let tx1 = ((cam_x + fb_w as f64) / TILE).ceil() as i32;
+    let tx1 = ((cam_x + view_w as f64) / TILE).ceil() as i32;
     let ty0 = (cam_y / TILE).floor() as i32;
-    let ty1 = ((cam_y + fb_h as f64) / TILE).ceil() as i32;
+    let ty1 = ((cam_y + view_h as f64) / TILE).ceil() as i32;
     for ty in ty0..ty1 {
         for tx in tx0..tx1 {
             if let Some(kind) = world.kind_at(tx, ty) {
-                art::draw_tile(fb, tx * t - cam_x as i32, ty * t - cam_y as i32, kind, &pal);
+                art::draw_tile(env, tx * t - cam_x as i32, ty * t - cam_y as i32, kind, &pal);
             }
         }
     }
-    // goal post
+    // goal post (drawn into the environment buffer so it magnifies with the tiles)
     if let Some((gx, gy)) = world.goal {
-        let sx = (gx - cam_x) as i32;
-        fb.fill_rect(sx, 0, 2, fb_h as i32, Rgba::rgb(235, 235, 245));
-        fb.fill_rect(sx - 7, (gy - cam_y) as i32, 7, 5, Rgba::rgb(232, 84, 84));
+        let gsx = (gx - cam_x) as i32;
+        env.fill_rect(gsx, 0, 2, view_h as i32, Rgba::rgb(235, 235, 245));
+        env.fill_rect(gsx - 7, (gy - cam_y) as i32, 7, 5, Rgba::rgb(232, 84, 84));
+    }
+    if zoom != 1 {
+        fb.upscale_from(&wfb_store, zoom);
     }
     // Build the on-screen sprites: world entities (creatures / items) first, then
     // Munchii on top. Each carries its own palette so the colored tiers draw it in
@@ -1058,7 +1117,7 @@ fn draw_play_frame(
             None => continue, // a kind we haven't authored a sprite for yet
         };
         let exw = a.mob.pos.x + a.mob.w / 2.0; // entity center-x, world px
-        if exw < cam_x - TILE || exw > cam_x + fb_w as f64 + TILE {
+        if exw < cam_x - TILE || exw > cam_x + view_w as f64 + TILE {
             continue; // cull off-screen
         }
         // A curled rollo shows its "curl" frames (falls back to "walk" if none).
@@ -1073,8 +1132,8 @@ fn draw_play_frame(
         };
         let efw = elines.iter().map(|l| l.chars().count()).max().unwrap_or(1) as f64;
         let (emw, emh) = (efw * cpw, elines.len() as f64 * cph);
-        let elx = (exw - cam_x) - emw / 2.0;
-        let ely = ((a.mob.pos.y + a.mob.h) - cam_y) - emh; // feet at the mob's bottom
+        let elx = sx(exw) - emw / 2.0;
+        let ely = sy(a.mob.pos.y + a.mob.h) - emh; // feet at the mob's bottom
         sprites.push((elines, elx, ely, sp.palette));
     }
 
@@ -1087,8 +1146,8 @@ fn draw_play_frame(
             let pl: Vec<String> = an.frames[fi].iter().map(|s| s.to_string()).collect();
             let pfw = pl.iter().map(|l| l.chars().count()).max().unwrap_or(1) as f64;
             let (pmw, pmh) = (pfw * cpw, pl.len() as f64 * cph);
-            let plx = (p.pos.x + p.w / 2.0 - cam_x) - pmw / 2.0;
-            let ply = (p.pos.y + p.h / 2.0 - cam_y) - pmh / 2.0;
+            let plx = sx(p.pos.x + p.w / 2.0) - pmw / 2.0;
+            let ply = sy(p.pos.y + p.h / 2.0) - pmh / 2.0;
             sprites.push((pl, plx, ply, sp.palette));
         }
     }
@@ -1102,8 +1161,8 @@ fn draw_play_frame(
             let hl: Vec<String> = an.frames[fi].iter().map(|s| s.to_string()).collect();
             let hfw = hl.iter().map(|l| l.chars().count()).max().unwrap_or(1) as f64;
             let (hmw, hmh) = (hfw * cpw, hl.len() as f64 * cph);
-            let hlx = (h.pos.x + h.w / 2.0 - cam_x) - hmw / 2.0;
-            let hly = (h.pos.y + h.h / 2.0 - cam_y) - hmh / 2.0;
+            let hlx = sx(h.pos.x + h.w / 2.0) - hmw / 2.0;
+            let hly = sy(h.pos.y + h.h / 2.0) - hmh / 2.0;
             sprites.push((hl, hlx, hly, sp.palette));
         }
     }
@@ -1124,8 +1183,8 @@ fn draw_play_frame(
     };
     let fw = lines.iter().map(|l| l.chars().count()).max().unwrap_or(1) as f64;
     let (mw, mh) = (fw * cpw, lines.len() as f64 * cph); // sprite footprint, px
-    let cx = (sim.player.pos.x - cam_x) + sim.player.w / 2.0;
-    let bottom = (sim.player.pos.y - cam_y) + sim.player.h;
+    let cx = sx(sim.player.pos.x + sim.player.w / 2.0);
+    let bottom = sy(sim.player.pos.y + sim.player.h);
     sprites.push((lines, cx - mw / 2.0, bottom - mh, munchii::beagle_rgb as fn(char) -> (u8, u8, u8)));
 
     // Transient effects (puffs, bonks, pops, sparkles) — world-anchored in sim.fx.
@@ -1149,8 +1208,8 @@ fn draw_play_frame(
         let fx_lines: Vec<Vec<String>> = fxr.iter().map(|(frame, ..)| frame.iter().map(|s| s.to_string()).collect()).collect();
         for ((frame, tint, z, fxx, fxy), lns) in fxr.iter().zip(fx_lines.iter()) {
             let w = frame.iter().map(|l| l.chars().count()).max().unwrap_or(0) as f64;
-            let ex = (fxx - cam_x) - w * cpw / 2.0;
-            let ey = fxy - cam_y;
+            let ex = sx(*fxx) - w * cpw / 2.0;
+            let ey = sy(*fxy);
             overlays.push(Overlay { lines: lns, col: (ex / cpw).round() as i32, row: (ey / cph).round() as i32, tint: Some(*tint), palette: None, z: 1000 + z });
         }
         backend.present(out, fb, cols, rows, full_redraw, &overlays);
@@ -1160,7 +1219,7 @@ fn draw_play_frame(
             draw_sprite_pixels(fb, lns, *lx, *ly, cpw, cph, *pal);
         }
         for &(frame, tint, _z, fxx, fxy) in &fxr {
-            draw_effect_pixels(fb, frame, tint, fxx - cam_x, fxy - cam_y, cpw, cph);
+            draw_effect_pixels(fb, frame, tint, sx(fxx), sy(fxy), cpw, cph);
         }
         backend.present(out, fb, cols, rows, full_redraw, &[]);
     }
@@ -1414,8 +1473,11 @@ fn soak_level(path: &str, ticks: u64) -> Result<SoakStats, String> {
             sim = sim_at(world.spawn);
         }
         if tick % 15 == 0 {
+            // Alternate zoom so the soak crash-tests both the magnified (tiny) and
+            // 1× render paths headlessly.
+            let z = if (tick / 15) % 2 == 0 { 4 } else { 1 };
             for b in backends.iter_mut() {
-                draw_play_frame(&mut fb, b.as_mut(), &mut out, &world, &sim, &actors, &[], &hostiles, fb_w, fb_h, cols, rows, true, false);
+                draw_play_frame(&mut fb, b.as_mut(), &mut out, &world, &sim, &actors, &[], &hostiles, fb_w, fb_h, cols, rows, true, false, z);
             }
             // Also render the status line like run_play does — at narrow widths too,
             // so status formatting (multibyte truncation, etc.) is exercised, not
@@ -2755,7 +2817,7 @@ mod tests {
             assert!(fb_w > 0 && fb_h > 0 && vc > 0 && vr > 0, "play_view degenerate at {cols}x{rows}");
             let mut fb = Framebuffer::new(fb_w, fb_h);
             sim.step(&world.map, InputFrame { axis_x: 1, jump_pressed: false, jump_held: false, down_held: false });
-            draw_play_frame(&mut fb, backend.as_mut(), &mut out, &world, &sim, &actors, &[], &[], fb_w, fb_h, vc, vr, true, false);
+            draw_play_frame(&mut fb, backend.as_mut(), &mut out, &world, &sim, &actors, &[], &[], fb_w, fb_h, vc, vr, true, false, 4);
             render_play_status(&mut status, &l, sim.player.state, "mono", false, false, 0, 3, Power::Small, vr + 1, vc);
         }
     }
@@ -2785,6 +2847,53 @@ mod tests {
             }
         }
         assert!(matches!(got, Bonk::Released(_)), "bonking the question should release an item, got {got:?}");
+    }
+
+    /// The tiny-world zoom must actually magnify the environment: at 4× the ground
+    /// occupies a much thicker on-screen band than at 1× (a single tile blows up
+    /// to a 4-row block), while Munchii's sprite stays a constant glyph size.
+    #[test]
+    fn zoom_magnifies_the_environment() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        struct Cap(Rc<RefCell<String>>);
+        impl Backend for Cap {
+            fn name(&self) -> &'static str {
+                "cap"
+            }
+            fn draws_overlay(&self) -> bool {
+                true
+            }
+            fn present(&mut self, _o: &mut Vec<u8>, fb: &Framebuffer, cols: u16, rows: u16, _f: bool, ov: &[Overlay]) {
+                *self.0.borrow_mut() = scamper::backend::mono_text(fb, cols as usize, rows as usize, ov);
+            }
+            fn teardown(&mut self, _o: &mut Vec<u8>) {}
+        }
+        let path = format!("{}/levels/yard-romp-1.lvl", env!("CARGO_MANIFEST_DIR"));
+        let level = load_level_file(&path).expect("load authored level");
+        let world = LevelWorld::from_level(&level);
+        let (cols, rows) = (60u16, 18u16);
+        let (fb_w, fb_h) = (cols as usize * 8, rows as usize * 16);
+        // Count bottom screen rows that are "ground-dense" (mostly non-blank).
+        let ground_band = |grid: &str| -> usize {
+            grid.lines().rev().take_while(|l| l.chars().filter(|c| *c != ' ').count() > cols as usize / 2).count()
+        };
+        let band_at = |zoom: usize| -> usize {
+            let mut sim = sim_at(world.spawn);
+            resize_player(&mut sim.player, BODY_W / zoom as f64, BODY_H / zoom as f64);
+            for _ in 0..30 {
+                sim.step(&world.map, InputFrame { axis_x: 1, jump_pressed: false, jump_held: false, down_held: false });
+            }
+            let cap = Rc::new(RefCell::new(String::new()));
+            let mut be: Box<dyn Backend> = Box::new(Cap(cap.clone()));
+            let mut fb = Framebuffer::new(fb_w, fb_h);
+            let actors = build_actors(&world);
+            draw_play_frame(&mut fb, be.as_mut(), &mut Vec::new(), &world, &sim, &actors, &[], &[], fb_w, fb_h, cols, rows, true, false, zoom);
+            let b = ground_band(&cap.borrow());
+            b
+        };
+        let (one, four) = (band_at(1), band_at(4));
+        assert!(four >= one * 2, "4× zoom should thicken the ground band (1×={one}, 4×={four})");
     }
 
     /// Replicate run_play's head-bonk path: a brick directly above Munchii must
