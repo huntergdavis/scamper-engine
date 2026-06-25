@@ -386,6 +386,7 @@ fn run_play(path: &str) {
     let mut power = Power::Small;
     let mut invuln: u32 = 0; // ticks of post-hit invulnerability
     let mut skid_cd: u32 = 0; // throttle for skid-dust effects
+    let mut help = false; // controls overlay (h)
     play_bgm(&level);
 
     let (mut fb_w, mut fb_h, mut cols, mut rows) = play_view(terminal::query_winsize());
@@ -409,8 +410,29 @@ fn run_play(path: &str) {
             break;
         }
         input.poll();
-        if input.quit || input.pressed(K_Q) || input.pressed(K_ESC) {
+        if input.quit || input.pressed(K_Q) {
             break;
+        }
+        if input.pressed(K_HELP) {
+            help = !help;
+            if help {
+                // Tear down the live image so help text isn't hidden behind it.
+                out.clear();
+                backend.teardown(&mut out);
+                let mut o = std::io::stdout().lock();
+                let _ = o.write_all(&out);
+                let _ = o.write_all(b"\x1b[2J");
+                let _ = o.flush();
+            } else {
+                full_redraw = true;
+            }
+        } else if input.pressed(K_ESC) {
+            if help {
+                help = false; // Esc closes help rather than quitting
+                full_redraw = true;
+            } else {
+                break;
+            }
         }
         if input.pressed(K_TAB) {
             switch_backend(&mut backend);
@@ -454,7 +476,7 @@ fn run_play(path: &str) {
         if input.jump_pressed() {
             pending_jump = true;
         }
-        if !won && !game_over {
+        if !won && !game_over && !help {
             acc += elapsed;
             while acc >= SIM_DT_NS {
                 let inp = InputFrame {
@@ -609,11 +631,17 @@ fn run_play(path: &str) {
             }
         }
 
-        // --- render the camera window (shared with the headless soak harness) ---
-        draw_play_frame(&mut fb, backend.as_mut(), &mut out, &world, &sim, &actors, &projectiles, &hostiles, fb_w, fb_h, cols, rows, full_redraw, input.down_held());
-        full_redraw = false;
-        render_play_status(&mut status, &level, sim.player.state, backend.name(), won, game_over, kibble, lives, power, rows + 1, cols);
-        {
+        if help {
+            // Controls overlay (frozen): plain adaptive text, fits any window.
+            render_play_help(&mut out, backend.name());
+            let mut o = std::io::stdout().lock();
+            let _ = o.write_all(&out);
+            let _ = o.flush();
+        } else {
+            // --- render the camera window (shared with the headless soak harness) ---
+            draw_play_frame(&mut fb, backend.as_mut(), &mut out, &world, &sim, &actors, &projectiles, &hostiles, fb_w, fb_h, cols, rows, full_redraw, input.down_held());
+            full_redraw = false;
+            render_play_status(&mut status, &level, sim.player.state, backend.name(), won, game_over, kibble, lives, power, rows + 1, cols);
             let mut o = std::io::stdout().lock();
             let _ = o.write_all(&out);
             let _ = o.write_all(status.as_bytes());
@@ -1220,7 +1248,7 @@ fn render_play_status(buf: &mut String, level: &Level, st: State, backend: &str,
     } else if won {
         let _ = write!(plain, "★ LEVEL COMPLETE — {} ★   ♥×{lives} kibble:{kibble}   → next level…   gfx:{backend} · q quit", level.id);
     } else {
-        let _ = write!(plain, "{}  [{}]  {}  ♥×{lives} kibble:{kibble} {}   A/D·jump·↓pipe·C suds·Tab gfx:{backend}·q", level.id, level.theme, state_letter(st), power.label());
+        let _ = write!(plain, "{}  [{}]  {}  ♥×{lives} kibble:{kibble} {}   h help · Tab gfx:{backend} · q quit", level.id, level.theme, state_letter(st), power.label());
     }
     let maxw = (cols as usize).saturating_sub(1);
     if plain.chars().count() > maxw {
@@ -1886,6 +1914,40 @@ fn render_help(out: &mut Vec<u8>, active_backend: &str) {
     hline(out, r, "  mono    plain black & white ASCII (bare minimum)");
     r += 2;
     hline(out, r, "\x1b[2mpress h or Esc to resume\x1b[0m");
+}
+
+/// Level-play controls overlay (toggled with `h`). Plain adaptive text lines, so
+/// it reads at any terminal size — the full control list the status bar can't fit.
+fn render_play_help(out: &mut Vec<u8>, active_backend: &str) {
+    out.clear();
+    let mut r = 2u16;
+    hline(out, r, "\x1b[1mSUPER MUNCHII — controls\x1b[0m");
+    r += 2;
+    hline(out, r, "Move / run        A / D   or   \u{2190} / \u{2192}   (hold to build speed)");
+    r += 1;
+    hline(out, r, "Jump (hold=higher)  Space / Z / K / W / \u{2191}");
+    r += 1;
+    hline(out, r, "Double jump       jump again in mid-air");
+    r += 1;
+    hline(out, r, "Crouch / pipe     S / \u{2193}   (enter a pipe while standing on it)");
+    r += 1;
+    hline(out, r, "Throw Sudsball    C   (only in bubble gear — bonks critters)");
+    r += 2;
+    hline(out, r, "\x1b[1mPower-ups (gear, not damage)\x1b[0m");
+    r += 1;
+    hline(out, r, "  Big Kibble      small \u{2192} big   (the \"super\" state)");
+    r += 1;
+    hline(out, r, "  Bubble Bone     big \u{2192} bubble   (lets you throw Sudsballs)");
+    r += 1;
+    hline(out, r, "  Lucky Squeaky / 100 kibble = an extra life");
+    r += 1;
+    hline(out, r, "  A hit drops one gear tier; a hit while small = a life");
+    r += 2;
+    hline(out, r, "Bonk blocks from below  bricks shatter, ? blocks give a treat");
+    r += 1;
+    hline(out, r, "Pounce critters from above  \u{2022}  reach the bath plug to finish");
+    r += 2;
+    hline(out, r, &format!("Tab  switch graphics [now: {active_backend}]   \u{2022}   h  close   \u{2022}   Q  quit"));
 }
 
 // ---------------------------------------------------------------------------
