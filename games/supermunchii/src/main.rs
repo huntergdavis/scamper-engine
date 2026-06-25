@@ -6,7 +6,7 @@ use scamper::backend::{AsciiBackend, Backend, KittyBackend, MonoBackend, Overlay
 use scamper::capture::{self, InputFrame, Recording, Snapshots};
 use scamper::munchii;
 use scamper::framebuffer::{Framebuffer, Rgba};
-use scamper::input::{Input, K_C, K_DOWN, K_ESC, K_HELP, K_N, K_Q, K_S, K_T, K_TAB, K_Y};
+use scamper::input::{Input, K_DOWN, K_ESC, K_HELP, K_N, K_Q, K_S, K_T, K_TAB, K_Y};
 use scamper::level::art::{self, Theme};
 use scamper::level::ir::Level;
 use scamper::level::world::{camera, Bonk, LevelWorld};
@@ -459,16 +459,23 @@ fn run_play(path: &str) {
             full_redraw = true;
         }
 
-        // Throw a Sudsball (bubble gear only) — a non-violent bonk that pops critters.
+        // Throw a Sudsball (spacebar / 'c') — a non-violent bonk that pops critters.
+        // Always available; the gear tier just makes it snappier and faster: Bubble
+        // is the throw specialist, so picking up a Bubble Bone is felt immediately.
         if fire_cd > 0 {
             fire_cd -= 1;
         }
-        if input.pressed(K_C) && power == Power::Bubble && fire_cd == 0 {
+        if input.fire_pressed() && fire_cd == 0 {
             let dir = if sim.player.facing >= 0 { 1i8 } else { -1i8 };
             let px = sim.player.pos.x + sim.player.w / 2.0;
             let py = sim.player.pos.y + sim.player.h * 0.4;
-            projectiles.push(Mob::new(px, py, 4.0, 4.0, dir, 3.0, Gait::Fly));
-            fire_cd = 15;
+            let (speed, size, cooldown) = match power {
+                Power::Small => (2.6, 4.0, 24),
+                Power::Big => (3.2, 4.0, 16),
+                Power::Bubble => (4.2, 5.0, 9),
+            };
+            projectiles.push(Mob::new(px, py, size, size, dir, speed, Gait::Fly));
+            fire_cd = cooldown;
         }
 
         // --- advance physics (fixed timestep) unless the level is finished ---
@@ -2112,19 +2119,19 @@ fn render_play_help(out: &mut Vec<u8>, active_backend: &str) {
     r += 2;
     hline(out, r, "Move / run        A / D   or   \u{2190} / \u{2192}   (hold to build speed)");
     r += 1;
-    hline(out, r, "Jump (hold=higher)  Space / Z / K / W / \u{2191}");
+    hline(out, r, "Jump (hold=higher)  Z / K / W / \u{2191}   (\u{2191} is jump — Space is throw)");
     r += 1;
     hline(out, r, "Double jump       jump again in mid-air");
     r += 1;
     hline(out, r, "Crouch / pipe     S / \u{2193}   (enter a pipe while standing on it)");
     r += 1;
-    hline(out, r, "Throw Sudsball    C   (only in bubble gear — bonks critters)");
+    hline(out, r, "Throw Sudsball    Space (or C)  \u{2022}  always ready — bonks critters");
     r += 2;
     hline(out, r, "\x1b[1mPower-ups (gear, not damage)\x1b[0m");
     r += 1;
-    hline(out, r, "  Big Kibble      small \u{2192} big   (the \"super\" state)");
+    hline(out, r, "  Big Kibble      small \u{2192} big   (tougher; snappier throw)");
     r += 1;
-    hline(out, r, "  Bubble Bone     big \u{2192} bubble   (lets you throw Sudsballs)");
+    hline(out, r, "  Bubble Bone     big \u{2192} bubble   (fast, far Sudsballs)");
     r += 1;
     hline(out, r, "  Lucky Squeaky / 100 kibble = an extra life");
     r += 1;

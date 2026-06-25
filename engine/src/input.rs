@@ -296,14 +296,14 @@ impl Input {
         self.held(K_S) || self.held(K_DOWN)
     }
     pub fn jump_held(&self) -> bool {
-        self.held(K_SPACE) || self.held(K_Z) || self.held(K_K) || self.held(K_W) || self.held(K_UP)
+        self.held(K_Z) || self.held(K_K) || self.held(K_W) || self.held(K_UP)
     }
     pub fn jump_pressed(&self) -> bool {
-        self.pressed(K_SPACE)
-            || self.pressed(K_Z)
-            || self.pressed(K_K)
-            || self.pressed(K_W)
-            || self.pressed(K_UP)
+        self.pressed(K_Z) || self.pressed(K_K) || self.pressed(K_W) || self.pressed(K_UP)
+    }
+    /// Throw a Sudsball — spacebar (the headline "arrows + space" control) or 'c'.
+    pub fn fire_pressed(&self) -> bool {
+        self.pressed(K_SPACE) || self.pressed(K_C)
     }
 }
 
@@ -349,12 +349,21 @@ mod tests {
     }
 
     #[test]
-    fn kitty_space_jump_and_release() {
+    fn arrows_and_w_jump() {
         let mut inp = Input::new(true);
-        feed(&mut inp, b"\x1b[32u");
+        feed(&mut inp, b"\x1b[A"); // up arrow
         assert!(inp.jump_pressed() && inp.jump_held());
-        feed(&mut inp, b"\x1b[32;1:3u");
-        assert!(!inp.jump_held());
+        let mut inp2 = Input::new(true);
+        feed(&mut inp2, b"\x1b[119u"); // 'w' press
+        assert!(inp2.jump_pressed());
+    }
+
+    #[test]
+    fn space_throws_not_jumps() {
+        let mut inp = Input::new(true);
+        feed(&mut inp, b"\x1b[32u"); // spacebar
+        assert!(inp.fire_pressed(), "space throws");
+        assert!(!inp.jump_pressed(), "space no longer jumps");
     }
 
     #[test]
