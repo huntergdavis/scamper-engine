@@ -381,8 +381,11 @@ fn run_play(path: &str) {
     let mut hostiles: Vec<Mob> = Vec::new(); // enemy thrown sticks
     let mut fire_cd: u32 = 0; // throw cooldown (frames)
     let mut kibble: u32 = 0;
+    let mut next_1up: u32 = 100; // every 100 kibble → an extra life
+    let mut lives: i32 = 3;
     let mut power = Power::Small;
     let mut invuln: u32 = 0; // ticks of post-hit invulnerability
+    play_bgm(&level);
 
     let (mut fb_w, mut fb_h, mut cols, mut rows) = play_view(terminal::query_winsize());
     let mut fb = Framebuffer::new(fb_w, fb_h);
@@ -392,6 +395,8 @@ fn run_play(path: &str) {
     let mut pending_jump = false;
     let mut won = false;
     let mut won_at: u64 = 0; // ns timestamp when the level was completed
+    let mut game_over = false;
+    let mut over_at: u64 = 0;
 
     let spin = 1_000_000u64;
     let mut acc: u64 = 0;
@@ -448,7 +453,7 @@ fn run_play(path: &str) {
         if input.jump_pressed() {
             pending_jump = true;
         }
-        if !won {
+        if !won && !game_over {
             acc += elapsed;
             while acc >= SIM_DT_NS {
                 let inp = InputFrame {
@@ -464,6 +469,13 @@ fn run_play(path: &str) {
                 step_projectiles(&mut projectiles, &mut actors, &world.map, &mut kibble);
                 emit_thrower_sticks(&actors, &mut hostiles, &sim.player);
                 let stick_hit = step_hostiles(&mut hostiles, &world.map, &sim.player);
+                if hits.oneup {
+                    lives += 1;
+                }
+                while kibble >= next_1up {
+                    lives += 1; // 100 kibble = an extra life
+                    next_1up += 100;
+                }
                 if hits.plug && !won {
                     won = true; // pulled the bath plug → level complete
                     won_at = now;
@@ -472,23 +484,39 @@ fn run_play(path: &str) {
                     invuln -= 1;
                 } else if hits.hurt || stick_hit {
                     if power == Power::Small {
-                        sim = sim_at(world.spawn); // wipeout → back to spawn
+                        lives -= 1; // wipeout → lose a life, back to spawn
+                        sim = sim_at(world.spawn);
                     } else {
                         power = power.dropped(); // shed a tier of gear
                     }
                     invuln = 90; // ~1.5s of grace so you don't re-hit instantly
                     full_redraw = true;
                 }
+                if lives < 0 {
+                    game_over = true;
+                    over_at = now;
+                }
                 acc -= SIM_DT_NS;
             }
         } else {
             acc = 0;
         }
+        if game_over && now.saturating_sub(over_at) >= 1600 * 1_000_000 {
+            break; // GAME OVER shown — back to the menu
+        }
 
         let (px, py, pw_, ph_) = (sim.player.pos.x, sim.player.pos.y, sim.player.w, sim.player.h);
-        // hazard (lava/water) → respawn
-        if world.hazard_overlap(px, py, pw_, ph_) {
-            sim = sim_at(world.spawn);
+        // hazard (lava/water) or a fall into the pit below the level → lose a life.
+        if !won && !game_over && (world.hazard_overlap(px, py, pw_, ph_) || py > world.px_h() + TILE) {
+            lives -= 1;
+            if lives < 0 {
+                game_over = true;
+                over_at = now;
+            } else {
+                sim = sim_at(world.spawn);
+                power = Power::Small;
+                invuln = 90;
+            }
             full_redraw = true;
         }
         // goal reached → level complete; after a short beat, auto-advance to the
@@ -510,6 +538,7 @@ fn run_play(path: &str) {
                 projectiles.clear();
                 hostiles.clear();
                 power = Power::Small;
+                play_bgm(&level);
                 won = false;
                 full_redraw = true;
             }
@@ -526,6 +555,7 @@ fn run_play(path: &str) {
                     projectiles.clear();
                     hostiles.clear();
                     power = Power::Small;
+                    play_bgm(&level);
                     full_redraw = true;
                 }
             }
@@ -534,7 +564,7 @@ fn run_play(path: &str) {
         // --- render the camera window (shared with the headless soak harness) ---
         draw_play_frame(&mut fb, backend.as_mut(), &mut out, &world, &sim, &actors, &projectiles, &hostiles, fb_w, fb_h, cols, rows, full_redraw, input.down_held());
         full_redraw = false;
-        render_play_status(&mut status, &level, sim.player.state, backend.name(), won, kibble, power, rows + 1, cols);
+        render_play_status(&mut status, &level, sim.player.state, backend.name(), won, game_over, kibble, lives, power, rows + 1, cols);
         {
             let mut o = std::io::stdout().lock();
             let _ = o.write_all(&out);
@@ -611,6 +641,24 @@ fn is_curler(kind: &str) -> bool {
 
 /// Speed of a kicked shell, px/tick.
 const SHELL_SPEED: f64 = 2.6;
+
+/// The background track for a level's theme. There's no audio engine yet, so this
+/// is the hook: it names the track and logs it on level load (wire to real audio
+/// later). Themes map to the campaign's romp / dig / splash / bath / chill moods.
+fn bgm_for(theme: &str) -> &'static str {
+    match Theme::from_str(theme) {
+        Theme::Underground => "dig",
+        Theme::Underwater => "splash",
+        Theme::Castle => "bath-house",
+        Theme::Snow => "chill",
+        Theme::Overworld => "romp",
+    }
+}
+
+/// Play (hook) the track for a level — logs it for now.
+fn play_bgm(level: &Level) {
+    dlog!("bgm: {} (theme {})", bgm_for(&level.theme), level.theme);
+}
 
 /// Air & water creatures cruise on the `Fly` gait (no gravity, bob along a line).
 fn is_flyer(kind: &str) -> bool {
@@ -715,8 +763,9 @@ const POUNCE_BOUNCE: f64 = -220.0;
 /// What the player touched this tick.
 #[derive(Default)]
 struct Hits {
-    hurt: bool, // a non-pounce creature touch
-    plug: bool, // pulled the bath plug → win
+    hurt: bool,  // a non-pounce creature touch
+    plug: bool,  // pulled the bath plug → win
+    oneup: bool, // collected a Lucky Squeaky → extra life
 }
 
 fn step_actors(actors: &mut [Actor], map: &TileMap, player: &mut Player, kibble: &mut u32, power: &mut Power) -> Hits {
@@ -811,6 +860,10 @@ fn step_actors(actors: &mut [Actor], map: &TileMap, player: &mut Player, kibble:
             "bubble_bone" if a.item => {
                 a.mob.alive = false;
                 *power = Power::Bubble;
+            }
+            "lucky_squeaky" if a.item => {
+                a.mob.alive = false;
+                hits.oneup = true; // extra life
             }
             _ if a.item => {
                 a.mob.alive = false;
@@ -1078,13 +1131,16 @@ fn soak_level(path: &str, ticks: u64) -> Result<(), String> {
     Ok(())
 }
 
-fn render_play_status(buf: &mut String, level: &Level, st: State, backend: &str, won: bool, kibble: u32, power: Power, rows: u16, cols: u16) {
+#[allow(clippy::too_many_arguments)]
+fn render_play_status(buf: &mut String, level: &Level, st: State, backend: &str, won: bool, game_over: bool, kibble: u32, lives: i32, power: Power, rows: u16, cols: u16) {
     use std::fmt::Write;
     let mut plain = String::new();
-    if won {
-        let _ = write!(plain, "★ LEVEL COMPLETE — {} ★   kibble:{kibble}   → next level…   gfx:{backend} · q quit", level.id);
+    if game_over {
+        let _ = write!(plain, "✗ GAME OVER ✗   kibble:{kibble}   gfx:{backend} · q quit");
+    } else if won {
+        let _ = write!(plain, "★ LEVEL COMPLETE — {} ★   ♥×{lives} kibble:{kibble}   → next level…   gfx:{backend} · q quit", level.id);
     } else {
-        let _ = write!(plain, "{}  [{}]  {}  kibble:{kibble} {}   A/D · jump · ↓ pipe · Tab gfx:{backend} · q quit", level.id, level.theme, state_letter(st), power.label());
+        let _ = write!(plain, "{}  [{}]  {}  ♥×{lives} kibble:{kibble} {}   A/D·jump·↓pipe·C suds·Tab gfx:{backend}·q", level.id, level.theme, state_letter(st), power.label());
     }
     let maxw = (cols as usize).saturating_sub(1);
     if plain.len() > maxw {
