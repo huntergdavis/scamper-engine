@@ -190,6 +190,41 @@ pub const KINDS: [TileKind; 11] = [
     TileKind::Crumble,
 ];
 
+/// Paint a parallax backdrop (distant rolling humps) across `fb`, scrolling at a
+/// fraction of `cam_x` for depth. The humps are tinted only slightly off the sky
+/// so they add color-tier depth without muddying the mono ramp (whose darkest
+/// cells still read as sky). Call after clearing to sky, before the tiles.
+pub fn draw_backdrop(fb: &mut Framebuffer, p: &Palette, cam_x: f64, screen_w: usize, screen_h: usize) {
+    // Hills a small *additive* step above the sky — enough for color-tier depth, but
+    // a low enough luma bump that every theme's hill still samples to the blank mono
+    // cell (the ramp's first step is luma≈64), so B&W stays clean.
+    let bump = |d: u8| Rgba::rgb(p.sky.r.saturating_add(d), p.sky.g.saturating_add(d), p.sky.b.saturating_add(d));
+    let hill = bump(10); // near layer
+    let hill2 = bump(5); // farther, fainter layer behind
+    let spacing = 132i32;
+    let base_y = (screen_h as f64 * 0.66) as i32;
+    // Two layers at different parallax depths (farther = slower + fainter).
+    for (depth, color, off_h) in [(0.18f64, hill2, 30i32), (0.34f64, hill, 44i32)] {
+        let scroll = (cam_x * depth) as i32;
+        let phase = scroll.rem_euclid(spacing);
+        let count = screen_w as i32 / spacing + 2;
+        for i in -1..=count {
+            hump(fb, i * spacing - phase + spacing / 2, base_y, 96, off_h, color);
+        }
+    }
+}
+
+/// A single rounded hump (hill) with its base centered at (`cx`, `base_y`),
+/// approximated by stacked horizontal bars — width tapering toward the top.
+fn hump(fb: &mut Framebuffer, cx: i32, base_y: i32, base_w: i32, height: i32, color: Rgba) {
+    let rows = height.max(1);
+    for r in 0..rows {
+        let frac = r as f64 / rows as f64; // 0 at base → 1 at peak
+        let w = (base_w as f64 * (1.0 - frac * frac)) as i32; // round shoulders
+        fb.fill_rect(cx - w / 2, base_y - r, w, 1, color);
+    }
+}
+
 /// Draw one tile's 16×16 art with its top-left at (`ox`,`oy`). Non-solid kinds
 /// (platform underside, deco, hidden) leave their empty pixels untouched so the
 /// background/sky shows through.
@@ -313,6 +348,23 @@ fn draw_brick(fb: &mut Framebuffer, ox: i32, oy: i32, p: &Palette, coin: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backdrop_stays_in_the_blank_mono_cell_for_every_theme() {
+        // The mono ramp's first non-blank step is ~luma 64; the parallax hills must
+        // sample below it in every theme so B&W shows clean sky behind the tiles.
+        let luma = |i: usize, fb: &Framebuffer| -> u32 {
+            (fb.px[i] as u32 * 299 + fb.px[i + 1] as u32 * 587 + fb.px[i + 2] as u32 * 114) / 1000
+        };
+        for theme in Theme::ALL {
+            let p = palette(theme);
+            let mut fb = Framebuffer::new(320, 180);
+            fb.clear(p.sky);
+            draw_backdrop(&mut fb, &p, 137.0, 320, 180);
+            let max = (0..fb.px.len()).step_by(4).map(|i| luma(i, &fb)).max().unwrap_or(0);
+            assert!(max < 64, "{:?} backdrop luma {} must stay under the mono threshold", theme, max);
+        }
+    }
 
     /// The 4×2 cell-luma signature of a tile — what the mono/ascii ramp samples.
     fn signature(kind: TileKind) -> [u8; 8] {
