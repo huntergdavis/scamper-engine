@@ -919,6 +919,8 @@ fn gait_for(kind: &str, item: bool) -> (Gait, f64, f64, f64) {
         (Gait::Bob, 0.0, 12.0, 14.0) // snapping dandelion: rises/lowers from a pipe
     } else if kind == "springer" {
         (Gait::Hop, 0.5, 12.0, 12.0) // a bouncing critter — time your pounce mid-hop
+    } else if kind == "swooper" {
+        (Gait::Swoop, 0.7, 12.0, 12.0) // a moth that weaves through the air
     } else if kind == "hardhat" {
         (Gait::Careful, 0.4, 12.0, 14.0) // hard-hat acorn: stays on its ledge
     } else if is_flyer(kind) {

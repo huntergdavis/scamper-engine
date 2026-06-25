@@ -28,6 +28,9 @@ pub enum Gait {
     /// Like [`Wander`](Gait::Wander), but springs into a periodic hop whenever it's
     /// on the ground — a bouncing critter (frog / spring).
     Hop,
+    /// Cruise horizontally (no gravity) while weaving up and down in a sine wave
+    /// around the home height — a swooping flyer (moth / bat).
+    Swoop,
     /// Free projectile: gravity-driven arc, moves by its own velocity, stops dead
     /// on any solid (sets `blocked`). Used for thrown sticks.
     Ballistic,
@@ -61,6 +64,10 @@ const BOB_PERIOD: f64 = 150.0;
 const HOP_VY: f64 = 3.6; // px/tick (≈1.3-tile arc under GRAVITY)
 const HOP_PERIOD: u32 = 84;
 
+/// Swoop gait: weave this many px above/below the home height over this period.
+const SWOOP_AMP: f64 = 22.0;
+const SWOOP_PERIOD: f64 = 70.0;
+
 impl Mob {
     pub fn new(x: f64, y: f64, w: f64, h: f64, facing: i8, speed: f64, gait: Gait) -> Self {
         Mob { pos: vec2(x, y), vel: vec2(0.0, 0.0), w, h, facing, speed, gait, alive: true, age: 0, blocked: false, home_y: y }
@@ -81,6 +88,18 @@ impl Mob {
                 self.facing = -self.facing;
                 self.blocked = true;
             }
+            return;
+        }
+
+        // Swoop: cruise horizontally (reverse at walls) while weaving on a sine.
+        if self.gait == Gait::Swoop {
+            let dir = if self.facing >= 0 { 1.0 } else { -1.0 };
+            if self.move_axis(map, dir * self.speed, 0.0) {
+                self.facing = -self.facing;
+                self.blocked = true;
+            }
+            let w = std::f64::consts::TAU / SWOOP_PERIOD;
+            self.pos.y = self.home_y + SWOOP_AMP * (self.age as f64 * w).sin();
             return;
         }
 
@@ -252,6 +271,23 @@ mod tests {
             peaked = peaked.min(m.pos.y);
         }
         assert!(peaked < resting - 6.0, "hop should lift the critter off the floor (rest {resting}, peak {peaked})");
+    }
+
+    #[test]
+    fn swoop_weaves_around_its_home_height_and_moves_sideways() {
+        let map = flat();
+        let start_x = 2.0 * TILE;
+        let mut m = Mob::new(start_x, 2.0 * TILE, 12.0, 12.0, 1, 1.0, Gait::Swoop);
+        let home = m.home_y;
+        let (mut lo, mut hi) = (home, home);
+        for _ in 0..80 {
+            m.step(&map);
+            lo = lo.min(m.pos.y);
+            hi = hi.max(m.pos.y);
+        }
+        assert!(hi - lo > 20.0, "swoop should weave vertically (span {})", hi - lo);
+        assert!(m.pos.x > start_x, "and drift sideways");
+        assert!(m.pos.y > 0.0, "never falls under gravity");
     }
 
     #[test]

@@ -58,6 +58,7 @@ pub const ALL: &[Sprite] = &[
     Sprite { id: "prickle", role: Role::Creature, w: 5, h: 2, anims: PRICKLE, palette: prickle_rgb },
     Sprite { id: "springer", role: Role::Creature, w: 5, h: 2, anims: SPRINGER, palette: springer_rgb },
     Sprite { id: "flutter_collar", role: Role::Item, w: 5, h: 2, anims: FLUTTER_COLLAR, palette: flutter_rgb },
+    Sprite { id: "swooper", role: Role::Creature, w: 6, h: 2, anims: SWOOPER, palette: swooper_rgb },
     Sprite { id: "hardhat", role: Role::Creature, w: 6, h: 2, anims: HARDHAT, palette: hard_rgb },
     Sprite { id: "stick_squirrel", role: Role::Creature, w: 6, h: 3, anims: SQUIRREL, palette: squirrel_rgb },
     Sprite { id: "sudsfish", role: Role::Creature, w: 5, h: 2, anims: FISH, palette: fish_rgb },
@@ -159,6 +160,14 @@ fn flutter_rgb(ch: char) -> (u8, u8, u8) {
         'o' => (240, 200, 90),                  // bell
         '\\' | '/' | '"' => (210, 235, 255),    // wings
         _ => (150, 200, 240),
+    }
+}
+/// Swooper: a dusky-mauve moth, dark eyes, paler wings.
+fn swooper_rgb(ch: char) -> (u8, u8, u8) {
+    match ch {
+        'o' => (20, 16, 24),                    // eyes
+        '^' | 'v' => (208, 196, 224),           // beating wings
+        _ => (150, 120, 168),                   // body
     }
 }
 fn hard_rgb(ch: char) -> (u8, u8, u8) {
@@ -293,6 +302,10 @@ const SPRINGER: &[Anim] = &[Anim { name: "walk", fps: 5, frames: SPRINGER_F }];
 // Flutter Collar — a winged collar power-up that unlocks gliding. Wings flap.
 const FLUTTER_COLLAR_F: &[&[&str]] = &[&["\\(o)/", " \"\" "], &["/(o)\\", " \"\" "]];
 const FLUTTER_COLLAR: &[Anim] = &[Anim { name: "idle", fps: 4, frames: FLUTTER_COLLAR_F }];
+
+// Swooper — a dusk-moth that weaves through the air. Wings beat up/down.
+const SWOOPER_F: &[&[&str]] = &[&["\\(oo)/", " ^^^^ "], &["/(oo)\\", " vvvv "]];
+const SWOOPER: &[Anim] = &[Anim { name: "walk", fps: 9, frames: SWOOPER_F }];
 
 const HARDHAT_F: &[&[&str]] = &[&["/####\\", "(o)(o)"]];
 const HARDHAT: &[Anim] = &[Anim { name: "walk", fps: 4, frames: HARDHAT_F }];
