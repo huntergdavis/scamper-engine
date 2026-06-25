@@ -83,6 +83,16 @@ pub static BANG: Effect = Effect {
     frames: &[&[" ! "], &[" ! "], &[" ! "], &[" . "]],
 };
 
+// Spiky pop — burst scatter of little shards (a prickle bursting). The `x`/`+`
+// shards read as a sharp shatter, distinct from the soft BOP, even in mono.
+pub static SHARDS: Effect = Effect {
+    name: "shards",
+    fps: 18,
+    tint: (228, 150, 210),
+    z: 2,
+    frames: &[&[" x ", "x x"], &["x x", " + "], &["+ +", "   "], &[" . ", "   "]],
+};
+
 // Enemy bop — a bright burst when a critter pops into a treat.
 pub static BOP: Effect = Effect {
     name: "bop",

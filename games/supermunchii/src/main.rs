@@ -657,11 +657,13 @@ fn run_play(path: &str) {
                 }
                 let fxclock = sim.clock();
                 for &(e, x, y) in &hits.fx {
-                    sim.fx.spawn(e, x, y, fxclock); // pops / pickups feedback
-                    if e.name == "bop" {
-                        sim.fx.spawn_word(scamper::strings::t("fx.pop"), (255, 236, 150), x, y - 6.0, fxclock);
-                        shake.bump(0.25); // a satisfying little pop
-                    }
+                    sim.fx.spawn(e, x, y, fxclock); // pops / pickups feedback (kind-specific burst)
+                }
+                // A "POP!" shout + little shake for any critter popped this step.
+                if hits.pops > 0 {
+                    let (pxw, pyw) = hits.pop_xy;
+                    sim.fx.spawn_word(scamper::strings::t("fx.pop"), (255, 236, 150), pxw, pyw - 6.0, fxclock);
+                    shake.bump(0.25);
                 }
                 // Air combo: chaining pounces before landing escalates the reward.
                 // Each pounce past the first banks a bonus kibble and shouts the tally.
@@ -991,6 +993,21 @@ fn is_spiky(kind: &str) -> bool {
     matches!(kind, "prickle" | "prickle_sun")
 }
 
+/// The burst effect a popped critter leaves, by kind — so deaths read distinctly:
+/// spiky things shatter into shards, flyers shed feathers, springers puff, and
+/// everything else gives the bright BOP.
+fn pop_fx(kind: &str) -> &'static scamper::effects::Effect {
+    if is_spiky(kind) {
+        &scamper::effects::SHARDS
+    } else if is_flyer(kind) {
+        &scamper::effects::FEATHER
+    } else if kind == "springer" {
+        &scamper::effects::PUFF
+    } else {
+        &scamper::effects::BOP
+    }
+}
+
 /// Air-combo shout for an `n`-pounce chain (static so it can float as a word pop).
 fn combo_word(n: u32) -> &'static str {
     match n {
@@ -1143,6 +1160,8 @@ struct Hits {
     zoomies: bool, // collected a Zoomies Treat → timed speed burst
     collar: bool,  // collected a Flutter Collar → unlocks gliding
     pounces: u32,  // creatures pounced this step (drives the air combo)
+    pops: u32,     // critters popped this step, by any means (drives the POP! cue)
+    pop_xy: (f64, f64), // a representative pop location (for the cue)
     bounced: bool, // landed on a trampoline → launched high
     boss_hit: bool, // pounced the boss this step (gated by i-frames in run_play)
     star: bool,     // collected a Star Bone → invincibility
@@ -1170,7 +1189,9 @@ fn step_actors(actors: &mut [Actor], map: &TileMap, player: &mut Player, kibble:
                 if shells.iter().any(|&(sx, sy, sw, sh)| aabb_overlap(sx, sy, sw, sh, bx, by, bw, bh)) {
                     a.mob.alive = false;
                     *kibble += 2;
-                    hits.fx.push((&scamper::effects::BOP, bx + bw / 2.0, by));
+                    hits.pops += 1;
+                    hits.pop_xy = (bx + bw / 2.0, by);
+                    hits.fx.push((pop_fx(&a.kind), bx + bw / 2.0, by));
                 }
             }
         }
@@ -1190,7 +1211,9 @@ fn step_actors(actors: &mut [Actor], map: &TileMap, player: &mut Player, kibble:
         if invincible && !a.item && !matches!(a.kind.as_str(), "baron_whiskers" | "lift" | "trampoline") {
             a.mob.alive = false;
             *kibble += 2;
-            hits.fx.push((&scamper::effects::BOP, bx + bw / 2.0, by));
+            hits.pops += 1;
+            hits.pop_xy = (bx + bw / 2.0, by);
+            hits.fx.push((pop_fx(&a.kind), bx + bw / 2.0, by));
             continue;
         }
         let stomped = stomp(px, py, pw, ph, pvy, bx, by, bw, bh);
@@ -1308,7 +1331,9 @@ fn step_actors(actors: &mut [Actor], map: &TileMap, player: &mut Player, kibble:
                     *kibble += 2;
                     player.vel.y = POUNCE_BOUNCE;
                     hits.pounces += 1;
-                    hits.fx.push((&scamper::effects::BOP, bx + bw / 2.0, by)); // bopped a critter
+                    hits.pops += 1;
+                    hits.pop_xy = (bx + bw / 2.0, by);
+                    hits.fx.push((pop_fx(&a.kind), bx + bw / 2.0, by)); // bopped a critter
                 } else {
                     hits.hurt = true;
                 }
