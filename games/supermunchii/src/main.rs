@@ -423,6 +423,7 @@ fn run_play(path: &str) {
     let mut pending_jump = false;
     let mut won = false;
     let mut won_at: u64 = 0; // ns timestamp when the level was completed
+    let mut celebrated = false; // win-flourish fired (edge-triggered off `won`)
     let mut game_over = false;
     let mut over_at: u64 = 0;
 
@@ -814,6 +815,7 @@ fn run_play(path: &str) {
                 boss_hp = 3;
                 boss_cd = 0;
                 invincible = 0;
+                celebrated = false;
                 intro_until = now + 1_600_000_000;
                 full_redraw = true;
             }
@@ -836,6 +838,7 @@ fn run_play(path: &str) {
                     boss_hp = 3;
                     boss_cd = 0;
                     invincible = 0;
+                    celebrated = false;
                     intro_until = now + 1_600_000_000;
                     full_redraw = true;
                 }
@@ -849,6 +852,18 @@ fn run_play(path: &str) {
             let _ = o.write_all(&out);
             let _ = o.flush();
         } else {
+            // Win flourish (once, the instant the level is cleared): a spray of
+            // cheers across the view + a "CLEAR!" shout + a celebratory shake.
+            if won && !celebrated {
+                celebrated = true;
+                let (cxw, cyw) = (sim.player.pos.x + sim.player.w / 2.0, sim.player.pos.y);
+                let cl = sim.clock();
+                for (dx, dy) in [(-22.0, -4.0), (0.0, -14.0), (22.0, -4.0), (-10.0, 4.0), (12.0, 6.0)] {
+                    sim.fx.spawn(&scamper::effects::CHEER, cxw + dx, cyw + dy, cl);
+                }
+                sim.fx.spawn_word(scamper::strings::t("fx.clear"), (255, 240, 150), cxw, cyw - 16.0, cl);
+                shake.bump(0.5);
+            }
             // --- render the camera window (shared with the headless soak harness) ---
             let shake_off = shake.offset(frame_ix, 7.0);
             if shake.active() {
