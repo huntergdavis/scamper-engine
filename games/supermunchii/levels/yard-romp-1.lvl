@@ -18,6 +18,7 @@ R 20 11 2 pipe
 R 20 12 2 pipe
 # --- a grassy ledge with a critter and a treat on it ---
 R 40 9 6 ground
+E prickle 34 12
 E rollo 42 8
 E zoomies_treat 45 8
 # --- end staircase up to the flag ---

@@ -55,6 +55,7 @@ pub const ALL: &[Sprite] = &[
     Sprite { id: "flutterbug", role: Role::Creature, w: 6, h: 2, anims: FLUTTERBUG, palette: bug_rgb },
     Sprite { id: "hoppa", role: Role::Creature, w: 5, h: 2, anims: HOPPA, palette: bug_rgb },
     Sprite { id: "pincher", role: Role::Creature, w: 6, h: 2, anims: PINCHER, palette: crab_rgb },
+    Sprite { id: "prickle", role: Role::Creature, w: 5, h: 2, anims: PRICKLE, palette: prickle_rgb },
     Sprite { id: "hardhat", role: Role::Creature, w: 6, h: 2, anims: HARDHAT, palette: hard_rgb },
     Sprite { id: "stick_squirrel", role: Role::Creature, w: 6, h: 3, anims: SQUIRREL, palette: squirrel_rgb },
     Sprite { id: "sudsfish", role: Role::Creature, w: 5, h: 2, anims: FISH, palette: fish_rgb },
@@ -134,6 +135,14 @@ fn crab_rgb(ch: char) -> (u8, u8, u8) {
         'o' => (28, 20, 18),
         _ => (210, 96, 56),
     } // orange crab
+}
+/// Prickle: a thistle-purple spiked burr — bright spikes, dark scowling eye.
+fn prickle_rgb(ch: char) -> (u8, u8, u8) {
+    match ch {
+        'o' => (18, 14, 22),                    // eye
+        '^' | '/' | '\\' => (198, 90, 178),     // bright spikes
+        _ => (122, 60, 120),                    // body
+    }
 }
 fn hard_rgb(ch: char) -> (u8, u8, u8) {
     match ch {
@@ -253,6 +262,11 @@ const HOPPA: &[Anim] = &[Anim { name: "walk", fps: 7, frames: HOPPA_F }];
 
 const PINCHER_F: &[&[&str]] = &[&[">(oo)<", " m  m "], &[">(oo)<", "  mm  "]];
 const PINCHER: &[Anim] = &[Anim { name: "walk", fps: 6, frames: PINCHER_F }];
+
+// Prickle — a spiked burr you must NOT pounce (the spines hurt); pop it with a
+// Sudsball. The `^`/`/`/`\` crown reads as spikes even in mono B&W.
+const PRICKLE_F: &[&[&str]] = &[&["\\^^^/", "(>o<)"], &["/^^^\\", "(>o<)"]];
+const PRICKLE: &[Anim] = &[Anim { name: "walk", fps: 6, frames: PRICKLE_F }];
 
 const HARDHAT_F: &[&[&str]] = &[&["/####\\", "(o)(o)"]];
 const HARDHAT: &[Anim] = &[Anim { name: "walk", fps: 4, frames: HARDHAT_F }];

@@ -791,6 +791,11 @@ fn is_item(kind: &str) -> bool {
 fn is_curler(kind: &str) -> bool {
     matches!(kind, "rollo" | "rollo_sun" | "hardhat")
 }
+/// Spiky critters that can't be pounced (a stomp lands on the spines and hurts);
+/// only a Sudsball pops them.
+fn is_spiky(kind: &str) -> bool {
+    matches!(kind, "prickle" | "prickle_sun")
+}
 
 /// Speed of a kicked shell, px/tick.
 const SHELL_SPEED: f64 = 2.6;
@@ -1030,6 +1035,12 @@ fn step_actors(actors: &mut [Actor], map: &TileMap, player: &mut Player, kibble:
                 a.mob.alive = false;
                 *kibble += 1;
                 hits.fx.push((&scamper::effects::SPARKLE, bx + bw / 2.0, by));
+            }
+            // Spiky critters can't be pounced — landing on the spines hurts. The
+            // only safe answer is a Sudsball (see step_projectiles), so they teach
+            // the throw. Any contact hurts.
+            _ if is_spiky(&a.kind) => {
+                hits.hurt = true;
             }
             // A normal creature: pounce pops it into a treat; a side touch hurts.
             _ => {
@@ -2949,6 +2960,33 @@ mod tests {
         }
         assert_eq!(result, Bonk::Broke(None), "head-bonk should shatter the brick, got {result:?}");
         assert!(!world.map.is_solid(3, 5), "broken brick should no longer be solid");
+    }
+
+    /// A spiky Prickle can't be pounced — landing on it hurts, and it survives —
+    /// but a Sudsball pops it. This is the whole point of the throw.
+    #[test]
+    fn prickle_hurts_on_pounce_but_pops_to_a_sudsball() {
+        let mut l = Level::new("t", "overworld", 16, 10);
+        l.tiles.push(TileSpan { x: 0, y: 8, len: 16, kind: TileKind::Ground });
+        l.entities.push(Entity { kind: "prickle".into(), x: 6, y: 7, props: vec![] });
+        let world = LevelWorld::from_level(&l);
+        let mut actors = build_actors(&world);
+        let prickle = actors.iter().position(|a| a.kind == "prickle").expect("prickle built");
+        let (bx, by, bw, _bh) = (actors[prickle].mob.pos.x, actors[prickle].mob.pos.y, actors[prickle].mob.w, actors[prickle].mob.h);
+
+        // Munchii drops squarely onto its crown (a "pounce"): it must hurt, not pop.
+        let mut player = Player::new(bx, by - 8.0); // overlapping from above
+        player.vel.y = 240.0; // falling
+        let mut kibble = 0;
+        let mut power = Power::Big; // big so a hit just drops a tier (no respawn needed)
+        let hits = step_actors(&mut actors, &world.map, &mut player, &mut kibble, &mut power);
+        assert!(hits.hurt, "pouncing a prickle hurts");
+        assert!(actors[prickle].mob.alive, "and the prickle survives the pounce");
+
+        // A Sudsball on it pops it (into kibble).
+        let mut projectiles = vec![Mob::new(bx + bw / 2.0, by, 4.0, 4.0, 1, 0.0, Gait::Fly)];
+        step_projectiles(&mut projectiles, &mut actors, &world.map, &mut kibble);
+        assert!(!actors[prickle].mob.alive, "a Sudsball pops the prickle");
     }
 
     /// Soak each given level by holding right and jumping; collect any that panic
