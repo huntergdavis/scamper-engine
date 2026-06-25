@@ -19,6 +19,7 @@ R 20 12 2 pipe
 # --- a grassy ledge with a critter and a treat on it ---
 R 40 9 6 ground
 C 33 12
+E trampoline 31 12
 E prickle 34 12
 E rollo 42 8
 E swooper 38 6

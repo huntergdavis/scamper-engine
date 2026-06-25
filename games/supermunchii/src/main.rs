@@ -664,6 +664,10 @@ fn run_play(path: &str) {
                     glide = true; // unlock gliding
                     sim.fx.spawn_word(scamper::strings::t("fx.float"), (180, 230, 255), sim.player.pos.x + sim.player.w / 2.0, sim.player.pos.y - 8.0, fxclock);
                 }
+                if hits.bounced {
+                    sim.fx.spawn_word(scamper::strings::t("fx.boing"), (160, 240, 200), sim.player.pos.x + sim.player.w / 2.0, sim.player.pos.y - 8.0, fxclock);
+                    shake.bump(0.3);
+                }
                 if hits.plug && !won {
                     won = true; // pulled the bath plug → level complete
                     won_at = now;
@@ -961,6 +965,8 @@ fn gait_for(kind: &str, item: bool) -> (Gait, f64, f64, f64) {
         (Gait::Bob, 0.0, 12.0, 14.0) // snapping dandelion: rises/lowers from a pipe
     } else if kind == "springer" {
         (Gait::Hop, 0.5, 12.0, 12.0) // a bouncing critter — time your pounce mid-hop
+    } else if kind == "trampoline" {
+        (Gait::Still, 0.0, 16.0, 8.0) // a bounce pad — inert, launches you on landing
     } else if kind == "swooper" {
         (Gait::Swoop, 0.7, 12.0, 12.0) // a moth that weaves through the air
     } else if kind == "hardhat" {
@@ -1045,6 +1051,8 @@ fn step_hostiles(hostiles: &mut Vec<Mob>, map: &TileMap, player: &Player) -> boo
 
 /// Upward velocity (px/s) from a successful pounce — a little hop (~0.6× a jump).
 const POUNCE_BOUNCE: f64 = -220.0;
+/// Upward launch from a trampoline — much higher than a jump (clears tall gaps).
+const TRAMPO_LAUNCH: f64 = -560.0;
 
 /// Step every actor one tick and resolve player↔actor collisions. Returns true if
 /// the player took a non-pounce creature hit. On a pounce the creature pops (into
@@ -1058,6 +1066,7 @@ struct Hits {
     zoomies: bool, // collected a Zoomies Treat → timed speed burst
     collar: bool,  // collected a Flutter Collar → unlocks gliding
     pounces: u32,  // creatures pounced this step (drives the air combo)
+    bounced: bool, // landed on a trampoline → launched high
     /// Effects to spawn (clip, world center-x, world top-y) for pops / pickups.
     fx: Vec<(&'static scamper::effects::Effect, f64, f64)>,
 }
@@ -1148,6 +1157,13 @@ fn step_actors(actors: &mut [Actor], map: &TileMap, player: &mut Player, kibble:
                     hits.fx.push((&scamper::effects::BANG, bx + bw / 2.0, by));
                 } else {
                     hits.hurt = true;
+                }
+            }
+            // Trampoline: landing on it from above launches Munchii sky-high.
+            "trampoline" => {
+                if stomp(px, py, pw, ph, pvy, bx, by, bw, bh) {
+                    player.vel.y = TRAMPO_LAUNCH;
+                    hits.bounced = true;
                 }
             }
             // Big Kibble grows a small Munchii; Bubble Bone gears up; else treats.
@@ -3177,6 +3193,24 @@ mod tests {
         let hits = step_actors(&mut actors, &world.map, &mut player, &mut kibble, &mut power);
         assert_eq!(hits.pounces, 1, "a stomp counts as one pounce");
         assert!(!actors[0].mob.alive, "and pops the critter");
+    }
+
+    /// Landing on a trampoline launches Munchii upward (flags `bounced`).
+    #[test]
+    fn trampoline_launches_on_landing() {
+        let mut l = Level::new("t", "overworld", 12, 10);
+        l.tiles.push(TileSpan { x: 0, y: 8, len: 12, kind: TileKind::Ground });
+        l.entities.push(Entity { kind: "trampoline".into(), x: 5, y: 7, props: vec![] });
+        let world = LevelWorld::from_level(&l);
+        let mut actors = build_actors(&world);
+        let (bx, by) = (actors[0].mob.pos.x, actors[0].mob.pos.y);
+        let mut player = Player::new(bx, by - 14.0); // feet just into the pad top
+        player.vel.y = 300.0; // falling onto the pad
+        let (mut kibble, mut power) = (0, Power::Small);
+        let hits = step_actors(&mut actors, &world.map, &mut player, &mut kibble, &mut power);
+        assert!(hits.bounced, "trampoline reports a bounce");
+        assert!(player.vel.y < -300.0, "and launches Munchii sky-high (vy={})", player.vel.y);
+        assert!(actors[0].mob.alive, "the pad isn't consumed");
     }
 
     /// Collecting a Flutter Collar unlocks gliding (flags `collar`).
