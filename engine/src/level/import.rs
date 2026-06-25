@@ -229,6 +229,20 @@ fn build_level(nodes: Vec<RawNode>, id: &str, theme: &str) -> io::Result<Importe
         if let Some(data) = &n.tile_map_data {
             let is_deco = n.name.to_ascii_lowercase().contains("deco");
             for c in decode_cells(data) {
+                // Source 1 is the "scenes" collection — blocks and coins placed as
+                // tiles. The cell's `alt` is the scene id; map it to the real block
+                // entity (else they all render as grassy ground floating in the sky).
+                if c.source_id == 1 && !is_deco {
+                    if let Some((kind, props)) = scene_collection_entity(c.alt) {
+                        entities.push(Entity {
+                            kind: kind.into(),
+                            x: c.x,
+                            y: c.y,
+                            props: props.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+                        });
+                    }
+                    continue;
+                }
                 let kind = if is_deco { TileKind::Deco } else { atlas_kind(c.source_id, c.atlas_x, c.atlas_y) };
                 cells.push((c.x, c.y, kind));
             }
@@ -496,6 +510,43 @@ fn classify_scene(scene: &str) -> SceneClass {
     }
 }
 
+/// Map a `TileSetScenesCollectionSource` scene id (the cell's `alt`) to the IR
+/// block/coin entity it represents, from the shared SMB-Remastered `Tiles`
+/// tileset (Scenes/Parts/Tiles.tscn `scenes/<id>/scene`). `None` = ignore
+/// (e.g. DeathPit — falling already kills). Block props mirror `classify_scene`.
+fn scene_collection_entity(scene_id: u16) -> Option<(&'static str, &'static [(&'static str, &'static str)])> {
+    const BRICK: &[(&str, &str)] = &[("breakable", "1")];
+    const BRICK_COIN: &[(&str, &str)] = &[("breakable", "1"), ("contains", "kibble")];
+    const BRICK_1UP: &[(&str, &str)] = &[("breakable", "1"), ("contains", "lucky_squeaky")];
+    const BRICK_POW: &[(&str, &str)] = &[("breakable", "1"), ("contains", "big_kibble")];
+    const BRICK_STAR: &[(&str, &str)] = &[("breakable", "1"), ("contains", "zoomies_treat")];
+    const BRICK_POISON: &[(&str, &str)] = &[("breakable", "1"), ("contains", "poison")];
+    const Q_KIBBLE: &[(&str, &str)] = &[("contains", "kibble")];
+    const Q_POW: &[(&str, &str)] = &[("contains", "big_kibble")];
+    const Q_KIBBLE_HID: &[(&str, &str)] = &[("contains", "kibble"), ("hidden", "1")];
+    const Q_1UP_HID: &[(&str, &str)] = &[("contains", "lucky_squeaky"), ("hidden", "1")];
+    const Q_POISON: &[(&str, &str)] = &[("contains", "poison")];
+    const NONE: &[(&str, &str)] = &[];
+    Some(match scene_id {
+        1 => ("brick", BRICK),                 // BrickBlock
+        2 => ("question", Q_KIBBLE),           // QuestionBlock
+        3 | 24 | 25 => ("kibble", NONE),       // Coin / BlueCoin
+        4 => return None,                      // DeathPit (pit-fall already kills)
+        5 => ("brick", BRICK_COIN),            // CoinBrickBlock
+        6 => ("brick", BRICK_1UP),             // OneUpBrickBlock
+        7 => ("brick", BRICK_POW),             // PowerUpBrickBlock
+        8 => ("question", Q_POW),              // PowerUpQuestionBlock
+        9 => ("question", Q_KIBBLE_HID),       // InvisibleQuestionBlock
+        10 => ("brick", BRICK_STAR),           // StarBrickBlock
+        11 => ("question", Q_1UP_HID),         // InvisibleOneUpQuestionBlock
+        12 => ("question", Q_POISON),          // PoisonQuestionBlock
+        13 => ("brick", BRICK_POISON),         // PoisonMushroomBrickBlock
+        19 | 22 => ("trampoline", NONE),       // Spring / SuperSpring
+        // Boo-race blocks, switches, bumpers, trick blocks → a plain solid block.
+        _ => ("brick", BRICK),
+    })
+}
+
 // ---- theme inference --------------------------------------------------------
 
 /// Map Godot's themed-tileset name (16 of them) onto our five art themes
@@ -556,6 +607,7 @@ struct Cell {
     source_id: u16,
     atlas_x: u16,
     atlas_y: u16,
+    alt: u16, // alternative-tile id; for a scenes-collection source this is the scene id
 }
 
 /// Decode a `tile_map_data` byte blob into cells. Tolerates the leading `u16`
@@ -575,7 +627,7 @@ fn decode_cells(bytes: &[u8]) -> Vec<Cell> {
             source_id: u16::from_le_bytes(rd16(4)),
             atlas_x: u16::from_le_bytes(rd16(6)),
             atlas_y: u16::from_le_bytes(rd16(8)),
-            // bytes 10..12 = alternative/transform flags — unused for now
+            alt: u16::from_le_bytes(rd16(10)),
         });
         i += 12;
     }
