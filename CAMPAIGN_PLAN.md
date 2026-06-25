@@ -83,10 +83,24 @@
     dandi rises/lowers from pipes; hardhat stays on ledges; **Stick Squirrels lob
     arcing sticks** that hurt on contact.
 
-> **Plan status:** milestones 1–9 are substantially in. Remaining polish/TODOs:
-> rollo curl-and-nudge after a pounce, one-way (semisolid) platforms, compact-Munchii
-> sprite + jump-feel asserts (§5, owner deferred to playtest), hi-fi per-creature
-> Kitty art, and a campaign world-map / lives / BGM flow (§10.9).
+- **Polish round 2 (2026-06-25).**
+  - **One-way platforms:** `platform` tiles project to one-way (semisolid) cells —
+    land on top, jump up through from below (`TileMap` oneway/`lands_on_oneway`/
+    `on_oneway`; player + mob honor them; gated so solid-only maps incl. the demo
+    arena are byte-identical — golden fixture unchanged).
+  - **Rollo curl-and-nudge:** pouncing a rollo/hardhat curls it into a kickable
+    shell; a kicked shell rolls, pops other critters, and bonks Munchii.
+  - **Campaign flow (§10.9):** lives (♥×3), wipeout/pit/hazard costs a life,
+    GAME OVER at −1; Lucky Squeaky and every 100 kibble grant a life; lives carry
+    across the auto-advancing world; `play_bgm()` per-theme track hooks (logged).
+  - **Jump-feel asserts (§5):** tests pin that the default params clear a 4-tile
+    jump and a 4-tile gap.
+
+> **Plan status:** milestones 1–9 are in. Remaining are owner-gated or a large
+> optional layer: the compact-Munchii platforming sprite (owner chose to playtest
+> big-Munchii first) and hi-fi per-creature Kitty art. The campaign currently runs
+> by auto-advancing through a world folder; a dedicated world-map select screen is
+> the natural next build on top of it.
 
 ## Next steps (pick up here)
 
