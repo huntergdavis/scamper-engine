@@ -1172,17 +1172,32 @@ fn run_soak(dir: &str) {
     }
     let mut ok = 0usize;
     let mut fails: Vec<String> = Vec::new();
+    let mut stalls: Vec<String> = Vec::new();
     for path in &files {
         let p = path.clone();
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| soak_level(&p, 800))) {
-            Ok(Ok(())) => ok += 1,
+        // 1500 ticks (~25s) — long enough to run-and-jump across a full ~200-tile
+        // level, so a low reach really means "stuck", not "ran out of time".
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| soak_level(&p, 1500))) {
+            Ok(Ok(s)) => {
+                ok += 1;
+                let pct = (s.reached / s.width * 100.0).round() as i32;
+                if s.stalled {
+                    stalls.push(format!("{path}: stuck at {pct}% (x={:.0} of {:.0})", s.reached, s.width));
+                }
+            }
             Ok(Err(e)) => fails.push(format!("FAIL  {path}: {e}")),
             Err(_) => fails.push(format!("PANIC {path}  (message + backtrace in scamp.log if --debug)")),
         }
     }
-    eprintln!("soak: {ok}/{} ok", files.len());
+    eprintln!("soak: {ok}/{} ran clean (no crash)", files.len());
     for f in &fails {
         eprintln!("  {f}");
+    }
+    if !stalls.is_empty() {
+        eprintln!("\nstalled — run-and-jump couldn't get through ({}):", stalls.len());
+        for s in &stalls {
+            eprintln!("  {s}");
+        }
     }
     if !fails.is_empty() {
         std::process::exit(1);
@@ -1247,7 +1262,14 @@ fn run_mega(args: &[String]) {
 /// Munchii through most of any level. Renders periodically through all four
 /// backends so backend-specific draw crashes surface too. Returns `Err` on a
 /// clean failure; a panic propagates (the soak/test catches it per level).
-fn soak_level(path: &str, ticks: u64) -> Result<(), String> {
+/// How a level fared under the run-and-jump soak.
+struct SoakStats {
+    reached: f64, // furthest x (px) Munchii got
+    width: f64,   // level width (px)
+    stalled: bool, // made no forward progress for a long stretch, short of the end
+}
+
+fn soak_level(path: &str, ticks: u64) -> Result<SoakStats, String> {
     let level = load_level_file(path).map_err(|e| format!("load: {e}"))?;
     let world = LevelWorld::from_level(&level);
     let mut sim = sim_at(world.spawn);
@@ -1262,6 +1284,11 @@ fn soak_level(path: &str, ticks: u64) -> Result<(), String> {
         [Box::new(KittyBackend::new()), Box::new(TextBackend::new()), Box::new(AsciiBackend::new()), Box::new(MonoBackend::new())];
     let mut out: Vec<u8> = Vec::new();
 
+    // Progress tracking: furthest x reached, and how long since it last advanced.
+    const STALL_TICKS: u64 = 420; // ~7s of no forward progress = stuck
+    let mut reached = sim.player.pos.x;
+    let mut last_gain = 0u64;
+
     for tick in 0..ticks {
         // Hold right; tap jump on a ~18-tick cadence (held ~10) to clear gaps.
         let inp = InputFrame { axis_x: 1, jump_pressed: tick % 18 == 0, jump_held: tick % 18 < 10, down_held: false };
@@ -1270,6 +1297,10 @@ fn soak_level(path: &str, ticks: u64) -> Result<(), String> {
         emit_thrower_sticks(&actors, &mut hostiles, &sim.player);
         let _ = step_hostiles(&mut hostiles, &world.map, &sim.player);
         let (px, py, pw, ph) = (sim.player.pos.x, sim.player.pos.y, sim.player.w, sim.player.h);
+        if px > reached + 1.0 {
+            reached = px;
+            last_gain = tick;
+        }
         if world.hazard_overlap(px, py, pw, ph) {
             sim = sim_at(world.spawn);
         }
@@ -1287,7 +1318,10 @@ fn soak_level(path: &str, ticks: u64) -> Result<(), String> {
             }
         }
     }
-    Ok(())
+    let width = world.px_w().max(1.0);
+    // Stuck = stopped advancing well before the end (not just "ran out of ticks").
+    let stalled = (ticks.saturating_sub(last_gain) > STALL_TICKS) && reached < width - 6.0 * TILE;
+    Ok(SoakStats { reached, width, stalled })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2683,7 +2717,7 @@ mod tests {
         for path in files {
             let p = path.clone();
             match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| soak_level(&p, ticks))) {
-                Ok(Ok(())) => {}
+                Ok(Ok(_)) => {}
                 Ok(Err(e)) => fails.push(format!("{path}: {e}")),
                 Err(_) => fails.push(format!("{path}: panicked (run `supermunchii soak --debug` for the backtrace)")),
             }
