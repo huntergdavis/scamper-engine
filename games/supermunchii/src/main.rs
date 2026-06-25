@@ -424,6 +424,7 @@ fn run_play(path: &str) {
     let mut acc: u64 = 0;
     let mut prev_t = now_ns();
     let mut next = now_ns();
+    let mut intro_until = now_ns() + 1_600_000_000; // show the level-title card ~1.6s
 
     loop {
         if terminal::quit_requested() || input.quit {
@@ -740,6 +741,7 @@ fn run_play(path: &str) {
                 power = Power::Small;
                 play_bgm(&level);
                 won = false;
+                intro_until = now + 1_600_000_000;
                 full_redraw = true;
             }
             // No next level → stay on the completed screen (q to quit).
@@ -758,6 +760,7 @@ fn run_play(path: &str) {
                     hostiles.clear();
                     power = Power::Small;
                     play_bgm(&level);
+                    intro_until = now + 1_600_000_000;
                     full_redraw = true;
                 }
             }
@@ -785,10 +788,21 @@ fn run_play(path: &str) {
                 status.clear();
                 let _ = write!(status, "\x1b[{};1H\x1b[2K\x1b[7m⏸ PAUSED — p resume · q quit\x1b[0m", rows + 1);
             }
+            // Level-title card: a centered banner for the first ~1.6s of a level.
+            if now < intro_until {
+                use std::fmt::Write;
+                let card = format!(" {} — {} ", level.id, level.theme);
+                let col = ((cols as usize).saturating_sub(card.chars().count()) / 2).max(0) + 1;
+                let row = (rows / 2).max(1);
+                let _ = write!(status, "\x1b[{row};{col}H\x1b[1;7m{card}\x1b[0m");
+            }
             let mut o = std::io::stdout().lock();
             let _ = o.write_all(&out);
             let _ = o.write_all(status.as_bytes());
             let _ = o.flush();
+            if now < intro_until {
+                full_redraw = true; // repaint to clear the card once it expires
+            }
         }
 
         next += SIM_DT_NS;
