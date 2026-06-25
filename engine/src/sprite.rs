@@ -61,6 +61,7 @@ pub const ALL: &[Sprite] = &[
     Sprite { id: "swooper", role: Role::Creature, w: 6, h: 2, anims: SWOOPER, palette: swooper_rgb },
     Sprite { id: "trampoline", role: Role::Creature, w: 5, h: 2, anims: TRAMPOLINE, palette: trampoline_rgb },
     Sprite { id: "lift", role: Role::Creature, w: 6, h: 2, anims: LIFT, palette: lift_rgb },
+    Sprite { id: "star_bone", role: Role::Item, w: 3, h: 2, anims: STAR_BONE, palette: star_rgb },
     Sprite { id: "hardhat", role: Role::Creature, w: 6, h: 2, anims: HARDHAT, palette: hard_rgb },
     Sprite { id: "stick_squirrel", role: Role::Creature, w: 6, h: 3, anims: SQUIRREL, palette: squirrel_rgb },
     Sprite { id: "sudsfish", role: Role::Creature, w: 5, h: 2, anims: FISH, palette: fish_rgb },
@@ -185,6 +186,13 @@ fn lift_rgb(ch: char) -> (u8, u8, u8) {
         '#' | ':' => (196, 188, 170),           // deck
         '|' => (130, 130, 138),                 // chains
         _ => (150, 144, 132),                   // frame
+    }
+}
+/// Star Bone: a radiant gold power-up.
+fn star_rgb(ch: char) -> (u8, u8, u8) {
+    match ch {
+        '*' | '\\' | '/' => (255, 244, 150),    // twinkle
+        _ => (240, 232, 200),                   // bone
     }
 }
 fn hard_rgb(ch: char) -> (u8, u8, u8) {
@@ -332,6 +340,10 @@ const TRAMPOLINE: &[Anim] = &[Anim { name: "idle", fps: 3, frames: TRAMPOLINE_F 
 // dots shift to read as motion.
 const LIFT_F: &[&[&str]] = &[&["|    |", "[####]"], &["|    |", "[::::]"]];
 const LIFT: &[Anim] = &[Anim { name: "idle", fps: 3, frames: LIFT_F }];
+
+// Star Bone — an invincibility power-up: a glowing winged bone that twinkles.
+const STAR_BONE_F: &[&[&str]] = &[&["\\*/", "(=)"], &["/*\\", "(=)"]];
+const STAR_BONE: &[Anim] = &[Anim { name: "idle", fps: 6, frames: STAR_BONE_F }];
 
 const HARDHAT_F: &[&[&str]] = &[&["/####\\", "(o)(o)"]];
 const HARDHAT: &[Anim] = &[Anim { name: "walk", fps: 4, frames: HARDHAT_F }];

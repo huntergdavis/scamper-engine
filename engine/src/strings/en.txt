@@ -13,3 +13,4 @@ fx.oneup = 1-UP!
 fx.float = FLOAT!
 fx.boing = BOING!
 fx.ow = OW!
+fx.star = STAR!

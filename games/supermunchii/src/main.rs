@@ -407,6 +407,9 @@ fn run_play(path: &str) {
     let mut lives: i32 = 3;
     let mut power = Power::Small;
     let mut invuln: u32 = 0; // ticks of post-hit invulnerability
+    let mut invincible: u32 = 0; // Star Bone: enemy-immunity + bulldoze, ticks left
+    let mut star_t: u64 = 0; // last star-sparkle emit (ns)
+    const STAR_TICKS: u32 = 480; // ~8s of invincibility
     let mut skid_cd: u32 = 0; // throttle for skid-dust effects
     let mut help = false; // controls overlay (h)
     let mut paused = false; // freeze on 'p'
@@ -530,6 +533,13 @@ fn run_play(path: &str) {
             sim.fp.max_run = base_max_run;
             sim.fp.run_accel = base_run_accel;
         }
+        // Invincibility: a continuous sparkle halo so the Star state reads in every
+        // tier (incl. mono B&W), even though Munchii himself isn't hidden.
+        if invincible > 0 && now.saturating_sub(star_t) > 70 * 1_000_000 {
+            let off = ((now / 5_000_000) % 9) as f64 - 4.0;
+            sim.fx.spawn(&scamper::effects::SPARKLE, sim.player.pos.x + sim.player.w / 2.0 + off, sim.player.pos.y - 2.0 + off.abs() * 0.5, now);
+            star_t = now;
+        }
         // Bubble gear trails soap bubbles — a continuous aura so the Bubble state
         // reads distinctly from plain Big gear in every tier (incl. mono B&W).
         if power == Power::Bubble && now.saturating_sub(aura_t) > 130 * 1_000_000 {
@@ -565,6 +575,7 @@ fn run_play(path: &str) {
                 let pre_vy = sim.player.vel.y;
                 sim.step(&world.map, inp);
                 zoomies = zoomies.saturating_sub(1); // burst counts down per sim tick
+                invincible = invincible.saturating_sub(1); // star counts down per tick
                 // Touchdown after a real fall → a dust scuff + a soft thump.
                 if pre_air && sim.player.grounded && pre_vy > 220.0 {
                     sim.fx.spawn(&scamper::effects::DUST, sim.player.pos.x + sim.player.w / 2.0, sim.player.pos.y + sim.player.h, now);
@@ -638,7 +649,7 @@ fn run_play(path: &str) {
                 // Snapshot lift positions so we can carry the player by their delta.
                 let lifts_pre: Vec<(usize, f64)> = actors.iter().enumerate().filter(|(_, a)| a.kind == "lift").map(|(i, a)| (i, a.mob.pos.x)).collect();
                 // Step creatures/items and resolve pounces, pickups, and hits.
-                let hits = step_actors(&mut actors, &world.map, &mut sim.player, &mut kibble, &mut power);
+                let hits = step_actors(&mut actors, &world.map, &mut sim.player, &mut kibble, &mut power, invincible > 0);
                 // Ride moving platforms: land on a lift's top and get carried along.
                 for (i, px0) in &lifts_pre {
                     let m = &actors[*i].mob;
@@ -687,6 +698,10 @@ fn run_play(path: &str) {
                     glide = true; // unlock gliding
                     sim.fx.spawn_word(scamper::strings::t("fx.float"), (180, 230, 255), sim.player.pos.x + sim.player.w / 2.0, sim.player.pos.y - 8.0, fxclock);
                 }
+                if hits.star {
+                    invincible = STAR_TICKS;
+                    sim.fx.spawn_word(scamper::strings::t("fx.star"), (255, 240, 120), sim.player.pos.x + sim.player.w / 2.0, sim.player.pos.y - 8.0, fxclock);
+                }
                 if hits.bounced {
                     sim.fx.spawn_word(scamper::strings::t("fx.boing"), (160, 240, 200), sim.player.pos.x + sim.player.w / 2.0, sim.player.pos.y - 8.0, fxclock);
                     shake.bump(0.3);
@@ -724,7 +739,7 @@ fn run_play(path: &str) {
                 }
                 if invuln > 0 {
                     invuln -= 1;
-                } else if hits.hurt || stick_hit {
+                } else if (hits.hurt || stick_hit) && invincible == 0 {
                     if power == Power::Small {
                         lives -= 1; // wipeout → lose a life, back to the last checkpoint
                         sim = sim_at(respawn);
@@ -796,6 +811,7 @@ fn run_play(path: &str) {
                 won = false;
                 boss_hp = 3;
                 boss_cd = 0;
+                invincible = 0;
                 intro_until = now + 1_600_000_000;
                 full_redraw = true;
             }
@@ -817,6 +833,7 @@ fn run_play(path: &str) {
                     play_bgm(&level);
                     boss_hp = 3;
                     boss_cd = 0;
+                    invincible = 0;
                     intro_until = now + 1_600_000_000;
                     full_redraw = true;
                 }
@@ -843,7 +860,7 @@ fn run_play(path: &str) {
             }
             draw_play_frame(&mut fb, backend.as_mut(), &mut out, &world, &sim, &actors, &projectiles, &hostiles, fb_w, fb_h, cols, rows, full_redraw, input.down_held(), power.zoom(), shake_off, blink);
             full_redraw = false;
-            render_play_status(&mut status, &level, sim.player.state, backend.name(), won, game_over, kibble, lives, power, zoomies > 0, glide, rows + 1, cols);
+            render_play_status(&mut status, &level, sim.player.state, backend.name(), won, game_over, kibble, lives, power, zoomies > 0, glide, invincible > 0, rows + 1, cols);
             if paused {
                 use std::fmt::Write;
                 // Overwrite the status row with a pause banner (inverse video).
@@ -961,7 +978,7 @@ struct Actor {
 
 /// Item kinds collect on touch; everything else is a creature you pounce.
 fn is_item(kind: &str) -> bool {
-    matches!(kind, "kibble" | "big_kibble" | "bubble_bone" | "zoomies_treat" | "lucky_squeaky" | "flutter_collar")
+    matches!(kind, "kibble" | "big_kibble" | "bubble_bone" | "zoomies_treat" | "lucky_squeaky" | "flutter_collar" | "star_bone")
 }
 
 /// Creatures that curl into a kickable ball when pounced (instead of popping).
@@ -1128,11 +1145,12 @@ struct Hits {
     pounces: u32,  // creatures pounced this step (drives the air combo)
     bounced: bool, // landed on a trampoline → launched high
     boss_hit: bool, // pounced the boss this step (gated by i-frames in run_play)
+    star: bool,     // collected a Star Bone → invincibility
     /// Effects to spawn (clip, world center-x, world top-y) for pops / pickups.
     fx: Vec<(&'static scamper::effects::Effect, f64, f64)>,
 }
 
-fn step_actors(actors: &mut [Actor], map: &TileMap, player: &mut Player, kibble: &mut u32, power: &mut Power) -> Hits {
+fn step_actors(actors: &mut [Actor], map: &TileMap, player: &mut Player, kibble: &mut u32, power: &mut Power, invincible: bool) -> Hits {
     for a in actors.iter_mut() {
         a.mob.step(map);
     }
@@ -1165,6 +1183,14 @@ fn step_actors(actors: &mut [Actor], map: &TileMap, player: &mut Player, kibble:
         }
         let (bx, by, bw, bh) = (a.mob.pos.x, a.mob.pos.y, a.mob.w, a.mob.h);
         if !aabb_overlap(px, py, pw, ph, bx, by, bw, bh) {
+            continue;
+        }
+        // Invincibility star: bulldoze any ordinary critter on contact (the boss
+        // and ridden props are exempt; items still collect below).
+        if invincible && !a.item && !matches!(a.kind.as_str(), "baron_whiskers" | "lift" | "trampoline") {
+            a.mob.alive = false;
+            *kibble += 2;
+            hits.fx.push((&scamper::effects::BOP, bx + bw / 2.0, by));
             continue;
         }
         let stomped = stomp(px, py, pw, ph, pvy, bx, by, bw, bh);
@@ -1255,6 +1281,11 @@ fn step_actors(actors: &mut [Actor], map: &TileMap, player: &mut Player, kibble:
             "flutter_collar" if a.item => {
                 a.mob.alive = false;
                 hits.collar = true; // unlocks gliding (hold jump while falling)
+                hits.fx.push((&scamper::effects::SPARKLE, bx + bw / 2.0, by));
+            }
+            "star_bone" if a.item => {
+                a.mob.alive = false;
+                hits.star = true; // invincibility burst
                 hits.fx.push((&scamper::effects::SPARKLE, bx + bw / 2.0, by));
             }
             _ if a.item => {
@@ -1733,7 +1764,7 @@ fn soak_level(path: &str, ticks: u64) -> Result<SoakStats, String> {
         // Hold right; tap jump on a ~18-tick cadence (held ~10) to clear gaps.
         let inp = InputFrame { axis_x: 1, jump_pressed: tick % 18 == 0, jump_held: tick % 18 < 10, down_held: false };
         sim.step(&world.map, inp);
-        let _ = step_actors(&mut actors, &world.map, &mut sim.player, &mut kibble, &mut power);
+        let _ = step_actors(&mut actors, &world.map, &mut sim.player, &mut kibble, &mut power, false);
         emit_thrower_sticks(&actors, &mut hostiles, &sim.player);
         let _ = step_hostiles(&mut hostiles, &world.map, &sim.player);
         let (px, py, pw, ph) = (sim.player.pos.x, sim.player.pos.y, sim.player.w, sim.player.h);
@@ -1757,7 +1788,7 @@ fn soak_level(path: &str, ticks: u64) -> Result<SoakStats, String> {
             let mut status = String::new();
             for w in [10u16, 28, 48, cols] {
                 let won = tick > ticks * 3 / 4; // exercise the LEVEL COMPLETE banner too
-                render_play_status(&mut status, &level, sim.player.state, "mono", won, false, kibble, 3, power, false, false, 1, w);
+                render_play_status(&mut status, &level, sim.player.state, "mono", won, false, kibble, 3, power, false, false, false, 1, w);
             }
         }
     }
@@ -1769,17 +1800,18 @@ fn soak_level(path: &str, ticks: u64) -> Result<SoakStats, String> {
 
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_arguments)]
-fn render_play_status(buf: &mut String, level: &Level, st: State, backend: &str, won: bool, game_over: bool, kibble: u32, lives: i32, power: Power, boost: bool, glide: bool, rows: u16, cols: u16) {
+fn render_play_status(buf: &mut String, level: &Level, st: State, backend: &str, won: bool, game_over: bool, kibble: u32, lives: i32, power: Power, boost: bool, glide: bool, inv: bool, rows: u16, cols: u16) {
     use std::fmt::Write;
     let mut plain = String::new();
     let zoom = if boost { "  ⚡zoom" } else { "" }; // active Zoomies-Treat burst
     let wings = if glide { "  ~glide" } else { "" }; // Flutter Collar unlocked
+    let star = if inv { "  ★star" } else { "" }; // invincibility burst
     if game_over {
         let _ = write!(plain, "✗ GAME OVER ✗   kibble:{kibble}   gfx:{backend} · q quit");
     } else if won {
         let _ = write!(plain, "★ LEVEL COMPLETE — {} ★   ♥×{lives} kibble:{kibble}   → next level…   gfx:{backend} · q quit", level.id);
     } else {
-        let _ = write!(plain, "{}  [{}]  {}  ♥×{lives}  kibble {kibble} ({}/100→1up)  gear:{}{zoom}{wings}   h help · Tab gfx:{backend} · q quit", level.id, level.theme, state_letter(st), kibble % 100, power.label());
+        let _ = write!(plain, "{}  [{}]  {}  ♥×{lives}  kibble {kibble} ({}/100→1up)  gear:{}{zoom}{wings}{star}   h help · Tab gfx:{backend} · q quit", level.id, level.theme, state_letter(st), kibble % 100, power.label());
     }
     let maxw = (cols as usize).saturating_sub(1);
     if plain.chars().count() > maxw {
@@ -3093,7 +3125,7 @@ mod tests {
             let mut fb = Framebuffer::new(fb_w, fb_h);
             sim.step(&world.map, InputFrame { axis_x: 1, jump_pressed: false, jump_held: false, down_held: false });
             draw_play_frame(&mut fb, backend.as_mut(), &mut out, &world, &sim, &actors, &[], &[], fb_w, fb_h, vc, vr, true, false, 4, (0.0, 0.0), false);
-            render_play_status(&mut status, &l, sim.player.state, "mono", false, false, 0, 3, Power::Small, false, false, vr + 1, vc);
+            render_play_status(&mut status, &l, sim.player.state, "mono", false, false, 0, 3, Power::Small, false, false, false, vr + 1, vc);
         }
     }
 
@@ -3220,7 +3252,7 @@ mod tests {
         player.vel.y = 240.0; // falling
         let mut kibble = 0;
         let mut power = Power::Big; // big so a hit just drops a tier (no respawn needed)
-        let hits = step_actors(&mut actors, &world.map, &mut player, &mut kibble, &mut power);
+        let hits = step_actors(&mut actors, &world.map, &mut player, &mut kibble, &mut power, false);
         assert!(hits.hurt, "pouncing a prickle hurts");
         assert!(actors[prickle].mob.alive, "and the prickle survives the pounce");
 
@@ -3242,7 +3274,7 @@ mod tests {
         let mut player = Player::new(bx, by);
         let mut kibble = 0;
         let mut power = Power::Small;
-        let hits = step_actors(&mut actors, &world.map, &mut player, &mut kibble, &mut power);
+        let hits = step_actors(&mut actors, &world.map, &mut player, &mut kibble, &mut power, false);
         assert!(hits.zoomies, "treat triggers the burst");
         assert_eq!(kibble, 1, "and banks a kibble");
         assert!(!actors[0].mob.alive, "treat is consumed");
@@ -3260,7 +3292,7 @@ mod tests {
         let mut player = Player::new(bx, by - 8.0); // overlapping from above
         player.vel.y = 240.0; // falling → a stomp
         let (mut kibble, mut power) = (0, Power::Big);
-        let hits = step_actors(&mut actors, &world.map, &mut player, &mut kibble, &mut power);
+        let hits = step_actors(&mut actors, &world.map, &mut player, &mut kibble, &mut power, false);
         assert_eq!(hits.pounces, 1, "a stomp counts as one pounce");
         assert!(!actors[0].mob.alive, "and pops the critter");
     }
@@ -3281,14 +3313,14 @@ mod tests {
         // Pounce from above (falling onto his head).
         let mut p = Player::new(bx + bw / 2.0 - 6.0, by - 12.0);
         p.vel.y = 260.0;
-        let hits = step_actors(&mut actors, &world.map, &mut p, &mut kibble, &mut power);
+        let hits = step_actors(&mut actors, &world.map, &mut p, &mut kibble, &mut power, false);
         assert!(hits.boss_hit, "a head pounce damages the boss");
         assert!(p.vel.y < 0.0, "and bounces Munchii back up");
 
         // A side touch (level with him, not descending onto the head) hurts instead.
         let mut q = Player::new(bx - 10.0, by);
         q.vel.y = 0.0;
-        let hq = step_actors(&mut actors, &world.map, &mut q, &mut kibble, &mut power);
+        let hq = step_actors(&mut actors, &world.map, &mut q, &mut kibble, &mut power, false);
         assert!(!hq.boss_hit && hq.hurt, "a side bump hurts, not a hit");
     }
 
@@ -3304,10 +3336,28 @@ mod tests {
         let mut player = Player::new(bx, by - 14.0); // feet just into the pad top
         player.vel.y = 300.0; // falling onto the pad
         let (mut kibble, mut power) = (0, Power::Small);
-        let hits = step_actors(&mut actors, &world.map, &mut player, &mut kibble, &mut power);
+        let hits = step_actors(&mut actors, &world.map, &mut player, &mut kibble, &mut power, false);
         assert!(hits.bounced, "trampoline reports a bounce");
         assert!(player.vel.y < -300.0, "and launches Munchii sky-high (vy={})", player.vel.y);
         assert!(actors[0].mob.alive, "the pad isn't consumed");
+    }
+
+    /// While invincible, touching a critter (even side-on) bulldozes it instead of
+    /// hurting Munchii — including a normally-unpouncable spiky prickle.
+    #[test]
+    fn star_bulldozes_critters_without_harm() {
+        let mut l = Level::new("t", "overworld", 12, 10);
+        l.tiles.push(TileSpan { x: 0, y: 8, len: 12, kind: TileKind::Ground });
+        l.entities.push(Entity { kind: "prickle".into(), x: 5, y: 7, props: vec![] });
+        let world = LevelWorld::from_level(&l);
+        let mut actors = build_actors(&world);
+        let (bx, by) = (actors[0].mob.pos.x, actors[0].mob.pos.y);
+        let mut player = Player::new(bx, by); // level side-on overlap (would normally hurt)
+        let (mut kibble, mut power) = (0, Power::Small);
+        let hits = step_actors(&mut actors, &world.map, &mut player, &mut kibble, &mut power, true);
+        assert!(!hits.hurt, "invincible: no harm");
+        assert!(!actors[0].mob.alive, "the spiky prickle is bulldozed");
+        assert_eq!(kibble, 2, "and pays out");
     }
 
     /// Collecting a Flutter Collar unlocks gliding (flags `collar`).
@@ -3321,7 +3371,7 @@ mod tests {
         let (bx, by) = (actors[0].mob.pos.x, actors[0].mob.pos.y);
         let mut player = Player::new(bx, by);
         let (mut kibble, mut power) = (0, Power::Small);
-        let hits = step_actors(&mut actors, &world.map, &mut player, &mut kibble, &mut power);
+        let hits = step_actors(&mut actors, &world.map, &mut player, &mut kibble, &mut power, false);
         assert!(hits.collar, "collar unlocks gliding");
         assert!(!actors[0].mob.alive, "collar is consumed");
     }
@@ -3382,7 +3432,7 @@ mod tests {
             let rows = cols.saturating_add(1);
             for &won in &[false, true] {
                 for &over in &[false, true] {
-                    render_play_status(&mut buf, &lvl, State::Grounded, "mono", won, over, 12_345, 3, Power::Bubble, true, true, rows, cols);
+                    render_play_status(&mut buf, &lvl, State::Grounded, "mono", won, over, 12_345, 3, Power::Bubble, true, true, true, rows, cols);
                 }
             }
             render_tiles_status(&mut buf, Theme::Castle, "ascii", rows, cols);
