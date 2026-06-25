@@ -108,6 +108,16 @@ pub static COIN: Effect = Effect {
     ],
 };
 
+// Glide feather — a soft tuft that drifts down while gliding on the Flutter
+// Collar. The `~`/`,` glyphs read as a wisp even in mono.
+pub static FEATHER: Effect = Effect {
+    name: "feather",
+    fps: 8,
+    tint: (200, 232, 255),
+    z: -1,
+    frames: &[&["~"], &[","], &["."], &[" "]],
+};
+
 // Speed-burst dash trail — motion streaks that flick off behind a sprinting hero
 // (the Zoomies Treat buff). The chevrons read as speed lines even in mono.
 pub static DASH: Effect = Effect {

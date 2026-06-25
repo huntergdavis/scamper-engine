@@ -10,3 +10,4 @@ fx.yum = YUM!
 fx.wahoo = WAHOO!
 fx.ouch = OUCH!
 fx.oneup = 1-UP!
+fx.float = FLOAT!

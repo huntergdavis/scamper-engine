@@ -391,6 +391,9 @@ fn run_play(path: &str) {
     let mut frame_ix: u64 = 0; // render-frame counter (drives the shake tremble)
     let mut zoomies: u32 = 0; // zoomies-treat speed burst, ticks remaining
     const ZOOMIES_TICKS: u32 = 360; // ~6s at the sim rate
+    let mut glide = false; // Flutter Collar: hold jump while falling to glide
+    let mut glide_t: u64 = 0; // last glide-feather emit (ns)
+    const GLIDE_FALL: f64 = 72.0; // capped descent (px/s) while gliding
     let base_max_run = sim.fp.max_run;
     let base_run_accel = sim.fp.run_accel;
     let mut kibble: u32 = 0;
@@ -522,6 +525,12 @@ fn run_play(path: &str) {
             sim.fx.spawn(&scamper::effects::BUBBLE, bx, sim.player.pos.y - 2.0, now);
             aura_t = now;
         }
+        // Glide feathers: a gentle wisp trail while actively floating.
+        if glide && !sim.player.grounded && sim.player.vel.y > 0.0 && input.jump_held() && now.saturating_sub(glide_t) > 90 * 1_000_000 {
+            let fx = sim.player.pos.x + sim.player.w / 2.0 + ((now / 5_000_000) % 5) as f64 - 2.0;
+            sim.fx.spawn(&scamper::effects::FEATHER, fx, sim.player.pos.y + sim.player.h * 0.5, now);
+            glide_t = now;
+        }
         if !won && !game_over && !help {
             acc += elapsed;
             while acc >= SIM_DT_NS {
@@ -534,6 +543,11 @@ fn run_play(path: &str) {
                 pending_jump = false;
                 sim.step(&world.map, inp);
                 zoomies = zoomies.saturating_sub(1); // burst counts down per sim tick
+                // Glide: holding jump while falling (with the Flutter Collar) caps
+                // the descent to a gentle float.
+                if glide && !sim.player.grounded && inp.jump_held && sim.player.vel.y > GLIDE_FALL {
+                    sim.player.vel.y = GLIDE_FALL;
+                }
                 // Head-bonk a block from below: questions/coin-blocks cough up an
                 // item, breakable bricks shatter.
                 if sim.player.bonked_head {
@@ -615,6 +629,10 @@ fn run_play(path: &str) {
                     zoomies = ZOOMIES_TICKS; // (re)charge the speed burst
                     sim.fx.spawn_word(scamper::strings::t("fx.wahoo"), (255, 210, 90), sim.player.pos.x + sim.player.w / 2.0, sim.player.pos.y - 8.0, fxclock);
                 }
+                if hits.collar {
+                    glide = true; // unlock gliding
+                    sim.fx.spawn_word(scamper::strings::t("fx.float"), (180, 230, 255), sim.player.pos.x + sim.player.w / 2.0, sim.player.pos.y - 8.0, fxclock);
+                }
                 if hits.plug && !won {
                     won = true; // pulled the bath plug → level complete
                     won_at = now;
@@ -630,6 +648,7 @@ fn run_play(path: &str) {
                         power = power.dropped(); // shed a tier of gear
                     }
                     invuln = 90; // ~1.5s of grace so you don't re-hit instantly
+                    glide = false; // a hit knocks the collar loose
                     shake.bump(0.85); // a hard jolt on taking a hit
                     full_redraw = true;
                 }
@@ -718,7 +737,7 @@ fn run_play(path: &str) {
             frame_ix += 1;
             draw_play_frame(&mut fb, backend.as_mut(), &mut out, &world, &sim, &actors, &projectiles, &hostiles, fb_w, fb_h, cols, rows, full_redraw, input.down_held(), power.zoom(), shake_off);
             full_redraw = false;
-            render_play_status(&mut status, &level, sim.player.state, backend.name(), won, game_over, kibble, lives, power, zoomies > 0, rows + 1, cols);
+            render_play_status(&mut status, &level, sim.player.state, backend.name(), won, game_over, kibble, lives, power, zoomies > 0, glide, rows + 1, cols);
             let mut o = std::io::stdout().lock();
             let _ = o.write_all(&out);
             let _ = o.write_all(status.as_bytes());
@@ -962,6 +981,7 @@ struct Hits {
     plug: bool,    // pulled the bath plug → win
     oneup: bool,   // collected a Lucky Squeaky → extra life
     zoomies: bool, // collected a Zoomies Treat → timed speed burst
+    collar: bool,  // collected a Flutter Collar → unlocks gliding
     /// Effects to spawn (clip, world center-x, world top-y) for pops / pickups.
     fx: Vec<(&'static scamper::effects::Effect, f64, f64)>,
 }
@@ -1073,6 +1093,11 @@ fn step_actors(actors: &mut [Actor], map: &TileMap, player: &mut Player, kibble:
                 a.mob.alive = false;
                 hits.zoomies = true; // timed speed burst
                 *kibble += 1;
+                hits.fx.push((&scamper::effects::SPARKLE, bx + bw / 2.0, by));
+            }
+            "flutter_collar" if a.item => {
+                a.mob.alive = false;
+                hits.collar = true; // unlocks gliding (hold jump while falling)
                 hits.fx.push((&scamper::effects::SPARKLE, bx + bw / 2.0, by));
             }
             _ if a.item => {
@@ -1568,7 +1593,7 @@ fn soak_level(path: &str, ticks: u64) -> Result<SoakStats, String> {
             let mut status = String::new();
             for w in [10u16, 28, 48, cols] {
                 let won = tick > ticks * 3 / 4; // exercise the LEVEL COMPLETE banner too
-                render_play_status(&mut status, &level, sim.player.state, "mono", won, false, kibble, 3, power, false, 1, w);
+                render_play_status(&mut status, &level, sim.player.state, "mono", won, false, kibble, 3, power, false, false, 1, w);
             }
         }
     }
@@ -1580,16 +1605,17 @@ fn soak_level(path: &str, ticks: u64) -> Result<SoakStats, String> {
 
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_arguments)]
-fn render_play_status(buf: &mut String, level: &Level, st: State, backend: &str, won: bool, game_over: bool, kibble: u32, lives: i32, power: Power, boost: bool, rows: u16, cols: u16) {
+fn render_play_status(buf: &mut String, level: &Level, st: State, backend: &str, won: bool, game_over: bool, kibble: u32, lives: i32, power: Power, boost: bool, glide: bool, rows: u16, cols: u16) {
     use std::fmt::Write;
     let mut plain = String::new();
     let zoom = if boost { "  ⚡zoom" } else { "" }; // active Zoomies-Treat burst
+    let wings = if glide { "  ~glide" } else { "" }; // Flutter Collar unlocked
     if game_over {
         let _ = write!(plain, "✗ GAME OVER ✗   kibble:{kibble}   gfx:{backend} · q quit");
     } else if won {
         let _ = write!(plain, "★ LEVEL COMPLETE — {} ★   ♥×{lives} kibble:{kibble}   → next level…   gfx:{backend} · q quit", level.id);
     } else {
-        let _ = write!(plain, "{}  [{}]  {}  ♥×{lives}  kibble {kibble} ({}/100→1up)  gear:{}{zoom}   h help · Tab gfx:{backend} · q quit", level.id, level.theme, state_letter(st), kibble % 100, power.label());
+        let _ = write!(plain, "{}  [{}]  {}  ♥×{lives}  kibble {kibble} ({}/100→1up)  gear:{}{zoom}{wings}   h help · Tab gfx:{backend} · q quit", level.id, level.theme, state_letter(st), kibble % 100, power.label());
     }
     let maxw = (cols as usize).saturating_sub(1);
     if plain.chars().count() > maxw {
@@ -2903,7 +2929,7 @@ mod tests {
             let mut fb = Framebuffer::new(fb_w, fb_h);
             sim.step(&world.map, InputFrame { axis_x: 1, jump_pressed: false, jump_held: false, down_held: false });
             draw_play_frame(&mut fb, backend.as_mut(), &mut out, &world, &sim, &actors, &[], &[], fb_w, fb_h, vc, vr, true, false, 4, (0.0, 0.0));
-            render_play_status(&mut status, &l, sim.player.state, "mono", false, false, 0, 3, Power::Small, false, vr + 1, vc);
+            render_play_status(&mut status, &l, sim.player.state, "mono", false, false, 0, 3, Power::Small, false, false, vr + 1, vc);
         }
     }
 
@@ -3058,6 +3084,22 @@ mod tests {
         assert!(!actors[0].mob.alive, "treat is consumed");
     }
 
+    /// Collecting a Flutter Collar unlocks gliding (flags `collar`).
+    #[test]
+    fn flutter_collar_unlocks_glide() {
+        let mut l = Level::new("t", "overworld", 12, 10);
+        l.tiles.push(TileSpan { x: 0, y: 8, len: 12, kind: TileKind::Ground });
+        l.entities.push(Entity { kind: "flutter_collar".into(), x: 5, y: 7, props: vec![] });
+        let world = LevelWorld::from_level(&l);
+        let mut actors = build_actors(&world);
+        let (bx, by) = (actors[0].mob.pos.x, actors[0].mob.pos.y);
+        let mut player = Player::new(bx, by);
+        let (mut kibble, mut power) = (0, Power::Small);
+        let hits = step_actors(&mut actors, &world.map, &mut player, &mut kibble, &mut power);
+        assert!(hits.collar, "collar unlocks gliding");
+        assert!(!actors[0].mob.alive, "collar is consumed");
+    }
+
     /// Soak each given level by holding right and jumping; collect any that panic
     /// or error so the assertion names the offenders rather than dying on the first.
     fn soak_all(files: &[String], ticks: u64) -> Vec<String> {
@@ -3114,7 +3156,7 @@ mod tests {
             let rows = cols.saturating_add(1);
             for &won in &[false, true] {
                 for &over in &[false, true] {
-                    render_play_status(&mut buf, &lvl, State::Grounded, "mono", won, over, 12_345, 3, Power::Bubble, true, rows, cols);
+                    render_play_status(&mut buf, &lvl, State::Grounded, "mono", won, over, 12_345, 3, Power::Bubble, true, true, rows, cols);
                 }
             }
             render_tiles_status(&mut buf, Theme::Castle, "ascii", rows, cols);

@@ -21,6 +21,7 @@ R 40 9 6 ground
 E prickle 34 12
 E rollo 42 8
 E zoomies_treat 45 8
+E flutter_collar 26 7
 # --- end staircase up to the flag ---
 T 56 12 ground
 T 57 11 ground
