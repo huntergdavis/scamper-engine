@@ -790,7 +790,12 @@ fn run_play(path: &str) {
                 full_redraw = true; // a moving camera needs the whole scene repainted
             }
             frame_ix += 1;
-            draw_play_frame(&mut fb, backend.as_mut(), &mut out, &world, &sim, &actors, &projectiles, &hostiles, fb_w, fb_h, cols, rows, full_redraw, input.down_held(), power.zoom(), shake_off);
+            // Post-hit i-frames: flicker Munchii (hide on alternate ~4-frame beats).
+            let blink = invuln > 0 && (frame_ix / 4) % 2 == 0;
+            if invuln > 0 {
+                full_redraw = true; // blinking sprite needs a clean repaint each frame
+            }
+            draw_play_frame(&mut fb, backend.as_mut(), &mut out, &world, &sim, &actors, &projectiles, &hostiles, fb_w, fb_h, cols, rows, full_redraw, input.down_held(), power.zoom(), shake_off, blink);
             full_redraw = false;
             render_play_status(&mut status, &level, sim.player.state, backend.name(), won, game_over, kibble, lives, power, zoomies > 0, glide, rows + 1, cols);
             if paused {
@@ -1255,6 +1260,7 @@ fn draw_play_frame(
     down_held: bool,
     zoom: usize,
     shake: (f64, f64),
+    hide_player: bool,
 ) {
     let zoom = zoom.max(1);
     let pal = art::palette(world.theme);
@@ -1373,6 +1379,7 @@ fn draw_play_frame(
     }
 
     // Munchii himself, centered on the hitbox with his feet on its bottom edge.
+    // (Skipped on blink frames during post-hit invulnerability — the i-frame flicker.)
     let anim = munchii::anim(pose_for(&sim.player, down_held));
     let n = anim.frames.len().max(1);
     let fi = (sim.clock() / (NS_PER_SEC / anim.fps.max(1) as u64)) as usize % n;
@@ -1390,7 +1397,9 @@ fn draw_play_frame(
     let (mw, mh) = (fw * cpw, lines.len() as f64 * cph); // sprite footprint, px
     let cx = sx(sim.player.pos.x + sim.player.w / 2.0);
     let bottom = sy(sim.player.pos.y + sim.player.h);
-    sprites.push((lines, cx - mw / 2.0, bottom - mh, munchii::beagle_rgb as fn(char) -> (u8, u8, u8)));
+    if !hide_player {
+        sprites.push((lines, cx - mw / 2.0, bottom - mh, munchii::beagle_rgb as fn(char) -> (u8, u8, u8)));
+    }
 
     // Transient effects (puffs, bonks, pops, sparkles) — world-anchored in sim.fx.
     let fxr = sim.fx.render(sim.clock());
@@ -1692,7 +1701,7 @@ fn soak_level(path: &str, ticks: u64) -> Result<SoakStats, String> {
             // 1× render paths headlessly.
             let z = if (tick / 15) % 2 == 0 { 4 } else { 1 };
             for b in backends.iter_mut() {
-                draw_play_frame(&mut fb, b.as_mut(), &mut out, &world, &sim, &actors, &[], &hostiles, fb_w, fb_h, cols, rows, true, false, z, (0.0, 0.0));
+                draw_play_frame(&mut fb, b.as_mut(), &mut out, &world, &sim, &actors, &[], &hostiles, fb_w, fb_h, cols, rows, true, false, z, (0.0, 0.0), false);
             }
             // Also render the status line like run_play does — at narrow widths too,
             // so status formatting (multibyte truncation, etc.) is exercised, not
@@ -3035,7 +3044,7 @@ mod tests {
             assert!(fb_w > 0 && fb_h > 0 && vc > 0 && vr > 0, "play_view degenerate at {cols}x{rows}");
             let mut fb = Framebuffer::new(fb_w, fb_h);
             sim.step(&world.map, InputFrame { axis_x: 1, jump_pressed: false, jump_held: false, down_held: false });
-            draw_play_frame(&mut fb, backend.as_mut(), &mut out, &world, &sim, &actors, &[], &[], fb_w, fb_h, vc, vr, true, false, 4, (0.0, 0.0));
+            draw_play_frame(&mut fb, backend.as_mut(), &mut out, &world, &sim, &actors, &[], &[], fb_w, fb_h, vc, vr, true, false, 4, (0.0, 0.0), false);
             render_play_status(&mut status, &l, sim.player.state, "mono", false, false, 0, 3, Power::Small, false, false, vr + 1, vc);
         }
     }
@@ -3106,7 +3115,7 @@ mod tests {
             let mut be: Box<dyn Backend> = Box::new(Cap(cap.clone()));
             let mut fb = Framebuffer::new(fb_w, fb_h);
             let actors = build_actors(&world);
-            draw_play_frame(&mut fb, be.as_mut(), &mut Vec::new(), &world, &sim, &actors, &[], &[], fb_w, fb_h, cols, rows, true, false, zoom, (0.0, 0.0));
+            draw_play_frame(&mut fb, be.as_mut(), &mut Vec::new(), &world, &sim, &actors, &[], &[], fb_w, fb_h, cols, rows, true, false, zoom, (0.0, 0.0), false);
             let b = ground_band(&cap.borrow());
             b
         };
