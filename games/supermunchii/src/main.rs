@@ -332,9 +332,19 @@ fn next_level_path(current: &str) -> Option<String> {
     sibs.get(idx + 1).map(|q| q.to_string_lossy().into_owned())
 }
 
-/// A fresh sim placing the player at `spawn` px (default ~1-tile hitbox).
+/// Level-play feel: a touch tighter than the sandbox default — lower top speed so
+/// a jump covers less ground (Munchii reads smaller against the level), while
+/// keeping jump height so 4-tile gaps and 4-high obstacles still clear.
+fn level_feel() -> FeelParams {
+    FeelParams { max_run: 175.0, run_accel: 1500.0, air_accel: 1250.0, ..FeelParams::default() }
+}
+
+/// A fresh sim placing the player at `spawn` px (default ~1-tile hitbox). Uses the
+/// tighter level-play feel; the sandbox demo keeps the engine default.
 fn sim_at(spawn: (f64, f64)) -> Sim {
-    Sim::new(Player::new(spawn.0, spawn.1), spawn)
+    let mut s = Sim::new(Player::new(spawn.0, spawn.1), spawn);
+    s.fp = level_feel();
+    s
 }
 
 /// Parse a warp target `"<id>@tx,ty"` (empty id = same level) into the level to
