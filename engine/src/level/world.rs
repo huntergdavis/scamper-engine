@@ -72,6 +72,7 @@ impl LevelWorld {
         let mut map = TileMap::new(w as usize, h as usize);
         let mut hazard = HashSet::new();
         let mut kinds = HashMap::new();
+        let mut blocks = HashMap::new();
         let in_bounds = |x: i32, y: i32| x >= 0 && y >= 0 && x < w && y < h;
 
         for span in &lvl.tiles {
@@ -88,6 +89,18 @@ impl LevelWorld {
                 if span.kind == TileKind::Hazard {
                     hazard.insert((x, y));
                 }
+                // Brick / coin-brick / question tiles are bonkable, just like the
+                // entity form — register them so a head-bonk can break/release them.
+                if matches!(span.kind, TileKind::Brick | TileKind::CoinBrick | TileKind::Question) {
+                    blocks.insert(
+                        (x, y),
+                        Block {
+                            breakable: matches!(span.kind, TileKind::Brick | TileKind::CoinBrick),
+                            contains: if span.kind == TileKind::CoinBrick { Some("kibble".into()) } else { None },
+                            used: false,
+                        },
+                    );
+                }
                 kinds.insert((x, y), span.kind);
             }
         }
@@ -95,7 +108,6 @@ impl LevelWorld {
         // Interactive blocks are IR entities, not tiles, but they're solid.
         let mut warps = Vec::new();
         let mut ents = Vec::new();
-        let mut blocks = HashMap::new();
         for e in &lvl.entities {
             match e.kind.as_str() {
                 "question" | "brick" => {
@@ -124,6 +136,11 @@ impl LevelWorld {
         let goal = lvl.goal.as_ref().map(|g| (g.x as f64 * TILE, g.y as f64 * TILE));
 
         LevelWorld { map, hazard, kinds, ents, blocks, w, h, spawn, goal, warps, theme: Theme::from_str(&lvl.theme) }
+    }
+
+    /// Is there a live (un-bonked) bonkable block at this cell?
+    pub fn is_block(&self, cx: i32, cy: i32) -> bool {
+        self.blocks.get(&(cx, cy)).map(|b| !b.used).unwrap_or(false)
     }
 
     /// Head-bonk the block at cell (cx,cy) from below. A breakable brick shatters
@@ -261,6 +278,18 @@ mod tests {
         // center over the warp cell (14,9)
         let wp = w.warp_at(14.0 * TILE, 9.0 * TILE, 12.0, 16.0);
         assert!(wp.is_some() && wp.unwrap().target.as_deref() == Some("t2@3,9"));
+    }
+
+    #[test]
+    fn brick_tile_spans_are_bonkable() {
+        // A brick authored as a tile *span* (not an entity) must still be bonkable.
+        let mut l = Level::new("t", "overworld", 10, 10);
+        l.tiles.push(TileSpan { x: 4, y: 3, len: 3, kind: TileKind::Brick });
+        let mut w = LevelWorld::from_level(&l);
+        assert!(w.is_block(5, 3), "tile-span brick should register as a bonkable block");
+        assert!(w.map.is_solid(5, 3));
+        assert_eq!(w.bonk(5, 3), Bonk::Broke(None), "tile-span brick shatters");
+        assert!(!w.map.is_solid(5, 3));
     }
 
     #[test]

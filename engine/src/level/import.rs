@@ -361,15 +361,10 @@ fn atlas_kind(source_id: u16, atlas_x: u16, atlas_y: u16) -> TileKind {
         2 => TileKind::Hazard,
         4 | 5 => TileKind::Platform,
         3 | 6 => TileKind::Deco,
-        // Source 1 is the "scenes" tile source — in this tileset it holds scattered
-        // coins/scenery (NOT collision). The old "embedded solid blocks" guess made
-        // them solid, which littered the sky with floating terrain (verified by
-        // plotting 1-1: source-1 cells are scattered single tiles up in the air).
-        1 => TileKind::Deco,
         // The terrain atlas's one-way semisolids are exactly row 5, cols 0..=5;
         // other row-5 tiles are ordinary solid terrain.
         0 if atlas_y == 5 && atlas_x <= 5 => TileKind::Platform,
-        _ => TileKind::Ground, // terrain
+        _ => TileKind::Ground, // terrain + source-1 "scenes" blocks
     }
 }
 
@@ -869,7 +864,7 @@ mod tests {
         assert_eq!(atlas_kind(0, 3, 0), TileKind::Ground); // terrain
         assert_eq!(atlas_kind(0, 2, 5), TileKind::Platform); // one-way semisolid (cols 0..=5)
         assert_eq!(atlas_kind(0, 9, 5), TileKind::Ground); // row 5 beyond the one-way cols = solid
-        assert_eq!(atlas_kind(1, 0, 0), TileKind::Deco); // source-1 "scenes" = coins/scenery, not solid
+        assert_eq!(atlas_kind(1, 0, 0), TileKind::Ground); // source-1 "scenes" blocks
         assert_eq!(atlas_kind(2, 0, 2), TileKind::Hazard); // liquids
         assert_eq!(atlas_kind(4, 0, 0), TileKind::Platform); // conveyor
         assert_eq!(atlas_kind(6, 0, 0), TileKind::Deco); // edge visual

@@ -490,8 +490,13 @@ fn run_play(path: &str) {
                 // Head-bonk a block from below: questions/coin-blocks cough up an
                 // item, breakable bricks shatter.
                 if sim.player.bonked_head {
-                    let cx = ((sim.player.pos.x + sim.player.w / 2.0) / TILE).floor() as i32;
                     let cy = ((sim.player.pos.y - 1.0) / TILE).floor() as i32;
+                    // Bonk forgivingly across the whole head width (the hitbox is
+                    // narrow; pick the first bonkable column, else the center).
+                    let lx = (sim.player.pos.x / TILE).floor() as i32;
+                    let rx = ((sim.player.pos.x + sim.player.w - 0.01) / TILE).floor() as i32;
+                    let center = ((sim.player.pos.x + sim.player.w / 2.0) / TILE).floor() as i32;
+                    let cx = (lx..=rx).find(|&c| world.is_block(c, cy)).unwrap_or(center);
                     let now = sim.clock();
                     let (bxw, byw) = (cx as f64 * TILE + TILE / 2.0, cy as f64 * TILE);
                     let dropped = match world.bonk(cx, cy) {
@@ -2564,6 +2569,33 @@ mod tests {
             draw_play_frame(&mut fb, backend.as_mut(), &mut out, &world, &sim, &actors, &[], &[], fb_w, fb_h, vc, vr, true, false);
             render_play_status(&mut status, &l, sim.player.state, "mono", false, false, 0, 3, Power::Small, vr + 1, vc);
         }
+    }
+
+    /// The authored campaign level's question blocks must respond to a head-bonk
+    /// (release an item). Loads the real shipped level and bonks one.
+    #[test]
+    fn campaign_question_block_releases_on_bonk() {
+        let path = format!("{}/levels/yard-romp-1.lvl", env!("CARGO_MANIFEST_DIR"));
+        let level = load_level_file(&path).expect("load authored level");
+        let mut world = LevelWorld::from_level(&level);
+        assert!(world.map.is_solid(6, 9), "question block at (6,9) should be solid");
+        let mut sim = sim_at(world.spawn);
+        sim.player.pos = Vec2::new(6.0 * 16.0, 10.6 * 16.0); // just under the block (its bottom = 160)
+        sim.player.vel = Vec2::new(0.0, -340.0);
+        let mut got = Bonk::Nothing;
+        for _ in 0..40 {
+            sim.step(&world.map, InputFrame { axis_x: 0, jump_pressed: false, jump_held: false, down_held: false });
+            if sim.player.bonked_head {
+                let cx = ((sim.player.pos.x + sim.player.w / 2.0) / TILE).floor() as i32;
+                let cy = ((sim.player.pos.y - 1.0) / TILE).floor() as i32;
+                let b = world.bonk(cx, cy);
+                if b != Bonk::Nothing {
+                    got = b;
+                    break;
+                }
+            }
+        }
+        assert!(matches!(got, Bonk::Released(_)), "bonking the question should release an item, got {got:?}");
     }
 
     /// Replicate run_play's head-bonk path: a brick directly above Munchii must
