@@ -543,8 +543,15 @@ fn run_play(path: &str) {
                     down_held: input.down_held(),
                 };
                 pending_jump = false;
+                let pre_air = !sim.player.grounded;
+                let pre_vy = sim.player.vel.y;
                 sim.step(&world.map, inp);
                 zoomies = zoomies.saturating_sub(1); // burst counts down per sim tick
+                // Touchdown after a real fall → a dust scuff + a soft thump.
+                if pre_air && sim.player.grounded && pre_vy > 220.0 {
+                    sim.fx.spawn(&scamper::effects::DUST, sim.player.pos.x + sim.player.w / 2.0, sim.player.pos.y + sim.player.h, now);
+                    shake.bump(0.2);
+                }
                 // Glide: holding jump while falling (with the Flutter Collar) caps
                 // the descent to a gentle float.
                 if glide && !sim.player.grounded && inp.jump_held && sim.player.vel.y > GLIDE_FALL {
