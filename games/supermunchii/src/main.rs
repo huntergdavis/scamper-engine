@@ -396,6 +396,9 @@ fn run_play(path: &str) {
     let mut glide = false; // Flutter Collar: hold jump while falling to glide
     let mut glide_t: u64 = 0; // last glide-feather emit (ns)
     let mut combo: u32 = 0; // consecutive air-pounces (resets on landing)
+    let mut boss_hp: i32 = 3; // Baron Whiskers' health (only matters if he's present)
+    let mut boss_cd: u32 = 0; // boss i-frames between pounces (ticks)
+    let mut boss_t: u64 = 0; // last boss telegraph emit (ns)
     const GLIDE_FALL: f64 = 72.0; // capped descent (px/s) while gliding
     let base_max_run = sim.fp.max_run;
     let base_run_accel = sim.fp.run_accel;
@@ -540,6 +543,14 @@ fn run_play(path: &str) {
             sim.fx.spawn(&scamper::effects::FEATHER, fx, sim.player.pos.y + sim.player.h * 0.5, now);
             glide_t = now;
         }
+        // Boss telegraph: an angry alert pops over Baron Whiskers as he paces, so
+        // he reads as a live threat (and hints "jump his head").
+        if !won && now.saturating_sub(boss_t) > 1100 * 1_000_000 {
+            if let Some(b) = actors.iter().find(|a| a.kind == "baron_whiskers" && a.mob.alive) {
+                sim.fx.spawn(&scamper::effects::BANG, b.mob.pos.x + b.mob.w / 2.0, b.mob.pos.y - 8.0, now);
+                boss_t = now;
+            }
+        }
         if !won && !game_over && !help && !paused {
             acc += elapsed;
             while acc >= SIM_DT_NS {
@@ -675,6 +686,32 @@ fn run_play(path: &str) {
                     sim.fx.spawn_word(scamper::strings::t("fx.boing"), (160, 240, 200), sim.player.pos.x + sim.player.w / 2.0, sim.player.pos.y - 8.0, fxclock);
                     shake.bump(0.3);
                 }
+                boss_cd = boss_cd.saturating_sub(1);
+                if hits.boss_hit && boss_cd == 0 {
+                    boss_hp -= 1;
+                    boss_cd = 45; // brief invulnerability between pounces
+                    shake.bump(0.6);
+                    if boss_hp > 0 {
+                        // He's hurt and angrier — pace faster.
+                        for a in actors.iter_mut() {
+                            if a.kind == "baron_whiskers" {
+                                a.mob.speed += 0.35;
+                            }
+                        }
+                        sim.fx.spawn_word(scamper::strings::t("fx.ow"), (255, 150, 150), sim.player.pos.x + sim.player.w / 2.0, sim.player.pos.y - 8.0, fxclock);
+                    } else if !won {
+                        // Defeated — the bath drains and the level is won.
+                        for a in actors.iter_mut() {
+                            if a.kind == "baron_whiskers" {
+                                a.mob.alive = false;
+                            }
+                        }
+                        won = true;
+                        won_at = now;
+                        sim.fx.spawn(&scamper::effects::CHEER, sim.player.pos.x + sim.player.w / 2.0, sim.player.pos.y, fxclock);
+                        sim.fx.spawn_word(scamper::strings::t("fx.wahoo"), (255, 230, 140), sim.player.pos.x + sim.player.w / 2.0, sim.player.pos.y - 12.0, fxclock);
+                    }
+                }
                 if hits.plug && !won {
                     won = true; // pulled the bath plug → level complete
                     won_at = now;
@@ -752,6 +789,8 @@ fn run_play(path: &str) {
                 power = Power::Small;
                 play_bgm(&level);
                 won = false;
+                boss_hp = 3;
+                boss_cd = 0;
                 intro_until = now + 1_600_000_000;
                 full_redraw = true;
             }
@@ -771,6 +810,8 @@ fn run_play(path: &str) {
                     hostiles.clear();
                     power = Power::Small;
                     play_bgm(&level);
+                    boss_hp = 3;
+                    boss_cd = 0;
                     intro_until = now + 1_600_000_000;
                     full_redraw = true;
                 }
@@ -1081,6 +1122,7 @@ struct Hits {
     collar: bool,  // collected a Flutter Collar → unlocks gliding
     pounces: u32,  // creatures pounced this step (drives the air combo)
     bounced: bool, // landed on a trampoline → launched high
+    boss_hit: bool, // pounced the boss this step (gated by i-frames in run_play)
     /// Effects to spawn (clip, world center-x, world top-y) for pops / pickups.
     fx: Vec<(&'static scamper::effects::Effect, f64, f64)>,
 }
@@ -1163,12 +1205,13 @@ fn step_actors(actors: &mut [Actor], map: &TileMap, player: &mut Player, kibble:
         match a.kind.as_str() {
             // Pull the plug → the bath drains and Baron Whiskers drops in: level won.
             "bath_plug" => hits.plug = true,
-            // The boss can't be pounced away — a bonk just grumps him (a BANG cue
-            // says "not this way — get behind him to the plug"); a side touch hurts.
+            // The boss: pounce his head to damage him (run_play tracks his health
+            // and the between-hit i-frames); a side touch still hurts.
             "baron_whiskers" => {
                 if stomp(px, py, pw, ph, pvy, bx, by, bw, bh) {
                     player.vel.y = POUNCE_BOUNCE;
-                    hits.fx.push((&scamper::effects::BANG, bx + bw / 2.0, by));
+                    hits.boss_hit = true;
+                    hits.fx.push((&scamper::effects::BOP, bx + bw / 2.0, by));
                 } else {
                     hits.hurt = true;
                 }
@@ -3215,6 +3258,33 @@ mod tests {
         let hits = step_actors(&mut actors, &world.map, &mut player, &mut kibble, &mut power);
         assert_eq!(hits.pounces, 1, "a stomp counts as one pounce");
         assert!(!actors[0].mob.alive, "and pops the critter");
+    }
+
+    /// Pouncing the boss's head registers a boss hit (and bounces you), while a
+    /// side touch hurts. The hit count / i-frames live in run_play.
+    #[test]
+    fn boss_takes_a_pounce_to_the_head() {
+        let mut l = Level::new("t", "castle", 14, 12);
+        l.tiles.push(TileSpan { x: 0, y: 9, len: 14, kind: TileKind::Ground });
+        l.entities.push(Entity { kind: "baron_whiskers".into(), x: 6, y: 8, props: vec![] });
+        let world = LevelWorld::from_level(&l);
+        let mut actors = build_actors(&world);
+        let i = actors.iter().position(|a| a.kind == "baron_whiskers").unwrap();
+        let (bx, by, bw) = (actors[i].mob.pos.x, actors[i].mob.pos.y, actors[i].mob.w);
+        let (mut kibble, mut power) = (0, Power::Big);
+
+        // Pounce from above (falling onto his head).
+        let mut p = Player::new(bx + bw / 2.0 - 6.0, by - 12.0);
+        p.vel.y = 260.0;
+        let hits = step_actors(&mut actors, &world.map, &mut p, &mut kibble, &mut power);
+        assert!(hits.boss_hit, "a head pounce damages the boss");
+        assert!(p.vel.y < 0.0, "and bounces Munchii back up");
+
+        // A side touch (level with him, not descending onto the head) hurts instead.
+        let mut q = Player::new(bx - 10.0, by);
+        q.vel.y = 0.0;
+        let hq = step_actors(&mut actors, &world.map, &mut q, &mut kibble, &mut power);
+        assert!(!hq.boss_hit && hq.hurt, "a side bump hurts, not a hit");
     }
 
     /// Landing on a trampoline launches Munchii upward (flags `bounced`).
