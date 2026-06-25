@@ -303,6 +303,36 @@ impl Level {
     }
 }
 
+/// Serialize many levels into one text "pack" (each block starts with the
+/// `scamper-level v1` header). Used for the committed slice database.
+pub fn pack_levels(levels: &[Level]) -> String {
+    levels.iter().map(|l| l.to_text()).collect::<Vec<_>>().join("\n")
+}
+
+/// Parse a pack (the inverse of [`pack_levels`]): split on each `scamper-level`
+/// header and parse the blocks. Bad blocks are skipped.
+pub fn parse_pack(text: &str) -> Vec<Level> {
+    let mut out = Vec::new();
+    let mut block = String::new();
+    let flush = |block: &mut String, out: &mut Vec<Level>| {
+        if !block.trim().is_empty() {
+            if let Ok(l) = Level::from_text(block) {
+                out.push(l);
+            }
+        }
+        block.clear();
+    };
+    for line in text.lines() {
+        if line.trim_start().starts_with("scamper-level") && !block.trim().is_empty() {
+            flush(&mut block, &mut out);
+        }
+        block.push_str(line);
+        block.push('\n');
+    }
+    flush(&mut block, &mut out);
+    out
+}
+
 // ---- helpers ----------------------------------------------------------------
 
 fn bad(msg: impl Into<String>) -> io::Error {
