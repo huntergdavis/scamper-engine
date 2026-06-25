@@ -1,0 +1,35 @@
+scamper-level v1
+id yard-romp-2
+theme snow
+size 72 15
+spawn 2 12
+goal flag 70 3
+# --- ground in three runs with two 4-wide (jumpable) pits ---
+R 0 13 24 ground
+R 0 14 24 ground
+R 28 13 20 ground
+R 28 14 20 ground
+R 52 13 20 ground
+R 52 14 20 ground
+# --- early treat blocks ---
+E question 8 9 contains=big_kibble
+E question 10 9 contains=kibble
+# --- an optional crumbling shelf (collapses underfoot) over a coin ---
+T 16 9 crumble
+T 17 9 crumble
+T 18 9 crumble
+E kibble 17 8
+# --- past the first pit: a checkpoint, then the critters ---
+C 30 12
+E springer 32 12
+E chaser 36 12
+# --- a trampoline bounces up to a high coin ---
+E trampoline 40 12
+E kibble 40 6
+E swooper 44 7
+# --- past the second pit: a riding lift to a high coin, a star, a guard ---
+E lift 54 9
+E kibble 54 5
+E star_bone 58 11
+E boneling 62 12
+E swooper 64 6
