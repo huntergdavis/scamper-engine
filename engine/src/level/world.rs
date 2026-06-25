@@ -162,6 +162,9 @@ impl LevelWorld {
         }
         if let Some(item) = dropped {
             b.used = true;
+            // Still solid, but spent — recolor grey so a used coin/? block reads
+            // as empty (subsequent bonks short-circuit on `b.used` above).
+            self.kinds.insert((cx, cy), TileKind::Spent);
             return Bonk::Released(item);
         }
         Bonk::Nothing
@@ -304,6 +307,7 @@ mod tests {
         assert_eq!(w.bonk(3, 5), Bonk::Released("big_kibble".into()));
         assert_eq!(w.bonk(3, 5), Bonk::Nothing);
         assert!(w.map.is_solid(3, 5), "a spent question block stays solid");
+        assert_eq!(w.kind_at(3, 5), Some(TileKind::Spent), "and is recolored grey/spent");
 
         // A plain brick (no contents) shatters and is removed from the world.
         assert_eq!(w.bonk(5, 5), Bonk::Broke(None));

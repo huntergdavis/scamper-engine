@@ -176,7 +176,7 @@ fn light(col: Rgba, num: u32, den: u32) -> Rgba {
 }
 
 /// All kinds in a stable order (for the preview tool + tests).
-pub const KINDS: [TileKind; 9] = [
+pub const KINDS: [TileKind; 10] = [
     TileKind::Ground,
     TileKind::Platform,
     TileKind::Brick,
@@ -186,6 +186,7 @@ pub const KINDS: [TileKind; 9] = [
     TileKind::Pipe,
     TileKind::Hazard,
     TileKind::Deco,
+    TileKind::Spent,
 ];
 
 /// Draw one tile's 16×16 art with its top-left at (`ox`,`oy`). Non-solid kinds
@@ -259,6 +260,18 @@ pub fn draw_tile(fb: &mut Framebuffer, ox: i32, oy: i32, kind: TileKind, p: &Pal
             fb.fill_rect(ox + 4, oy + 6, 2, 10, d); // tuft under sample (4,8)
             fb.fill_rect(ox + 12, oy + 6, 2, 10, light(d, 1, 4)); // tuft under sample (12,8)
             fb.fill_rect(ox + 8, oy + 11, 1, 5, d); // a faint sprig (off the sample grid)
+        }
+        TileKind::Spent => {
+            // An emptied block: a studded ? block drained to flat grey, no accent.
+            // Kept deliberately *uniform* across the mono sample grid (x=0,4,8,12 ·
+            // y=0,8) so its B&W signature is a solid fill — unlike Ground's
+            // bright-cap-over-dark-body — with all detail on off-sample pixels.
+            let g = Rgba::rgb(122, 120, 128);
+            fb.fill_rect(ox, oy, TILE, TILE, g);
+            for (rx, ry) in [(1, 1), (TILE - 3, 1), (1, TILE - 3), (TILE - 3, TILE - 3)] {
+                fb.fill_rect(ox + rx, oy + ry, 2, 2, shade(g, 2, 3)); // dim rivets (off-grid)
+            }
+            fb.fill_rect(ox + 6, oy + 6, 2, 2, shade(g, 3, 4)); // a sunken center dimple (off-grid)
         }
     }
 }

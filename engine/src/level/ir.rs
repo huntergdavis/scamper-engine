@@ -25,6 +25,7 @@ pub enum TileKind {
     Platform, // one-way / semisolid
     Hazard,   // hurts on contact but doesn't block
     Deco,     // decorative, non-solid
+    Spent,    // an emptied coin/? block — solid but inert, drawn grey
 }
 
 impl TileKind {
@@ -39,6 +40,7 @@ impl TileKind {
             TileKind::Platform => "platform",
             TileKind::Hazard => "hazard",
             TileKind::Deco => "deco",
+            TileKind::Spent => "spent",
         }
     }
 
@@ -53,6 +55,7 @@ impl TileKind {
             "platform" => TileKind::Platform,
             "hazard" => TileKind::Hazard,
             "deco" => TileKind::Deco,
+            "spent" => TileKind::Spent,
             _ => return None,
         })
     }
@@ -62,7 +65,7 @@ impl TileKind {
     pub fn is_solid(self) -> bool {
         matches!(
             self,
-            TileKind::Ground | TileKind::Brick | TileKind::CoinBrick | TileKind::Question | TileKind::Pipe | TileKind::Platform
+            TileKind::Ground | TileKind::Brick | TileKind::CoinBrick | TileKind::Question | TileKind::Pipe | TileKind::Platform | TileKind::Spent
         )
     }
 
@@ -78,6 +81,7 @@ impl TileKind {
             TileKind::Platform => '=',
             TileKind::Hazard => '^',
             TileKind::Deco => '.',
+            TileKind::Spent => 'x',
         }
     }
 }
