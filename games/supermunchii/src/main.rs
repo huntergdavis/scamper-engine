@@ -519,10 +519,12 @@ fn run_play(path: &str) {
                         }
                     };
                     if let Some(item) = dropped {
-                        sim.fx.spawn(&scamper::effects::SPARKLE, bxw, byw, now);
                         if item == "kibble" {
+                            // A coin leaps out of the top of the block and is banked.
+                            sim.fx.spawn(&scamper::effects::COIN, bxw, byw - TILE, now);
                             kibble += 1;
                         } else {
+                            sim.fx.spawn(&scamper::effects::SPARKLE, bxw, byw, now);
                             // pop the power-up out onto the block top to grab
                             let m = Mob::new(cx as f64 * TILE, (cy - 1) as f64 * TILE, 12.0, 12.0, 1, 0.0, Gait::Still);
                             actors.push(Actor { mob: m, kind: item, item: true, mode: Mode::Walk });

@@ -58,11 +58,11 @@ pub fn slice_level(lvl: &Level, width: i32) -> Vec<Level> {
 pub fn slice_fingerprint(s: &Level) -> u64 {
     // FNV-1a over the geometry + entities (not the id/spawn).
     let mut h: u64 = 0xcbf29ce484222325;
-    let mut byte = |b: u8, h: &mut u64| {
+    let byte = |b: u8, h: &mut u64| {
         *h ^= b as u64;
         *h = h.wrapping_mul(0x100000001b3);
     };
-    let mut feed = |n: i64, h: &mut u64| {
+    let feed = |n: i64, h: &mut u64| {
         for b in n.to_le_bytes() {
             byte(b, h);
         }

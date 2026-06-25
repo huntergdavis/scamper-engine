@@ -92,6 +92,22 @@ pub static BOP: Effect = Effect {
     frames: &[&[" \\*/ ", " /.\\ "], &["* . *", " . . "], &[" . . ", "     "]],
 };
 
+// A kibble-coin spat up out of a block: it leaps, spins (round → edge-on → round),
+// and winks out at the top of its arc. The "$" reads as a coin even in mono.
+pub static COIN: Effect = Effect {
+    name: "coin",
+    fps: 14,
+    tint: (255, 214, 96),
+    z: 2,
+    frames: &[
+        &["   ", "($)", "   "],
+        &["($)", "   ", "   "],
+        &["(|)", "   ", "   "],
+        &["( )", " ' ", "   "],
+        &[" ' ", "   ", "   "],
+    ],
+};
+
 // Collect / block-release sparkle.
 pub static SPARKLE: Effect = Effect {
     name: "sparkle",
