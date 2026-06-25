@@ -63,6 +63,7 @@ pub const ALL: &[Sprite] = &[
     Sprite { id: "lift", role: Role::Creature, w: 6, h: 2, anims: LIFT, palette: lift_rgb },
     Sprite { id: "star_bone", role: Role::Item, w: 3, h: 2, anims: STAR_BONE, palette: star_rgb },
     Sprite { id: "chaser", role: Role::Creature, w: 4, h: 2, anims: CHASER, palette: chaser_rgb },
+    Sprite { id: "haunt", role: Role::Creature, w: 4, h: 3, anims: HAUNT, palette: haunt_rgb },
     Sprite { id: "hardhat", role: Role::Creature, w: 6, h: 2, anims: HARDHAT, palette: hard_rgb },
     Sprite { id: "stick_squirrel", role: Role::Creature, w: 6, h: 3, anims: SQUIRREL, palette: squirrel_rgb },
     Sprite { id: "sudsfish", role: Role::Creature, w: 5, h: 2, anims: FISH, palette: fish_rgb },
@@ -202,6 +203,13 @@ fn chaser_rgb(ch: char) -> (u8, u8, u8) {
         'o' => (18, 14, 14),                    // eye
         'w' | 'W' => (232, 220, 206),           // teeth / feet
         _ => (192, 72, 56),                     // body
+    }
+}
+/// Haunt: a pale spectral sheet, dark hollow eyes.
+fn haunt_rgb(ch: char) -> (u8, u8, u8) {
+    match ch {
+        'o' => (40, 40, 60),                    // hollow eyes
+        _ => (224, 228, 244),                   // ghostly sheet
     }
 }
 fn hard_rgb(ch: char) -> (u8, u8, u8) {
@@ -358,6 +366,11 @@ const STAR_BONE: &[Anim] = &[Anim { name: "idle", fps: 6, frames: STAR_BONE_F }]
 // as aggression; the feet shuffle as it scrambles.
 const CHASER_F: &[&[&str]] = &[&["\\>o<", "/wWw"], &[">o<\\", "wWw\\"]];
 const CHASER: &[Anim] = &[Anim { name: "walk", fps: 10, frames: CHASER_F }];
+
+// Haunt — a shy ghost. Domed sheet with a wavy hem and round eyes; the hem ripples
+// between frames so it reads as floating.
+const HAUNT_F: &[&[&str]] = &[&[" __ ", "(oo)", "wwww"], &[" __ ", "(oo)", "}{}{"]];
+const HAUNT: &[Anim] = &[Anim { name: "walk", fps: 4, frames: HAUNT_F }];
 
 const HARDHAT_F: &[&[&str]] = &[&["/####\\", "(o)(o)"]];
 const HARDHAT: &[Anim] = &[Anim { name: "walk", fps: 4, frames: HARDHAT_F }];

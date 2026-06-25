@@ -31,6 +31,9 @@ pub enum Gait {
     /// Cruise horizontally (no gravity) while weaving up and down in a sine wave
     /// around the home height — a swooping flyer (moth / bat).
     Swoop,
+    /// Drift in the facing direction ignoring *all* collision and gravity — a
+    /// phasing mover (a ghost). The game steers `facing`/`speed`/`pos.y` directly.
+    Phase,
     /// Free projectile: gravity-driven arc, moves by its own velocity, stops dead
     /// on any solid (sets `blocked`). Used for thrown sticks.
     Ballistic,
@@ -88,6 +91,14 @@ impl Mob {
                 self.facing = -self.facing;
                 self.blocked = true;
             }
+            return;
+        }
+
+        // Phase: translate in the facing direction through everything (a ghost).
+        // No collision, no gravity — the game owns facing/speed/vertical drift.
+        if self.gait == Gait::Phase {
+            let dir = if self.facing >= 0 { 1.0 } else { -1.0 };
+            self.pos.x += dir * self.speed;
             return;
         }
 
@@ -288,6 +299,18 @@ mod tests {
         assert!(hi - lo > 20.0, "swoop should weave vertically (span {})", hi - lo);
         assert!(m.pos.x > start_x, "and drift sideways");
         assert!(m.pos.y > 0.0, "never falls under gravity");
+    }
+
+    #[test]
+    fn phase_drifts_through_walls_without_gravity() {
+        let map = flat(); // has a wall at x=8
+        let start_y = 3.0 * TILE;
+        let mut m = Mob::new(2.0 * TILE, start_y, 12.0, 12.0, 1, 1.0, Gait::Phase);
+        for _ in 0..200 {
+            m.step(&map);
+        }
+        assert!(m.pos.x > 8.0 * TILE, "phases straight through the wall (x={})", m.pos.x);
+        assert_eq!(m.pos.y, start_y, "no gravity — holds its height");
     }
 
     #[test]

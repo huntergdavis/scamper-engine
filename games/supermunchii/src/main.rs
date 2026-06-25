@@ -1210,6 +1210,9 @@ const SHELL_SPEED: f64 = 2.6;
 const CHASE_RANGE: f64 = 150.0;
 const CHASE_SPEED: f64 = 1.4;
 const CHASE_IDLE: f64 = 0.35;
+/// Haunt (ghost) AI: how fast it creeps toward Munchii when he isn't looking.
+const HAUNT_SPEED: f64 = 0.95;
+const HAUNT_VY: f64 = 0.6;
 
 /// The background track for a level's theme. There's no audio engine yet, so this
 /// is the hook: it names the track and logs it on level load (wire to real audio
@@ -1251,6 +1254,8 @@ fn gait_for(kind: &str, item: bool) -> (Gait, f64, f64, f64) {
         (Gait::Bob, 0.0, 28.0, 6.0) // a vertical elevator platform — ride it up/down
     } else if kind == "trampoline" {
         (Gait::Still, 0.0, 16.0, 8.0) // a bounce pad — inert, launches you on landing
+    } else if kind == "haunt" {
+        (Gait::Phase, 0.0, 12.0, 12.0) // a ghost: phases through walls, AI in step_actors
     } else if kind == "swooper" {
         (Gait::Swoop, 0.7, 12.0, 12.0) // a moth that weaves through the air
     } else if kind == "hardhat" {
@@ -1378,6 +1383,20 @@ fn step_actors(actors: &mut [Actor], map: &TileMap, player: &mut Player, kibble:
             } else {
                 a.alerted = false;
                 a.mob.speed = CHASE_IDLE;
+            }
+        }
+        // Haunt (ghost): creeps toward Munchii — but freezes the instant he looks
+        // its way (he's "facing" it when it's on his facing side). Drifts vertically
+        // toward him while advancing; phases through walls (Gait::Phase).
+        if a.kind == "haunt" && a.mob.alive {
+            let on_facing_side = (player.facing > 0 && a.mob.pos.x >= player.pos.x) || (player.facing < 0 && a.mob.pos.x <= player.pos.x);
+            if on_facing_side {
+                a.mob.speed = 0.0; // shy — holds still while watched
+            } else {
+                a.mob.facing = if player.pos.x >= a.mob.pos.x { 1 } else { -1 };
+                a.mob.speed = HAUNT_SPEED;
+                let dy = player.pos.y - a.mob.pos.y;
+                a.mob.pos.y += dy.clamp(-HAUNT_VY, HAUNT_VY);
             }
         }
     }
@@ -3559,6 +3578,30 @@ mod tests {
         assert!(hits.zoomies, "treat triggers the burst");
         assert_eq!(kibble, 1, "and banks a kibble");
         assert!(!actors[0].mob.alive, "treat is consumed");
+    }
+
+    /// A Haunt freezes while Munchii looks at it and creeps toward him otherwise.
+    #[test]
+    fn haunt_freezes_when_watched_and_creeps_when_not() {
+        let mut l = Level::new("t", "castle", 30, 10);
+        l.tiles.push(TileSpan { x: 0, y: 8, len: 30, kind: TileKind::Ground });
+        l.entities.push(Entity { kind: "haunt".into(), x: 20, y: 5, props: vec![] });
+        let world = LevelWorld::from_level(&l);
+        let mut actors = build_actors(&world);
+        let (mut kibble, mut power) = (0, Power::Big);
+
+        // Munchii left of the ghost, FACING it (facing +1, ghost on the right) → frozen.
+        let mut p = Player::new(40.0, 80.0);
+        p.facing = 1;
+        let _ = step_actors(&mut actors, &world.map, &mut p, &mut kibble, &mut power, false);
+        assert_eq!(actors[0].mob.speed, 0.0, "frozen while watched");
+
+        // Now facing AWAY (facing -1, ghost still on the right) → it creeps in.
+        p.facing = -1;
+        let before = actors[0].mob.pos.x;
+        let _ = step_actors(&mut actors, &world.map, &mut p, &mut kibble, &mut power, false);
+        assert!(actors[0].mob.speed > 0.0, "creeps when unwatched");
+        assert!(actors[0].mob.pos.x < before, "moves toward Munchii (to his left)");
     }
 
     /// A Chaser charges toward Munchii when he's in range, and idles otherwise.
