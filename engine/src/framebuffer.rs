@@ -112,6 +112,36 @@ impl Framebuffer {
         self.fill_rect(x.saturating_add(w - 1), y, 1, h, c);
     }
 
+    /// Nearest-neighbor magnify: fill this buffer from `src`, scaling up by the
+    /// integer factor `scale` (each src pixel becomes a `scale`×`scale` block).
+    /// Self pixel (x, y) samples src at (x/scale, y/scale). Used for the "tiny
+    /// world" zoom — the environment renders small, then blows up blocky.
+    pub fn upscale_from(&mut self, src: &Framebuffer, scale: usize) {
+        if scale <= 1 {
+            // 1× (or degenerate) — straight copy of whatever overlaps.
+            let h = self.height.min(src.height);
+            let w = self.width.min(src.width);
+            for y in 0..h {
+                let s = y * src.width * 4;
+                let d = y * self.width * 4;
+                self.px[d..d + w * 4].copy_from_slice(&src.px[s..s + w * 4]);
+            }
+            return;
+        }
+        let (sw, sh) = (src.width, src.height);
+        for y in 0..self.height {
+            let sy = (y / scale).min(sh.saturating_sub(1));
+            let srow = sy * sw * 4;
+            let drow = y * self.width * 4;
+            for x in 0..self.width {
+                let sx = (x / scale).min(sw.saturating_sub(1));
+                let si = srow + sx * 4;
+                let di = drow + x * 4;
+                self.px[di..di + 4].copy_from_slice(&src.px[si..si + 4]);
+            }
+        }
+    }
+
     /// Bresenham line (used for debug overlays like velocity vectors).
     pub fn line(&mut self, x0: i32, y0: i32, x1: i32, y1: i32, c: Rgba) {
         let dx = (x1 - x0).abs();
@@ -151,6 +181,21 @@ mod tests {
         assert_eq!(fb.px[i], 255);
         // outside the rect stays black
         assert_eq!(fb.px[0], 0);
+    }
+
+    #[test]
+    fn upscale_magnifies_blocks() {
+        let mut src = Framebuffer::new(2, 2);
+        src.clear(Rgba::rgb(0, 0, 0));
+        src.set(0, 0, Rgba::rgb(255, 0, 0)); // top-left red
+        src.set(1, 1, Rgba::rgb(0, 255, 0)); // bottom-right green
+        let mut dst = Framebuffer::new(4, 4);
+        dst.upscale_from(&src, 2);
+        // src(0,0) fills dst's top-left 2×2 block.
+        assert_eq!(dst.px[0], 255, "dst(0,0) red");
+        assert_eq!(dst.px[(1 * 4 + 1) * 4], 255, "dst(1,1) still red");
+        // src(1,1) fills dst's bottom-right 2×2 block.
+        assert_eq!(dst.px[(3 * 4 + 3) * 4 + 1], 255, "dst(3,3) green");
     }
 
     #[test]
