@@ -88,6 +88,7 @@ fn main() {
         Some("tiles") => run_tiles(),
         Some("play") => run_play(nth_nonflag(&args, 1).unwrap_or("levels/yard-romp-1.lvl")),
         Some("soak") => run_soak(nth_nonflag(&args, 1).unwrap_or("imported/lvl")),
+        Some("mega") => run_mega(&args),
         _ => run_live(None),
     }
 }
@@ -1158,8 +1159,13 @@ fn draw_play_frame(
 /// terminal needed; panic details land in `scamp.log` (run with `--debug`).
 fn run_soak(dir: &str) {
     let mut files = Vec::new();
-    collect_lvls(std::path::Path::new(dir), &mut files);
-    files.sort();
+    let path = std::path::Path::new(dir);
+    if path.is_file() {
+        files.push(dir.to_string()); // soak a single .lvl directly
+    } else {
+        collect_lvls(path, &mut files);
+        files.sort();
+    }
     if files.is_empty() {
         eprintln!("soak: no .lvl files under {dir}");
         std::process::exit(2);
@@ -1194,6 +1200,46 @@ fn collect_lvls(dir: &std::path::Path, out: &mut Vec<String>) {
             }
         }
     }
+}
+
+/// `supermunchii mega [out.lvl] [count] [seed]` — stitch a large random sampling
+/// of the imported levels into one giant goal-less test level (a red-team romp
+/// through every system; also our own remix, no longer any original's layout).
+fn run_mega(args: &[String]) {
+    let out = nth_nonflag(args, 1).unwrap_or("imported/lvl/megalevel.lvl").to_string();
+    let count: usize = nth_nonflag(args, 2).and_then(|s| s.parse().ok()).unwrap_or(16);
+    let seed: u64 = nth_nonflag(args, 3).and_then(|s| s.parse().ok()).unwrap_or(1);
+
+    let mut files = Vec::new();
+    collect_lvls(std::path::Path::new("imported/lvl"), &mut files);
+    files.retain(|f| !f.ends_with("megalevel.lvl")); // never fold a prior mega back in
+    files.sort();
+    if files.is_empty() {
+        eprintln!("mega: no levels under imported/lvl — run `supermunchii import` first");
+        std::process::exit(2);
+    }
+
+    // Seeded Fisher-Yates shuffle (a small LCG — no rng dependency).
+    let mut state = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(1);
+    let mut rng = || {
+        state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        (state >> 33) as usize
+    };
+    for i in (1..files.len()).rev() {
+        files.swap(i, rng() % (i + 1));
+    }
+
+    let picked: Vec<Level> = files.iter().take(count).filter_map(|f| load_level_file(f).ok()).collect();
+    let mega = scamper::level::stitch(&picked, 6);
+    if let Err(e) = std::fs::write(&out, mega.to_text()) {
+        eprintln!("mega: cannot write {out}: {e}");
+        std::process::exit(2);
+    }
+    eprintln!(
+        "mega: stitched {} levels (seed {seed}) -> {out}: {}x{} tiles, {} spans, {} entities",
+        picked.len(), mega.w, mega.h, mega.tiles.len(), mega.entities.len()
+    );
+    eprintln!("  play it:  ./run.sh play {out}");
 }
 
 /// Run one level headlessly for `ticks` ticks through the same sim + render as
