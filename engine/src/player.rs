@@ -24,6 +24,10 @@ pub struct FeelParams {
     pub gravity_fall: f64,
     pub max_fall: f64,
     pub run_accel: f64,
+    /// Acceleration applied when input *opposes* current velocity (a pivot/skid).
+    /// Higher than `run_accel` so direction changes snap instead of crawling
+    /// through zero — the classic platformer turnaround.
+    pub turn_accel: f64,
     pub air_accel: f64,
     pub ground_friction: f64,
     pub air_friction: f64,
@@ -46,6 +50,7 @@ impl Default for FeelParams {
             gravity_fall: 2200.0,
             max_fall: 760.0,
             run_accel: 750.0, // gentler ramp so acceleration is felt (and reversing skids)
+            turn_accel: 2200.0, // hard pivot when reversing — snappy direction changes
             air_accel: 600.0,
             ground_friction: 1600.0,
             air_friction: 400.0,
@@ -200,7 +205,16 @@ impl Player {
         // --- horizontal accel / friction ---
         let eff_in = if self.wall_lock > 0.0 { 0.0 } else { in_x };
         if eff_in != 0.0 {
-            let accel = if self.grounded { fp.run_accel } else { fp.air_accel };
+            // Pivoting (input opposes motion) uses the stronger turn accel so the
+            // skid-and-reverse is crisp; otherwise the normal ground/air ramp.
+            let reversing = self.vel.x * eff_in < 0.0;
+            let accel = if reversing {
+                fp.turn_accel
+            } else if self.grounded {
+                fp.run_accel
+            } else {
+                fp.air_accel
+            };
             self.vel.x += accel * eff_in * dt;
             // clamp only in the input direction (external pushes may exceed max_run)
             if eff_in > 0.0 && self.vel.x > fp.max_run {
