@@ -434,6 +434,13 @@ fn run_play(path: &str) {
     let mut next = now_ns();
     let mut intro_until = now_ns() + 1_600_000_000; // show the level-title card ~1.6s
 
+    // A title card to open the session — any key starts, q quits, and it
+    // auto-starts after a few seconds so it never blocks an unattended run.
+    if !show_title_card(&mut out, &mut input, cols, rows) {
+        drop(guard);
+        return;
+    }
+
     loop {
         if terminal::quit_requested() || input.quit {
             break;
@@ -2536,6 +2543,42 @@ fn render_quit_prompt(buf: &mut String, rows: u16, cols: u16) {
 fn hline(out: &mut Vec<u8>, row: u16, s: &str) {
     use std::io::Write;
     let _ = write!(out, "\x1b[{row};3H\x1b[K{s}");
+}
+
+/// The opening title card. Any key (or a ~4s timeout, so unattended runs aren't
+/// blocked) starts the game; q/Esc quits — returns false then.
+fn show_title_card(out: &mut Vec<u8>, input: &mut Input, cols: u16, rows: u16) -> bool {
+    use std::io::Write;
+    out.clear();
+    out.extend_from_slice(b"\x1b[2J");
+    let cen = |out: &mut Vec<u8>, row: i32, s: &str| {
+        let col = ((cols as i32 - s.chars().count() as i32) / 2).max(0) + 1;
+        let _ = write!(out, "\x1b[{};{}H{}", row.max(1), col, s);
+    };
+    let mid = (rows as i32 / 2).max(2);
+    cen(out, mid - 2, "\x1b[1m★  S U P E R   M U N C H I I  ★\x1b[0m");
+    cen(out, mid, "a sample game on the scamper engine");
+    cen(out, mid + 3, "\x1b[7m press any key to start \x1b[0m");
+    cen(out, mid + 4, "move: arrows · jump: \u{2191} · throw: space · h help · q quit");
+    {
+        let mut o = std::io::stdout().lock();
+        let _ = o.write_all(out);
+        let _ = o.flush();
+    }
+    let deadline = now_ns() + 4_000_000_000;
+    loop {
+        if terminal::quit_requested() {
+            return false;
+        }
+        input.poll();
+        if input.quit || input.pressed(K_Q) || input.pressed(K_ESC) {
+            return false;
+        }
+        if input.any_pressed() || now_ns() >= deadline {
+            return true;
+        }
+        sleep_until_ns(now_ns() + 16_000_000, 1_000_000);
+    }
 }
 
 /// Full-screen help/controls + graphics-backend explainer. Drawn as plain text

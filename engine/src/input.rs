@@ -286,6 +286,10 @@ impl Input {
     pub fn pressed(&self, code: u32) -> bool {
         self.pressed.contains(&code)
     }
+    /// Any key pressed this frame — for "press any key to start" prompts.
+    pub fn any_pressed(&self) -> bool {
+        !self.pressed.is_empty()
+    }
 
     /// Horizontal input axis in [-1, 1].
     pub fn axis_x(&self) -> f64 {
