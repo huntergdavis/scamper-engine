@@ -262,7 +262,7 @@ debug_menu() {
 }
 
 # A single sample game's actions. Super Munchii for now; add a function like this
-# per game and list it in games_menu as the engine grows more samples.
+# per game and list it on the top menu as the engine grows more samples.
 munchii_menu() {
     while true; do
         menu "Super Munchii  (sample game)" \
@@ -281,14 +281,23 @@ munchii_menu() {
     done
 }
 
-# The sample-games picker — one entry per game built on the engine.
-games_menu() {
+# Engine/developer tools — grouped off the top menu so the front door stays about
+# playing. (Sample games other than Super Munchii would slot into the top menu.)
+tools_menu() {
     while true; do
-        menu "SCAMPER \xc2\xb7 sample games" \
-            "Super Munchii  (platformer)" \
+        menu "SCAMPER \xc2\xb7 engine tools" \
+            "sprite viewer  (Tab cycles backends)" \
+            "tile viewer  (Tab gfx \xc2\xb7 space tile \xc2\xb7 t theme)" \
+            "record a run" \
+            "replay a run" \
+            "debug tools" \
             "back"
         case "$MENU_SEL" in
-            0) munchii_menu ;;
+            0) "target/$profile_dir/sprite-lab" ;;
+            1) "target/$profile_dir/tile-lab" ;;
+            2) record_run ;;
+            3) replay_browser ;;
+            4) debug_menu ;;
             *) return ;;
         esac
     done
@@ -297,22 +306,14 @@ games_menu() {
 interactive_menu() {
     cargo build "${profile_args[@]}"
     while true; do
-        # Top level = the engine: its sample games, plus the shared dev tools.
+        # Front door: play the game, or step into the engine tools.
         menu "SCAMPER  (a terminal 2D game engine)" \
-            "sample games" \
-            "sprite viewer  (Tab cycles backends)" \
-            "tile viewer  (Tab gfx \xc2\xb7 space tile \xc2\xb7 t theme)" \
-            "record a run" \
-            "replay a run" \
-            "debug tools" \
+            "Play Super Munchii" \
+            "Engine tools" \
             "quit"
         case "$MENU_SEL" in
-            0) games_menu ;;
-            1) "target/$profile_dir/sprite-lab" ;;
-            2) "target/$profile_dir/tile-lab" ;;
-            3) record_run ;;
-            4) replay_browser ;;
-            5) debug_menu ;;
+            0) munchii_menu ;;
+            1) tools_menu ;;
             *) break ;;
         esac
     done
