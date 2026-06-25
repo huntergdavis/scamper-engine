@@ -388,6 +388,7 @@ fn run_play(path: &str) {
     let mut hostiles: Vec<Mob> = Vec::new(); // enemy thrown sticks
     let mut fire_cd: u32 = 0; // throw cooldown (frames)
     let mut aura_t: u64 = 0; // last bubble-aura emit (ns)
+    let mut ambient_t: u64 = 0; // last ambient-particle emit (ns)
     let mut dash_t: u64 = 0; // last zoomies dash-trail emit (ns)
     let mut shake = scamper::shake::Shake::new(); // camera juice on impacts
     let mut frame_ix: u64 = 0; // render-frame counter (drives the shake tremble)
@@ -533,6 +534,18 @@ fn run_play(path: &str) {
         } else {
             sim.fp.max_run = base_max_run;
             sim.fp.run_accel = base_run_accel;
+        }
+        // Ambient particles: snowfall / bubbles / drifting leaves, by theme — a
+        // living backdrop, sprinkled across the visible band around Munchii.
+        if let Some(amb) = ambient_fx(world.theme) {
+            if now.saturating_sub(ambient_t) > 200 * 1_000_000 {
+                let half = fb_w as f64 / (2.0 * power.zoom() as f64);
+                let r = (now / 1_000_000 % 1000) as f64 / 1000.0;
+                let ax = sim.player.pos.x + sim.player.w / 2.0 - half + r * 2.0 * half;
+                let ay = sim.player.pos.y - fb_h as f64 / power.zoom() as f64 * 0.35;
+                sim.fx.spawn(amb, ax, ay, now);
+                ambient_t = now;
+            }
         }
         // Invincibility: a continuous sparkle halo so the Star state reads in every
         // tier (incl. mono B&W), even though Munchii himself isn't hidden.
@@ -1021,6 +1034,18 @@ fn pop_fx(kind: &str) -> &'static scamper::effects::Effect {
         &scamper::effects::PUFF
     } else {
         &scamper::effects::BOP
+    }
+}
+
+/// The ambient particle that drifts through a theme (snowfall, bubbles, leaves),
+/// or none for the bare themes. Spawned continuously for a living backdrop.
+fn ambient_fx(theme: scamper::level::Theme) -> Option<&'static scamper::effects::Effect> {
+    use scamper::level::Theme;
+    match theme {
+        Theme::Snow => Some(&scamper::effects::SNOW),
+        Theme::Underwater => Some(&scamper::effects::BUBBLE),
+        Theme::Overworld => Some(&scamper::effects::LEAF),
+        _ => None,
     }
 }
 

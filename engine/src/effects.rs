@@ -138,6 +138,25 @@ pub static DASH: Effect = Effect {
     frames: &[&["»»"], &["» "], &["· "]],
 };
 
+// Ambient snowflake — drifts down the screen (the glyph descends through the
+// frame grid). Spawned continuously in snowy levels for a gentle snowfall.
+pub static SNOW: Effect = Effect {
+    name: "snow",
+    fps: 6,
+    tint: (236, 244, 255),
+    z: 3,
+    frames: &[&["*", " ", " ", " "], &[" ", "*", " ", " "], &[" ", " ", "*", " "], &[" ", " ", " ", "."]],
+};
+
+// Ambient leaf — flutters down with a little side-to-side sway (overworld).
+pub static LEAF: Effect = Effect {
+    name: "leaf",
+    fps: 6,
+    tint: (150, 200, 90),
+    z: 3,
+    frames: &[&[" ,", "  ", "  ", "  "], &["  ", "', ", "  ", "  "], &["  ", "  ", " ,", "  "], &["  ", "  ", "  ", "' "]],
+};
+
 // Bubble-gear aura — a soap bubble that wobbles up off Munchii and pops. Emitted
 // continuously while he wears the Bubble Bone, so that tier reads distinctly (the
 // round "o(O)" glyphs show even in mono B&W) from plain Big gear.
