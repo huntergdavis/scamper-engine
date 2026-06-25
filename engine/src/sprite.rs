@@ -62,6 +62,7 @@ pub const ALL: &[Sprite] = &[
     Sprite { id: "trampoline", role: Role::Creature, w: 5, h: 2, anims: TRAMPOLINE, palette: trampoline_rgb },
     Sprite { id: "lift", role: Role::Creature, w: 6, h: 2, anims: LIFT, palette: lift_rgb },
     Sprite { id: "star_bone", role: Role::Item, w: 3, h: 2, anims: STAR_BONE, palette: star_rgb },
+    Sprite { id: "chaser", role: Role::Creature, w: 4, h: 2, anims: CHASER, palette: chaser_rgb },
     Sprite { id: "hardhat", role: Role::Creature, w: 6, h: 2, anims: HARDHAT, palette: hard_rgb },
     Sprite { id: "stick_squirrel", role: Role::Creature, w: 6, h: 3, anims: SQUIRREL, palette: squirrel_rgb },
     Sprite { id: "sudsfish", role: Role::Creature, w: 5, h: 2, anims: FISH, palette: fish_rgb },
@@ -193,6 +194,14 @@ fn star_rgb(ch: char) -> (u8, u8, u8) {
     match ch {
         '*' | '\\' | '/' => (255, 244, 150),    // twinkle
         _ => (240, 232, 200),                   // bone
+    }
+}
+/// Chaser: a rusty-red hunter — dark eye, pale bared teeth.
+fn chaser_rgb(ch: char) -> (u8, u8, u8) {
+    match ch {
+        'o' => (18, 14, 14),                    // eye
+        'w' | 'W' => (232, 220, 206),           // teeth / feet
+        _ => (192, 72, 56),                     // body
     }
 }
 fn hard_rgb(ch: char) -> (u8, u8, u8) {
@@ -344,6 +353,11 @@ const LIFT: &[Anim] = &[Anim { name: "idle", fps: 3, frames: LIFT_F }];
 // Star Bone — an invincibility power-up: a glowing winged bone that twinkles.
 const STAR_BONE_F: &[&[&str]] = &[&["\\*/", "(=)"], &["/*\\", "(=)"]];
 const STAR_BONE: &[Anim] = &[Anim { name: "idle", fps: 6, frames: STAR_BONE_F }];
+
+// Chaser — a snarling critter that hunts Munchii. Bared teeth + angry brows read
+// as aggression; the feet shuffle as it scrambles.
+const CHASER_F: &[&[&str]] = &[&["\\>o<", "/wWw"], &[">o<\\", "wWw\\"]];
+const CHASER: &[Anim] = &[Anim { name: "walk", fps: 10, frames: CHASER_F }];
 
 const HARDHAT_F: &[&[&str]] = &[&["/####\\", "(o)(o)"]];
 const HARDHAT: &[Anim] = &[Anim { name: "walk", fps: 4, frames: HARDHAT_F }];

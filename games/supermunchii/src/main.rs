@@ -1022,6 +1022,10 @@ fn combo_word(n: u32) -> &'static str {
 
 /// Speed of a kicked shell, px/tick.
 const SHELL_SPEED: f64 = 2.6;
+/// Chaser AI: how far it can "see" Munchii, and its charge vs idle-patrol speeds.
+const CHASE_RANGE: f64 = 150.0;
+const CHASE_SPEED: f64 = 1.4;
+const CHASE_IDLE: f64 = 0.35;
 
 /// The background track for a level's theme. There's no audio engine yet, so this
 /// is the hook: it names the track and logs it on level load (wire to real audio
@@ -1055,6 +1059,8 @@ fn gait_for(kind: &str, item: bool) -> (Gait, f64, f64, f64) {
         (Gait::Wander, 0.5, 22.0, 26.0) // the boss: a big box that paces the ledge
     } else if kind == "dandi" || kind == "dandi_sun" {
         (Gait::Bob, 0.0, 12.0, 14.0) // snapping dandelion: rises/lowers from a pipe
+    } else if kind == "chaser" {
+        (Gait::Wander, CHASE_IDLE, 13.0, 13.0) // pursues Munchii on sight (AI in step_actors)
     } else if kind == "springer" {
         (Gait::Hop, 0.5, 12.0, 12.0) // a bouncing critter — time your pounce mid-hop
     } else if kind == "lift" {
@@ -1170,6 +1176,21 @@ struct Hits {
 }
 
 fn step_actors(actors: &mut [Actor], map: &TileMap, player: &mut Player, kibble: &mut u32, power: &mut Power, invincible: bool) -> Hits {
+    // Reactive AI (game logic, so the engine Mob stays dumb): a Chaser locks onto
+    // Munchii and charges when he's within sight on roughly the same level; idles
+    // into a slow patrol otherwise.
+    for a in actors.iter_mut() {
+        if a.kind == "chaser" && a.mob.alive {
+            let dx = player.pos.x - a.mob.pos.x;
+            let spotted = dx.abs() < CHASE_RANGE && (player.pos.y - a.mob.pos.y).abs() < 40.0;
+            if spotted {
+                a.mob.facing = if dx >= 0.0 { 1 } else { -1 };
+                a.mob.speed = CHASE_SPEED;
+            } else {
+                a.mob.speed = CHASE_IDLE;
+            }
+        }
+    }
     for a in actors.iter_mut() {
         a.mob.step(map);
     }
@@ -3303,6 +3324,29 @@ mod tests {
         assert!(hits.zoomies, "treat triggers the burst");
         assert_eq!(kibble, 1, "and banks a kibble");
         assert!(!actors[0].mob.alive, "treat is consumed");
+    }
+
+    /// A Chaser charges toward Munchii when he's in range, and idles otherwise.
+    #[test]
+    fn chaser_charges_toward_the_player_in_range() {
+        let mut l = Level::new("t", "overworld", 30, 10);
+        l.tiles.push(TileSpan { x: 0, y: 8, len: 30, kind: TileKind::Ground });
+        l.entities.push(Entity { kind: "chaser".into(), x: 15, y: 7, props: vec![] });
+        let world = LevelWorld::from_level(&l);
+        let mut actors = build_actors(&world);
+        let cx = actors[0].mob.pos.x;
+        let (mut kibble, mut power) = (0, Power::Big);
+
+        // Player to the LEFT and in range → it should face left and charge fast.
+        let mut player = Player::new(cx - 60.0, actors[0].mob.pos.y);
+        let _ = step_actors(&mut actors, &world.map, &mut player, &mut kibble, &mut power, false);
+        assert_eq!(actors[0].mob.facing, -1, "faces the player");
+        assert!(actors[0].mob.speed > CHASE_IDLE, "charges (faster than idle)");
+
+        // Player far away → idle patrol speed.
+        let mut far = Player::new(cx + 600.0, actors[0].mob.pos.y);
+        let _ = step_actors(&mut actors, &world.map, &mut far, &mut kibble, &mut power, false);
+        assert!((actors[0].mob.speed - CHASE_IDLE).abs() < 1e-9, "idles when out of range");
     }
 
     /// Pouncing a normal critter reports a pounce (which drives the air combo).
