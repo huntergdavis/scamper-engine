@@ -114,9 +114,10 @@ impl Mob {
         self.move_axis(map, 0.0, self.vel.y);
     }
 
-    /// Resting on (or 1px above) solid ground?
+    /// Resting on (or 1px above) solid ground (incl. one-way platform tops)?
     pub fn on_ground(&self, map: &TileMap) -> bool {
         map.overlaps(self.pos.x, self.pos.y + 1.0, self.w, self.h)
+            || map.on_oneway(self.pos.x, self.w, self.pos.y + self.h)
     }
 
     /// Is there solid ground just beyond the leading foot (for ledge-careful gait)?
@@ -140,7 +141,9 @@ impl Mob {
             let s = rem.min(1.0);
             let nx = self.pos.x + sx * s;
             let ny = self.pos.y + sy * s;
-            if map.overlaps(nx, ny, self.w, self.h) {
+            let blocked = map.overlaps(nx, ny, self.w, self.h)
+                || (dy > 0.0 && map.lands_on_oneway(nx, self.w, self.pos.y + self.h, ny + self.h));
+            if blocked {
                 if dy != 0.0 {
                     self.vel.y = 0.0;
                 }
@@ -260,6 +263,24 @@ mod tests {
         // Eventually it falls and lands on the floor → blocked.
         settle(&mut s, &map, 200);
         assert!(s.blocked, "a ballistic projectile dies when it hits a solid");
+    }
+
+    #[test]
+    fn lands_on_oneway_from_above_but_passes_through_from_below() {
+        // one-way platform row at y=2 ('='), solid floor at y=4
+        let map = TileMap::from_ascii(&["....", "....", "====", "....", "####"]);
+
+        // Falling from above → lands on the platform top (y = 2*TILE), not the floor.
+        let mut faller = Mob::new(1.0 * TILE, 0.0, 12.0, 14.0, 1, 0.0, Gait::Still);
+        settle(&mut faller, &map, 60);
+        assert!((faller.pos.y + faller.h - 2.0 * TILE).abs() < 1.5, "rests on platform top: {}", faller.pos.y);
+        assert!(faller.on_ground(&map), "grounded on the one-way platform");
+
+        // Rising from below → passes straight through the platform.
+        let mut riser = Mob::new(1.0 * TILE, 3.0 * TILE, 12.0, 14.0, 1, 0.0, Gait::Ballistic);
+        riser.vel = vec2(0.0, -6.0);
+        riser.step(&map);
+        assert!(riser.pos.y < 3.0 * TILE - 4.0, "moving up passes through the platform");
     }
 
     #[test]

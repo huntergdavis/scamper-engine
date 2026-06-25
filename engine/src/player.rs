@@ -108,6 +108,7 @@ impl Player {
 
     fn detect_grounded(&self, map: &TileMap) -> bool {
         map.overlaps(self.pos.x + INSET, self.pos.y + self.h, self.w - 2.0 * INSET, PROBE)
+            || map.on_oneway(self.pos.x + INSET, self.w - 2.0 * INSET, self.pos.y + self.h)
     }
     fn detect_wall(&self, map: &TileMap) -> i32 {
         let left = map.overlaps(self.pos.x - PROBE, self.pos.y + INSET, PROBE, self.h - 2.0 * INSET);
@@ -270,7 +271,11 @@ impl Player {
             let s = rem.min(1.0);
             let nx = self.pos.x + sx * s;
             let ny = self.pos.y + sy * s;
-            if map.overlaps(nx, ny, self.w, self.h) {
+            // Solid contact stops on any axis; a one-way platform only stops a
+            // descending box whose feet cross its top (jump up through it freely).
+            let blocked = map.overlaps(nx, ny, self.w, self.h)
+                || (dy > 0.0 && map.lands_on_oneway(nx, self.w, self.pos.y + self.h, ny + self.h));
+            if blocked {
                 if dx != 0.0 {
                     self.vel.x = 0.0;
                 }

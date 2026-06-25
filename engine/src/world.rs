@@ -8,12 +8,23 @@ pub struct TileMap {
     pub w: usize,
     pub h: usize,
     pub solid: Vec<bool>,
+    /// One-way (semisolid) cells: solid to feet landing from above, pass-through
+    /// from below or the sides. Drives platform tiles.
+    pub oneway: Vec<bool>,
+    pub has_oneway: bool, // fast-path: skip one-way checks when a map has none
     pub spawn: (f64, f64),
 }
 
 impl TileMap {
     pub fn new(w: usize, h: usize) -> Self {
-        TileMap { w, h, solid: vec![false; w * h], spawn: (TILE * 2.0, TILE * 2.0) }
+        TileMap {
+            w,
+            h,
+            solid: vec![false; w * h],
+            oneway: vec![false; w * h],
+            has_oneway: false,
+            spawn: (TILE * 2.0, TILE * 2.0),
+        }
     }
 
     #[inline]
@@ -27,10 +38,69 @@ impl TileMap {
         self.solid[ty as usize * self.w + tx as usize]
     }
 
+    #[inline]
+    pub fn is_oneway(&self, tx: i32, ty: i32) -> bool {
+        if tx < 0 || ty < 0 || tx as usize >= self.w || ty as usize >= self.h {
+            return false;
+        }
+        self.oneway[ty as usize * self.w + tx as usize]
+    }
+
     pub fn set(&mut self, tx: usize, ty: usize, v: bool) {
         if tx < self.w && ty < self.h {
             self.solid[ty * self.w + tx] = v;
         }
+    }
+
+    pub fn set_oneway(&mut self, tx: usize, ty: usize, v: bool) {
+        if tx < self.w && ty < self.h {
+            self.oneway[ty * self.w + tx] = v;
+            self.has_oneway |= v;
+        }
+    }
+
+    /// A descending AABB lands on a one-way platform when its feet cross the
+    /// platform's top edge this step. `prev_bottom`/`new_bottom` are the AABB
+    /// bottom before/after the vertical move. Upward/horizontal motion passes
+    /// through (semisolid); feet already below the top don't re-catch.
+    pub fn lands_on_oneway(&self, x: f64, w: f64, prev_bottom: f64, new_bottom: f64) -> bool {
+        if !self.has_oneway || new_bottom <= prev_bottom {
+            return false;
+        }
+        let eps = 1e-6;
+        let tx0 = (x / TILE).floor() as i32;
+        let tx1 = ((x + w - eps) / TILE).floor() as i32;
+        let ty = (new_bottom / TILE).floor() as i32;
+        let top = ty as f64 * TILE;
+        if prev_bottom <= top + 1.0 {
+            for tx in tx0..=tx1 {
+                if self.is_oneway(tx, ty) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Is the AABB resting on top of a one-way platform (so it counts as grounded)?
+    /// True only when the feet sit at/just above the platform's top — not mid-pass.
+    pub fn on_oneway(&self, x: f64, w: f64, feet_y: f64) -> bool {
+        if !self.has_oneway {
+            return false;
+        }
+        let eps = 1e-6;
+        let tx0 = (x / TILE).floor() as i32;
+        let tx1 = ((x + w - eps) / TILE).floor() as i32;
+        let ty = ((feet_y + 1.0) / TILE).floor() as i32; // tile just below the feet
+        let top = ty as f64 * TILE;
+        if feet_y <= top + 2.0 {
+            for tx in tx0..=tx1 {
+                if self.is_oneway(tx, ty) {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     pub fn px_w(&self) -> f64 {
@@ -66,6 +136,7 @@ impl TileMap {
             for (tx, ch) in row.chars().enumerate() {
                 match ch {
                     '#' => m.set(tx, ty, true),
+                    '=' => m.set_oneway(tx, ty, true), // one-way (semisolid) platform
                     '@' => m.spawn = (tx as f64 * TILE, ty as f64 * TILE),
                     _ => {}
                 }

@@ -6,8 +6,8 @@
 //! water → respawn), the goal position (level end), warps (pipes), spawn, and the
 //! visual theme. Also a clamped side-scroll [`camera`].
 //!
-//! v1 simplification: one-way `platform` tiles are treated as fully solid (the
-//! shared physics has no one-way support yet) — noted in CAMPAIGN_PLAN.md.
+//! `platform` tiles project to one-way (semisolid) cells: you land on their tops
+//! but jump up through them from below (`TileMap::set_oneway`).
 
 use crate::level::art::Theme;
 use crate::level::ir::{Level, TileKind};
@@ -62,7 +62,9 @@ impl LevelWorld {
                 if !in_bounds(x, y) {
                     continue;
                 }
-                if span.kind.is_solid() {
+                if span.kind == TileKind::Platform {
+                    map.set_oneway(x as usize, y as usize, true); // semisolid: land on top, jump up through
+                } else if span.kind.is_solid() {
                     map.set(x as usize, y as usize, true);
                 }
                 if span.kind == TileKind::Hazard {
