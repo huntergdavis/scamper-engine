@@ -45,11 +45,11 @@ impl Default for FeelParams {
             gravity_rise: 900.0,
             gravity_fall: 2200.0,
             max_fall: 760.0,
-            run_accel: 1800.0,
-            air_accel: 1500.0,
+            run_accel: 750.0, // gentler ramp so acceleration is felt (and reversing skids)
+            air_accel: 600.0,
             ground_friction: 1600.0,
             air_friction: 400.0,
-            max_run: 230.0,
+            max_run: 215.0, // floor for clearing the levels' standard 4-tile gaps (test-guarded)
             jump_speed: 360.0,
             coyote_time: 0.09,
             jump_buffer: 0.10,
