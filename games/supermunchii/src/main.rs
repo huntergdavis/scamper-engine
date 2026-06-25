@@ -2542,6 +2542,30 @@ mod tests {
     use super::*;
     use scamper::level::ir::{Entity, TileKind, TileSpan};
 
+    /// The level view + scene render + status must adapt to any window size and
+    /// aspect ratio (tiny, ultrawide, tall-narrow) without degenerate dims or panic.
+    #[test]
+    fn rendering_adapts_to_any_window() {
+        let mut l = Level::new("t", "overworld", 30, 12);
+        l.tiles.push(TileSpan { x: 0, y: 10, len: 30, kind: TileKind::Ground });
+        l.spawn = (3, 8);
+        let world = LevelWorld::from_level(&l);
+        let mut sim = sim_at(world.spawn);
+        let actors = build_actors(&world);
+        let mut backend: Box<dyn Backend> = Box::new(MonoBackend::new());
+        let mut out = Vec::new();
+        let mut status = String::new();
+        for &(cols, rows) in &[(1u16, 1u16), (20, 8), (200, 20), (40, 60), (80, 24), (320, 100), (8, 50)] {
+            let ws = terminal::WinSize { cols, rows, xpix: cols.saturating_mul(8), ypix: rows.saturating_mul(16) };
+            let (fb_w, fb_h, vc, vr) = play_view(ws);
+            assert!(fb_w > 0 && fb_h > 0 && vc > 0 && vr > 0, "play_view degenerate at {cols}x{rows}");
+            let mut fb = Framebuffer::new(fb_w, fb_h);
+            sim.step(&world.map, InputFrame { axis_x: 1, jump_pressed: false, jump_held: false, down_held: false });
+            draw_play_frame(&mut fb, backend.as_mut(), &mut out, &world, &sim, &actors, &[], &[], fb_w, fb_h, vc, vr, true, false);
+            render_play_status(&mut status, &l, sim.player.state, "mono", false, false, 0, 3, Power::Small, vr + 1, vc);
+        }
+    }
+
     /// Replicate run_play's head-bonk path: a brick directly above Munchii must
     /// shatter when he jumps into it.
     #[test]
