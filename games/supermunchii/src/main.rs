@@ -889,10 +889,12 @@ fn step_actors(actors: &mut [Actor], map: &TileMap, player: &mut Player, kibble:
         match a.kind.as_str() {
             // Pull the plug → the bath drains and Baron Whiskers drops in: level won.
             "bath_plug" => hits.plug = true,
-            // The boss can't be pounced away — a bonk just grumps him; a touch hurts.
+            // The boss can't be pounced away — a bonk just grumps him (a BANG cue
+            // says "not this way — get behind him to the plug"); a side touch hurts.
             "baron_whiskers" => {
                 if stomp(px, py, pw, ph, pvy, bx, by, bw, bh) {
                     player.vel.y = POUNCE_BOUNCE;
+                    hits.fx.push((&scamper::effects::BANG, bx + bw / 2.0, by));
                 } else {
                     hits.hurt = true;
                 }
