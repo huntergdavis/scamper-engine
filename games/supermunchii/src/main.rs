@@ -440,6 +440,7 @@ fn run_play(path: &str) {
     let mut next = now_ns();
     let mut intro_until = now_ns() + 1_600_000_000; // show the level-title card ~1.6s
     let mut level_start = now_ns(); // for the on-screen level timer
+    let mut level_kibble0: u32 = 0; // kibble total at the level's start (for the tally)
 
     // A title card to open the session — any key starts, q quits, and it
     // auto-starts after a few seconds so it never blocks an unattended run.
@@ -852,7 +853,7 @@ fn run_play(path: &str) {
                     sim.fx.spawn(&scamper::effects::CHEER, sim.player.pos.x + sim.player.w / 2.0, sim.player.pos.y, sim.clock());
                 }
             }
-        } else if now.saturating_sub(won_at) >= 700 * 1_000_000 {
+        } else if now.saturating_sub(won_at) >= 1700 * 1_000_000 {
             if let Some((next, lvl)) = next_level_path(&cur_path).and_then(|p| load_level_file(&p).ok().map(|l| (p, l))) {
                 cur_path = next;
                 level = lvl;
@@ -872,6 +873,7 @@ fn run_play(path: &str) {
                 celebrated = false;
                 intro_until = now + 1_600_000_000;
                 level_start = now;
+                level_kibble0 = kibble;
                 full_redraw = true;
             }
             // No next level → stay on the completed screen (q to quit).
@@ -896,6 +898,7 @@ fn run_play(path: &str) {
                     celebrated = false;
                     intro_until = now + 1_600_000_000;
                     level_start = now;
+                    level_kibble0 = kibble;
                     full_redraw = true;
                 }
             }
@@ -948,6 +951,25 @@ fn run_play(path: &str) {
                 let col = ((cols as usize).saturating_sub(card.chars().count()) / 2).max(0) + 1;
                 let row = (rows / 2).max(1);
                 let _ = write!(status, "\x1b[{row};{col}H\x1b[1;7m{card}\x1b[0m");
+            }
+            // Results card on level clear: kibble collected, time, and a star rating
+            // (faster = more stars). Shown during the win pause before auto-advance.
+            if won && !game_over {
+                use std::fmt::Write;
+                let stars = if secs < 25 { "★★★" } else if secs < 55 { "★★ " } else { "★  " };
+                let lines = [
+                    format!("  ✦  {}  CLEAR!  ✦  ", level.id),
+                    format!("  kibble +{}   time {}:{:02}  ", kibble.saturating_sub(level_kibble0), secs / 60, secs % 60),
+                    format!("  rating {}  ", stars),
+                ];
+                let w = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+                let col = ((cols as usize).saturating_sub(w) / 2).max(0) + 1;
+                let top = (rows / 2).saturating_sub(2).max(1);
+                for (i, l) in lines.iter().enumerate() {
+                    let pad = format!("{:^width$}", l, width = w);
+                    let _ = write!(status, "\x1b[{};{col}H\x1b[1;7m{pad}\x1b[0m", top + i as u16);
+                }
+                full_redraw = true;
             }
             let mut o = std::io::stdout().lock();
             let _ = o.write_all(&out);
