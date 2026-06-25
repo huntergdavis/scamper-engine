@@ -633,7 +633,7 @@ fn run_play(path: &str) {
                             sim.fx.spawn(&scamper::effects::SPARKLE, bxw, byw, now);
                             // pop the power-up out onto the block top to grab
                             let m = Mob::new(cx as f64 * TILE, (cy - 1) as f64 * TILE, 12.0, 12.0, 1, 0.0, Gait::Still);
-                            actors.push(Actor { mob: m, kind: item, item: true, mode: Mode::Walk });
+                            actors.push(Actor { mob: m, kind: item, item: true, mode: Mode::Walk, alerted: false });
                         }
                     }
                     full_redraw = true;
@@ -976,6 +976,7 @@ struct Actor {
     kind: String,
     item: bool,
     mode: Mode,
+    alerted: bool, // a chaser that has spotted Munchii (edge-triggers the "!" cue)
 }
 
 /// Item kinds collect on touch; everything else is a creature you pounce.
@@ -1089,7 +1090,7 @@ fn build_actors(world: &LevelWorld) -> Vec<Actor> {
         .map(|e| {
             let item = is_item(&e.kind);
             let (gait, speed, w, h) = gait_for(&e.kind, item);
-            Actor { mob: Mob::new(e.cx as f64 * TILE, e.cy as f64 * TILE, w, h, -1, speed, gait), kind: e.kind.clone(), item, mode: Mode::Walk }
+            Actor { mob: Mob::new(e.cx as f64 * TILE, e.cy as f64 * TILE, w, h, -1, speed, gait), kind: e.kind.clone(), item, mode: Mode::Walk, alerted: false }
         })
         .collect()
 }
@@ -1176,17 +1177,23 @@ struct Hits {
 }
 
 fn step_actors(actors: &mut [Actor], map: &TileMap, player: &mut Player, kibble: &mut u32, power: &mut Power, invincible: bool) -> Hits {
+    let mut hits = Hits::default();
     // Reactive AI (game logic, so the engine Mob stays dumb): a Chaser locks onto
     // Munchii and charges when he's within sight on roughly the same level; idles
-    // into a slow patrol otherwise.
+    // into a slow patrol otherwise. The first frame it spots him pops a "!" cue.
     for a in actors.iter_mut() {
         if a.kind == "chaser" && a.mob.alive {
             let dx = player.pos.x - a.mob.pos.x;
             let spotted = dx.abs() < CHASE_RANGE && (player.pos.y - a.mob.pos.y).abs() < 40.0;
             if spotted {
+                if !a.alerted {
+                    hits.fx.push((&scamper::effects::BANG, a.mob.pos.x + a.mob.w / 2.0, a.mob.pos.y - 6.0));
+                }
+                a.alerted = true;
                 a.mob.facing = if dx >= 0.0 { 1 } else { -1 };
                 a.mob.speed = CHASE_SPEED;
             } else {
+                a.alerted = false;
                 a.mob.speed = CHASE_IDLE;
             }
         }
@@ -1202,7 +1209,6 @@ fn step_actors(actors: &mut [Actor], map: &TileMap, player: &mut Player, kibble:
         .filter(|a| a.mode == Mode::ShellRoll && a.mob.alive)
         .map(|a| (a.mob.pos.x, a.mob.pos.y, a.mob.w, a.mob.h))
         .collect();
-    let mut hits = Hits::default();
     if !shells.is_empty() {
         for a in actors.iter_mut() {
             if a.mob.alive && !a.item && a.mode == Mode::Walk {
