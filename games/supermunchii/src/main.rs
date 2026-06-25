@@ -395,6 +395,7 @@ fn run_play(path: &str) {
     const ZOOMIES_TICKS: u32 = 360; // ~6s at the sim rate
     let mut glide = false; // Flutter Collar: hold jump while falling to glide
     let mut glide_t: u64 = 0; // last glide-feather emit (ns)
+    let mut combo: u32 = 0; // consecutive air-pounces (resets on landing)
     const GLIDE_FALL: f64 = 72.0; // capped descent (px/s) while gliding
     let base_max_run = sim.fp.max_run;
     let base_run_accel = sim.fp.run_accel;
@@ -557,6 +558,9 @@ fn run_play(path: &str) {
                     sim.fx.spawn(&scamper::effects::DUST, sim.player.pos.x + sim.player.w / 2.0, sim.player.pos.y + sim.player.h, now);
                     shake.bump(0.2);
                 }
+                if sim.player.grounded {
+                    combo = 0; // touching down ends the air combo
+                }
                 // Glide: holding jump while falling (with the Flutter Collar) caps
                 // the descent to a gentle float.
                 if glide && !sim.player.grounded && inp.jump_held && sim.player.vel.y > GLIDE_FALL {
@@ -622,6 +626,18 @@ fn run_play(path: &str) {
                     if e.name == "bop" {
                         sim.fx.spawn_word(scamper::strings::t("fx.pop"), (255, 236, 150), x, y - 6.0, fxclock);
                         shake.bump(0.25); // a satisfying little pop
+                    }
+                }
+                // Air combo: chaining pounces before landing escalates the reward.
+                // Each pounce past the first banks a bonus kibble and shouts the tally.
+                if hits.pounces > 0 {
+                    for _ in 0..hits.pounces {
+                        combo += 1;
+                        if combo >= 2 {
+                            kibble += combo; // bonus grows with the chain
+                            sim.fx.spawn_word(combo_word(combo), (255, 200, 120), sim.player.pos.x + sim.player.w / 2.0, sim.player.pos.y - 10.0, fxclock);
+                            shake.bump(0.2);
+                        }
                     }
                 }
                 step_projectiles(&mut projectiles, &mut actors, &world.map, &mut kibble);
@@ -882,6 +898,18 @@ fn is_spiky(kind: &str) -> bool {
     matches!(kind, "prickle" | "prickle_sun")
 }
 
+/// Air-combo shout for an `n`-pounce chain (static so it can float as a word pop).
+fn combo_word(n: u32) -> &'static str {
+    match n {
+        0 | 1 | 2 => "COMBO x2",
+        3 => "COMBO x3",
+        4 => "COMBO x4",
+        5 => "COMBO x5",
+        6 => "COMBO x6",
+        _ => "COMBO MAX!",
+    }
+}
+
 /// Speed of a kicked shell, px/tick.
 const SHELL_SPEED: f64 = 2.6;
 
@@ -1015,6 +1043,7 @@ struct Hits {
     oneup: bool,   // collected a Lucky Squeaky → extra life
     zoomies: bool, // collected a Zoomies Treat → timed speed burst
     collar: bool,  // collected a Flutter Collar → unlocks gliding
+    pounces: u32,  // creatures pounced this step (drives the air combo)
     /// Effects to spawn (clip, world center-x, world top-y) for pops / pickups.
     fx: Vec<(&'static scamper::effects::Effect, f64, f64)>,
 }
@@ -1064,6 +1093,7 @@ fn step_actors(actors: &mut [Actor], map: &TileMap, player: &mut Player, kibble:
                         a.mob.gait = Gait::Still;
                         a.mob.speed = 0.0;
                         player.vel.y = POUNCE_BOUNCE;
+                        hits.pounces += 1;
                     } else {
                         hits.hurt = true;
                     }
@@ -1150,6 +1180,7 @@ fn step_actors(actors: &mut [Actor], map: &TileMap, player: &mut Player, kibble:
                     a.mob.alive = false;
                     *kibble += 2;
                     player.vel.y = POUNCE_BOUNCE;
+                    hits.pounces += 1;
                     hits.fx.push((&scamper::effects::BOP, bx + bw / 2.0, by)); // bopped a critter
                 } else {
                     hits.hurt = true;
@@ -3115,6 +3146,23 @@ mod tests {
         assert!(hits.zoomies, "treat triggers the burst");
         assert_eq!(kibble, 1, "and banks a kibble");
         assert!(!actors[0].mob.alive, "treat is consumed");
+    }
+
+    /// Pouncing a normal critter reports a pounce (which drives the air combo).
+    #[test]
+    fn pouncing_reports_a_pounce() {
+        let mut l = Level::new("t", "overworld", 12, 10);
+        l.tiles.push(TileSpan { x: 0, y: 8, len: 12, kind: TileKind::Ground });
+        l.entities.push(Entity { kind: "boneling".into(), x: 5, y: 7, props: vec![] });
+        let world = LevelWorld::from_level(&l);
+        let mut actors = build_actors(&world);
+        let (bx, by) = (actors[0].mob.pos.x, actors[0].mob.pos.y);
+        let mut player = Player::new(bx, by - 8.0); // overlapping from above
+        player.vel.y = 240.0; // falling → a stomp
+        let (mut kibble, mut power) = (0, Power::Big);
+        let hits = step_actors(&mut actors, &world.map, &mut player, &mut kibble, &mut power);
+        assert_eq!(hits.pounces, 1, "a stomp counts as one pounce");
+        assert!(!actors[0].mob.alive, "and pops the critter");
     }
 
     /// Collecting a Flutter Collar unlocks gliding (flags `collar`).
