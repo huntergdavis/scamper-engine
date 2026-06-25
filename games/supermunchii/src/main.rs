@@ -386,6 +386,11 @@ fn run_play(path: &str) {
     let mut hostiles: Vec<Mob> = Vec::new(); // enemy thrown sticks
     let mut fire_cd: u32 = 0; // throw cooldown (frames)
     let mut aura_t: u64 = 0; // last bubble-aura emit (ns)
+    let mut dash_t: u64 = 0; // last zoomies dash-trail emit (ns)
+    let mut zoomies: u32 = 0; // zoomies-treat speed burst, ticks remaining
+    const ZOOMIES_TICKS: u32 = 360; // ~6s at the sim rate
+    let base_max_run = sim.fp.max_run;
+    let base_run_accel = sim.fp.run_accel;
     let mut kibble: u32 = 0;
     let mut next_1up: u32 = 100; // every 100 kibble → an extra life
     let mut lives: i32 = 3;
@@ -493,6 +498,21 @@ fn run_play(path: &str) {
         // anchored at the feet so a power-up grows him upward off the ground.
         let (hw, hh) = power.hitbox();
         resize_player(&mut sim.player, hw, hh);
+        // Zoomies Treat: a timed speed burst. Boost top speed + accel while it
+        // lasts, and streak a dash trail behind Munchii (a delighter that also
+        // signals the buff). Restores the base feel when it runs out.
+        if zoomies > 0 {
+            sim.fp.max_run = base_max_run * 1.6;
+            sim.fp.run_accel = base_run_accel * 1.7;
+            if sim.player.grounded && sim.player.vel.x.abs() > base_max_run && now.saturating_sub(dash_t) > 70 * 1_000_000 {
+                let behind = sim.player.pos.x + sim.player.w / 2.0 - sim.player.facing as f64 * sim.player.w;
+                sim.fx.spawn(&scamper::effects::DASH, behind, sim.player.pos.y + sim.player.h * 0.4, now);
+                dash_t = now;
+            }
+        } else {
+            sim.fp.max_run = base_max_run;
+            sim.fp.run_accel = base_run_accel;
+        }
         // Bubble gear trails soap bubbles — a continuous aura so the Bubble state
         // reads distinctly from plain Big gear in every tier (incl. mono B&W).
         if power == Power::Bubble && now.saturating_sub(aura_t) > 130 * 1_000_000 {
@@ -511,6 +531,7 @@ fn run_play(path: &str) {
                 };
                 pending_jump = false;
                 sim.step(&world.map, inp);
+                zoomies = zoomies.saturating_sub(1); // burst counts down per sim tick
                 // Head-bonk a block from below: questions/coin-blocks cough up an
                 // item, breakable bricks shatter.
                 if sim.player.bonked_head {
@@ -585,6 +606,10 @@ fn run_play(path: &str) {
                 }
                 if got_1up {
                     sim.fx.spawn_word(scamper::strings::t("fx.oneup"), (140, 240, 150), sim.player.pos.x + sim.player.w / 2.0, sim.player.pos.y - 8.0, fxclock);
+                }
+                if hits.zoomies {
+                    zoomies = ZOOMIES_TICKS; // (re)charge the speed burst
+                    sim.fx.spawn_word(scamper::strings::t("fx.wahoo"), (255, 210, 90), sim.player.pos.x + sim.player.w / 2.0, sim.player.pos.y - 8.0, fxclock);
                 }
                 if hits.plug && !won {
                     won = true; // pulled the bath plug → level complete
@@ -921,9 +946,10 @@ const POUNCE_BOUNCE: f64 = -220.0;
 /// What the player touched this tick.
 #[derive(Default)]
 struct Hits {
-    hurt: bool,  // a non-pounce creature touch
-    plug: bool,  // pulled the bath plug → win
-    oneup: bool, // collected a Lucky Squeaky → extra life
+    hurt: bool,    // a non-pounce creature touch
+    plug: bool,    // pulled the bath plug → win
+    oneup: bool,   // collected a Lucky Squeaky → extra life
+    zoomies: bool, // collected a Zoomies Treat → timed speed burst
     /// Effects to spawn (clip, world center-x, world top-y) for pops / pickups.
     fx: Vec<(&'static scamper::effects::Effect, f64, f64)>,
 }
@@ -1029,6 +1055,12 @@ fn step_actors(actors: &mut [Actor], map: &TileMap, player: &mut Player, kibble:
             "lucky_squeaky" if a.item => {
                 a.mob.alive = false;
                 hits.oneup = true; // extra life
+                hits.fx.push((&scamper::effects::SPARKLE, bx + bw / 2.0, by));
+            }
+            "zoomies_treat" if a.item => {
+                a.mob.alive = false;
+                hits.zoomies = true; // timed speed burst
+                *kibble += 1;
                 hits.fx.push((&scamper::effects::SPARKLE, bx + bw / 2.0, by));
             }
             _ if a.item => {
@@ -2987,6 +3019,24 @@ mod tests {
         let mut projectiles = vec![Mob::new(bx + bw / 2.0, by, 4.0, 4.0, 1, 0.0, Gait::Fly)];
         step_projectiles(&mut projectiles, &mut actors, &world.map, &mut kibble);
         assert!(!actors[prickle].mob.alive, "a Sudsball pops the prickle");
+    }
+
+    /// Collecting a Zoomies Treat flags the speed burst (and still banks a kibble).
+    #[test]
+    fn zoomies_treat_triggers_the_speed_burst() {
+        let mut l = Level::new("t", "overworld", 12, 10);
+        l.tiles.push(TileSpan { x: 0, y: 8, len: 12, kind: TileKind::Ground });
+        l.entities.push(Entity { kind: "zoomies_treat".into(), x: 5, y: 7, props: vec![] });
+        let world = LevelWorld::from_level(&l);
+        let mut actors = build_actors(&world);
+        let (bx, by) = (actors[0].mob.pos.x, actors[0].mob.pos.y);
+        let mut player = Player::new(bx, by);
+        let mut kibble = 0;
+        let mut power = Power::Small;
+        let hits = step_actors(&mut actors, &world.map, &mut player, &mut kibble, &mut power);
+        assert!(hits.zoomies, "treat triggers the burst");
+        assert_eq!(kibble, 1, "and banks a kibble");
+        assert!(!actors[0].mob.alive, "treat is consumed");
     }
 
     /// Soak each given level by holding right and jumping; collect any that panic

@@ -108,6 +108,16 @@ pub static COIN: Effect = Effect {
     ],
 };
 
+// Speed-burst dash trail — motion streaks that flick off behind a sprinting hero
+// (the Zoomies Treat buff). The chevrons read as speed lines even in mono.
+pub static DASH: Effect = Effect {
+    name: "dash",
+    fps: 20,
+    tint: (255, 226, 130),
+    z: -1, // behind the hero
+    frames: &[&["»»"], &["» "], &["· "]],
+};
+
 // Bubble-gear aura — a soap bubble that wobbles up off Munchii and pops. Emitted
 // continuously while he wears the Bubble Bone, so that tier reads distinctly (the
 // round "o(O)" glyphs show even in mono B&W) from plain Big gear.
