@@ -6,7 +6,7 @@ use scamper::backend::{AsciiBackend, Backend, KittyBackend, MonoBackend, Overlay
 use scamper::capture::{self, InputFrame, Recording, Snapshots};
 use scamper::munchii;
 use scamper::framebuffer::{Framebuffer, Rgba};
-use scamper::input::{Input, K_DOWN, K_ESC, K_HELP, K_N, K_P, K_Q, K_S, K_T, K_TAB, K_X, K_Y};
+use scamper::input::{Input, K_DOWN, K_ESC, K_G, K_HELP, K_N, K_P, K_Q, K_S, K_T, K_TAB, K_X, K_Y};
 use scamper::level::art::{self, Theme};
 use scamper::level::ir::Level;
 use scamper::level::world::{Bonk, LevelWorld};
@@ -451,6 +451,7 @@ fn run_play(path: &str) {
     let mut skid_cd: u32 = 0; // throttle for skid-dust effects
     let mut help = false; // controls overlay (h)
     let mut paused = false; // freeze on 'p'
+    let mut assist = false; // practice mode: invulnerable (toggle 'g')
     play_bgm(&level);
 
     let (mut fb_w, mut fb_h, mut cols, mut rows) = play_view(terminal::query_winsize());
@@ -513,6 +514,10 @@ fn run_play(path: &str) {
         }
         if input.pressed(K_P) && !help {
             paused = !paused;
+            full_redraw = true;
+        }
+        if input.pressed(K_G) && !help {
+            assist = !assist; // practice mode: invulnerability for learning a level
             full_redraw = true;
         }
         if input.pressed(K_TAB) {
@@ -584,6 +589,9 @@ fn run_play(path: &str) {
         // anchored at the feet so a power-up grows him upward off the ground.
         let (hw, hh) = power.hitbox();
         resize_player(&mut sim.player, hw, hh);
+        if assist {
+            invincible = invincible.max(3); // practice mode keeps the star shield up
+        }
         // Zoomies Treat: a timed speed burst. Boost top speed + accel while it
         // lasts, and streak a dash trail behind Munchii (a delighter that also
         // signals the buff). Restores the base feel when it runs out.
@@ -1000,6 +1008,10 @@ fn run_play(path: &str) {
                     bar.push(if i == pos { '◆' } else { '─' });
                 }
                 let _ = write!(status, "\x1b[1;3H\x1b[2m{bar}\x1b[0m\x1b[1;{}H⚑", bw + 3);
+            }
+            if assist && !won && !game_over {
+                use std::fmt::Write;
+                let _ = write!(status, "\x1b[1;{}H\x1b[1;7m ⛑ ASSIST \x1b[0m", (cols as usize).saturating_sub(10).max(1));
             }
             if paused {
                 status.clear();
@@ -2766,6 +2778,8 @@ fn render_play_help(out: &mut Vec<u8>, active_backend: &str) {
     hline(out, r, "Throw Sudsball    Space (or C)  \u{2022}  always ready — bonks critters");
     r += 1;
     hline(out, r, "Dash (dodge)      X   \u{2022}  a quick burst with brief invulnerability");
+    r += 1;
+    hline(out, r, "Assist (practice) G   \u{2022}  toggle invulnerability to learn a level");
     r += 2;
     hline(out, r, "\x1b[1mPower-ups (gear, not damage)\x1b[0m");
     r += 1;
