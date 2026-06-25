@@ -108,6 +108,17 @@ pub static COIN: Effect = Effect {
     ],
 };
 
+// Bubble-gear aura — a soap bubble that wobbles up off Munchii and pops. Emitted
+// continuously while he wears the Bubble Bone, so that tier reads distinctly (the
+// round "o(O)" glyphs show even in mono B&W) from plain Big gear.
+pub static BUBBLE: Effect = Effect {
+    name: "bubble",
+    fps: 10,
+    tint: (170, 220, 255),
+    z: 2,
+    frames: &[&["o", " "], &["O", "°"], &["(O)", " ' "], &[" ° ", "   "]],
+};
+
 // Collect / block-release sparkle.
 pub static SPARKLE: Effect = Effect {
     name: "sparkle",

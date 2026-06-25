@@ -385,6 +385,7 @@ fn run_play(path: &str) {
     let mut projectiles: Vec<Mob> = Vec::new(); // Munchii's Sudsballs
     let mut hostiles: Vec<Mob> = Vec::new(); // enemy thrown sticks
     let mut fire_cd: u32 = 0; // throw cooldown (frames)
+    let mut aura_t: u64 = 0; // last bubble-aura emit (ns)
     let mut kibble: u32 = 0;
     let mut next_1up: u32 = 100; // every 100 kibble → an extra life
     let mut lives: i32 = 3;
@@ -492,6 +493,13 @@ fn run_play(path: &str) {
         // anchored at the feet so a power-up grows him upward off the ground.
         let (hw, hh) = power.hitbox();
         resize_player(&mut sim.player, hw, hh);
+        // Bubble gear trails soap bubbles — a continuous aura so the Bubble state
+        // reads distinctly from plain Big gear in every tier (incl. mono B&W).
+        if power == Power::Bubble && now.saturating_sub(aura_t) > 130 * 1_000_000 {
+            let bx = sim.player.pos.x + sim.player.w / 2.0 + ((now / 7_000_000) % 7) as f64 - 3.0;
+            sim.fx.spawn(&scamper::effects::BUBBLE, bx, sim.player.pos.y - 2.0, now);
+            aura_t = now;
+        }
         if !won && !game_over && !help {
             acc += elapsed;
             while acc >= SIM_DT_NS {
