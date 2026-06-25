@@ -387,6 +387,8 @@ fn run_play(path: &str) {
     let mut fire_cd: u32 = 0; // throw cooldown (frames)
     let mut aura_t: u64 = 0; // last bubble-aura emit (ns)
     let mut dash_t: u64 = 0; // last zoomies dash-trail emit (ns)
+    let mut shake = scamper::shake::Shake::new(); // camera juice on impacts
+    let mut frame_ix: u64 = 0; // render-frame counter (drives the shake tremble)
     let mut zoomies: u32 = 0; // zoomies-treat speed burst, ticks remaining
     const ZOOMIES_TICKS: u32 = 360; // ~6s at the sim rate
     let base_max_run = sim.fp.max_run;
@@ -549,6 +551,7 @@ fn run_play(path: &str) {
                         Bonk::Broke(item) => {
                             sim.fx.spawn(&scamper::effects::BONK, bxw, byw, now);
                             sim.fx.spawn_word(scamper::strings::t("fx.bonk"), (255, 236, 150), bxw, byw - 6.0, now);
+                            shake.bump(0.35); // a little crunch when a brick shatters
                             item
                         }
                         // A question block coughs up its contents and stays.
@@ -590,6 +593,7 @@ fn run_play(path: &str) {
                     sim.fx.spawn(e, x, y, fxclock); // pops / pickups feedback
                     if e.name == "bop" {
                         sim.fx.spawn_word(scamper::strings::t("fx.pop"), (255, 236, 150), x, y - 6.0, fxclock);
+                        shake.bump(0.25); // a satisfying little pop
                     }
                 }
                 step_projectiles(&mut projectiles, &mut actors, &world.map, &mut kibble);
@@ -626,6 +630,7 @@ fn run_play(path: &str) {
                         power = power.dropped(); // shed a tier of gear
                     }
                     invuln = 90; // ~1.5s of grace so you don't re-hit instantly
+                    shake.bump(0.85); // a hard jolt on taking a hit
                     full_redraw = true;
                 }
                 if lives < 0 {
@@ -706,7 +711,12 @@ fn run_play(path: &str) {
             let _ = o.flush();
         } else {
             // --- render the camera window (shared with the headless soak harness) ---
-            draw_play_frame(&mut fb, backend.as_mut(), &mut out, &world, &sim, &actors, &projectiles, &hostiles, fb_w, fb_h, cols, rows, full_redraw, input.down_held(), power.zoom());
+            let shake_off = shake.offset(frame_ix, 7.0);
+            if shake.active() {
+                full_redraw = true; // a moving camera needs the whole scene repainted
+            }
+            frame_ix += 1;
+            draw_play_frame(&mut fb, backend.as_mut(), &mut out, &world, &sim, &actors, &projectiles, &hostiles, fb_w, fb_h, cols, rows, full_redraw, input.down_held(), power.zoom(), shake_off);
             full_redraw = false;
             render_play_status(&mut status, &level, sim.player.state, backend.name(), won, game_over, kibble, lives, power, rows + 1, cols);
             let mut o = std::io::stdout().lock();
@@ -1110,6 +1120,7 @@ fn draw_play_frame(
     full_redraw: bool,
     down_held: bool,
     zoom: usize,
+    shake: (f64, f64),
 ) {
     let zoom = zoom.max(1);
     let pal = art::palette(world.theme);
@@ -1122,6 +1133,10 @@ fn draw_play_frame(
     // grow, so a constant-size Munchii is dwarfed. Pixel backends scroll per-pixel;
     // cell-sampling backends snap to the pre-magnification cell grid (no flicker).
     let mut view = scamper::level::View::centered(pcx, pcy, fb_w, fb_h, world.px_w(), world.px_h(), zoom);
+    // Screen-shake nudges the camera *before* snapping, so it trembles by whole
+    // pixels (smooth tiers) or whole cells (text tiers) — jolt without flicker.
+    view.cam_x += shake.0;
+    view.cam_y += shake.1;
     if backend.pixel_exact() {
         view.snap_pixels();
     } else {
@@ -1543,7 +1558,7 @@ fn soak_level(path: &str, ticks: u64) -> Result<SoakStats, String> {
             // 1× render paths headlessly.
             let z = if (tick / 15) % 2 == 0 { 4 } else { 1 };
             for b in backends.iter_mut() {
-                draw_play_frame(&mut fb, b.as_mut(), &mut out, &world, &sim, &actors, &[], &hostiles, fb_w, fb_h, cols, rows, true, false, z);
+                draw_play_frame(&mut fb, b.as_mut(), &mut out, &world, &sim, &actors, &[], &hostiles, fb_w, fb_h, cols, rows, true, false, z, (0.0, 0.0));
             }
             // Also render the status line like run_play does — at narrow widths too,
             // so status formatting (multibyte truncation, etc.) is exercised, not
@@ -2883,7 +2898,7 @@ mod tests {
             assert!(fb_w > 0 && fb_h > 0 && vc > 0 && vr > 0, "play_view degenerate at {cols}x{rows}");
             let mut fb = Framebuffer::new(fb_w, fb_h);
             sim.step(&world.map, InputFrame { axis_x: 1, jump_pressed: false, jump_held: false, down_held: false });
-            draw_play_frame(&mut fb, backend.as_mut(), &mut out, &world, &sim, &actors, &[], &[], fb_w, fb_h, vc, vr, true, false, 4);
+            draw_play_frame(&mut fb, backend.as_mut(), &mut out, &world, &sim, &actors, &[], &[], fb_w, fb_h, vc, vr, true, false, 4, (0.0, 0.0));
             render_play_status(&mut status, &l, sim.player.state, "mono", false, false, 0, 3, Power::Small, vr + 1, vc);
         }
     }
@@ -2954,7 +2969,7 @@ mod tests {
             let mut be: Box<dyn Backend> = Box::new(Cap(cap.clone()));
             let mut fb = Framebuffer::new(fb_w, fb_h);
             let actors = build_actors(&world);
-            draw_play_frame(&mut fb, be.as_mut(), &mut Vec::new(), &world, &sim, &actors, &[], &[], fb_w, fb_h, cols, rows, true, false, zoom);
+            draw_play_frame(&mut fb, be.as_mut(), &mut Vec::new(), &world, &sim, &actors, &[], &[], fb_w, fb_h, cols, rows, true, false, zoom, (0.0, 0.0));
             let b = ground_band(&cap.borrow());
             b
         };

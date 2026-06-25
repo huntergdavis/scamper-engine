@@ -14,6 +14,7 @@ pub mod mob;
 pub mod munchii;
 pub mod player;
 pub mod png;
+pub mod shake;
 pub mod sprite;
 pub mod sim;
 pub mod strings;
