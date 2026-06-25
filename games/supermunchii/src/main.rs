@@ -983,10 +983,17 @@ fn run_play(path: &str) {
                 status.clear();
                 scamper::ui::status_line(&mut status, rows + 1, "⏸ PAUSED — p resume · q quit");
             }
-            // Level-title card: a centered banner for the first ~1.6s of a level.
+            // Level-title card: a centered banner for the first ~1.6s of a level,
+            // with your best clear-time as a target if you've cleared it before.
             if now < intro_until {
                 let card = format!(" {} — {} ", level.id, level.theme);
-                scamper::ui::center_card(&mut status, cols, (rows / 2).max(1), &[&card], true);
+                let mut lines: Vec<&str> = vec![&card];
+                let best_line;
+                if let Some(&b) = bests.get(&level.id) {
+                    best_line = format!(" best {}:{:02} ", b / 60, b % 60);
+                    lines.push(&best_line);
+                }
+                scamper::ui::center_card(&mut status, cols, (rows / 2).max(1), &lines, true);
             }
             // Game-over card during the brief hold before returning to the menu.
             if game_over {
