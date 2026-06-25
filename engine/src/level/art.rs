@@ -240,27 +240,25 @@ pub fn draw_tile(fb: &mut Framebuffer, ox: i32, oy: i32, kind: TileKind, p: &Pal
             fb.fill_rect(ox, oy + 4, TILE, 1, shade(p.platform, 1, 2));
         }
         TileKind::Hazard => {
-            // A bright liquid crest over a dark pool: a strong top-bright /
-            // bottom-dark signature, distinct from brick's uniform body in mono.
-            fb.fill_rect(ox, oy, TILE, TILE, p.hazard_a);
-            let mut x = 0;
-            while x < TILE {
-                let h = if (x / 4) % 2 == 0 { 7 } else { 5 }; // wavy underside
-                fb.fill_rect(ox + x, oy, 4, h, p.hazard_b);
-                x += 4;
-            }
-            // faint ripples low — keep the bottom row dark
-            fb.fill_rect(ox + 2, oy + 11, 3, 1, light(p.hazard_a, 1, 3));
-            fb.fill_rect(ox + 9, oy + 13, 3, 1, light(p.hazard_a, 1, 3));
+            // A liquid: a dark pool with bright crest *peaks*. The peaks sit over
+            // mono sample columns 0 and 2 and the troughs over 1 and 3, so the top
+            // row alternates bright/dark — a signature no solid tile (with its
+            // uniform bright cap) shares. Low ripples brighten the trough columns
+            // on the bottom row too, so both rows alternate (clearly not ground).
+            fb.fill_rect(ox, oy, TILE, TILE, p.hazard_a); // deep pool
+            fb.fill_rect(ox, oy, 4, 5, p.hazard_b); // crest peak over sample (0,0)
+            fb.fill_rect(ox + 8, oy, 4, 5, p.hazard_b); // crest peak over sample (8,0)
+            fb.fill_rect(ox + 4, oy + 8, 4, 4, light(p.hazard_a, 2, 3)); // ripple at sample (4,8)
+            fb.fill_rect(ox + 12, oy + 8, 4, 4, light(p.hazard_a, 2, 3)); // ripple at sample (12,8)
         }
         TileKind::Deco => {
-            // sparse faint tufts on empty space
+            // Faint background tufts — placed so two sit under mono sample columns
+            // 1 and 3 on the bottom row, giving deco a "  .   ." signature that's
+            // distinct from the (near-empty) hidden block, without being solid.
             let d = p.deco;
-            fb.fill_rect(ox + 2, oy + 10, 1, 6, d);
-            fb.fill_rect(ox + 3, oy + 11, 1, 5, d);
-            fb.fill_rect(ox + 8, oy + 9, 1, 7, light(d, 1, 4));
-            fb.fill_rect(ox + 12, oy + 12, 1, 4, d);
-            fb.fill_rect(ox + 13, oy + 11, 1, 5, d);
+            fb.fill_rect(ox + 4, oy + 6, 2, 10, d); // tuft under sample (4,8)
+            fb.fill_rect(ox + 12, oy + 6, 2, 10, light(d, 1, 4)); // tuft under sample (12,8)
+            fb.fill_rect(ox + 8, oy + 11, 1, 5, d); // a faint sprig (off the sample grid)
         }
     }
 }
@@ -270,13 +268,17 @@ fn draw_brick(fb: &mut Framebuffer, ox: i32, oy: i32, p: &Palette, coin: bool) {
     fb.fill_rect(ox, oy, TILE, 1, light(p.brick, 1, 3)); // top highlight
     let m = p.mortar;
     fb.fill_rect(ox, oy + 7, TILE, 2, m); // mid horizontal seam
-    fb.fill_rect(ox + 7, oy, 2, 7, m); // top course split
+    // Two top-course splits (sample cols 1 & 2 → mortar), so brick reads as a
+    // lattice ":  :" — distinct from a platform's solid top row even in mono.
+    fb.fill_rect(ox + 3, oy, 2, 7, m);
+    fb.fill_rect(ox + 7, oy, 2, 7, m);
     fb.fill_rect(ox + 3, oy + 9, 2, 7, m); // bottom course (offset)
     fb.fill_rect(ox + 11, oy + 9, 2, 7, m);
     if coin {
-        // a bright gold coin — pops against the brick and reads in mono
-        fb.fill_rect(ox + 6, oy + 5, 4, 6, p.block);
-        fb.fill_rect(ox + 7, oy + 6, 2, 4, light(p.block, 1, 2));
+        // a bright gold coin — wide enough to cover mono sample columns 1 AND 2 on
+        // the bottom row, so a coin-brick differs from a plain brick in two cells.
+        fb.fill_rect(ox + 4, oy + 5, 8, 6, p.block);
+        fb.fill_rect(ox + 5, oy + 6, 6, 4, light(p.block, 1, 2));
     }
 }
 
@@ -311,20 +313,65 @@ mod tests {
         sig
     }
 
+    // ---- the REAL mono signature: exactly what `MonoBackend` shows ----
+    // The mono backend samples ONE pixel per character cell at the cell's top-left
+    // (backend::sample with a 4-wide × 2-tall grid over a 16px tile → pixels at
+    // x∈{0,4,8,12}, y∈{0,8}), takes Rec.601 luma, and maps through this 5-level
+    // ramp. The old test block-AVERAGED with a different luma — a proxy that hid
+    // real collisions (e.g. lava vs ground). This mirrors the backend exactly.
+    const RAMP_COARSE: &[u8] = b" .:+#";
+    fn mono_luma(r: u8, g: u8, b: u8) -> u32 {
+        (r as u32 * 299 + g as u32 * 587 + b as u32 * 114) / 1000
+    }
+    fn mono_glyph(l: u32) -> u8 {
+        RAMP_COARSE[(l as usize * (RAMP_COARSE.len() - 1)) / 255]
+    }
+    fn mono_sig(kind: TileKind, theme: Theme) -> [u8; 8] {
+        let p = palette(theme);
+        let mut fb = Framebuffer::new(TILE as usize, TILE as usize);
+        fb.clear(p.sky);
+        draw_tile(&mut fb, 0, 0, kind, &p);
+        let mut sig = [0u8; 8];
+        for cy in 0..2 {
+            for cx in 0..4 {
+                let (x, y) = (cx * 4, cy * 8); // the backend's sample point per cell
+                let i = (y * TILE as usize + x) * 4;
+                sig[cy * 4 + cx] = mono_glyph(mono_luma(fb.px[i], fb.px[i + 1], fb.px[i + 2]));
+            }
+        }
+        sig
+    }
+    fn hamming(a: &[u8; 8], b: &[u8; 8]) -> usize {
+        (0..8).filter(|&i| a[i] != b[i]).count()
+    }
+
     #[test]
-    fn every_kind_has_a_distinct_mono_signature() {
-        // The headline requirement: distinct even in black & white, in EVERY theme.
-        // Quantize each kind's cell-luma signature and assert all nine are mutually
-        // distinct per theme.
-        let quant = |s: [u8; 8]| s.map(|v| v / 24); // coarse, ramp-like buckets
+    #[ignore] // diagnostic: `cargo test dump_mono -- --ignored --nocapture`
+    fn dump_mono() {
         for theme in Theme::ALL {
-            let sigs: Vec<[u8; 8]> = KINDS.iter().map(|&k| quant(signature_in(k, theme))).collect();
+            println!("--- {} ---", theme.name());
+            for k in KINDS {
+                println!("{:>10?}  {:?}", k, String::from_utf8_lossy(&mono_sig(k, theme)));
+            }
+        }
+    }
+
+    #[test]
+    fn mono_tiles_are_visibly_distinct() {
+        // The headline requirement: distinct in real black & white, in EVERY theme.
+        // We require a margin — at least 2 of the 8 cells differ — so no two kinds
+        // are merely borderline-different.
+        for theme in Theme::ALL {
+            let sigs: Vec<[u8; 8]> = KINDS.iter().map(|&k| mono_sig(k, theme)).collect();
             for i in 0..sigs.len() {
                 for j in (i + 1)..sigs.len() {
-                    assert_ne!(
-                        sigs[i], sigs[j],
-                        "tiles {:?} and {:?} look identical in mono ({} theme)",
-                        KINDS[i], KINDS[j], theme.name()
+                    let d = hamming(&sigs[i], &sigs[j]);
+                    assert!(
+                        d >= 2,
+                        "in the {} theme, {:?} and {:?} differ in only {}/8 mono cells:\n  {:?}: {:?}\n  {:?}: {:?}",
+                        theme.name(), KINDS[i], KINDS[j], d,
+                        KINDS[i], String::from_utf8_lossy(&sigs[i]),
+                        KINDS[j], String::from_utf8_lossy(&sigs[j]),
                     );
                 }
             }
