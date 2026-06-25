@@ -326,6 +326,57 @@ mod tests {
         assert!((p.pos.y - 144.0).abs() < 2.0, "rest y was {}", p.pos.y);
     }
 
+    // A wide, flat floor for measuring jump reach (the 20-wide flat_world is too
+    // short for a full running jump).
+    fn long_floor() -> TileMap {
+        let mut m = TileMap::new(80, 16);
+        for x in 0..80 {
+            m.set(x, 12, true); // floor top at y = 12*16 = 192
+        }
+        m
+    }
+
+    // CAMPAIGN_PLAN §5 feel targets: the default params must clear the standard
+    // platforming geometry — a ~4-tile-high obstacle and a ~4-tile gap.
+    #[test]
+    fn default_feel_jumps_about_four_tiles_high() {
+        let map = long_floor();
+        let fp = FeelParams::default();
+        let mut p = Player::new(8.0 * 16.0, 8.0 * 16.0);
+        for _ in 0..120 {
+            p.step(&map, 1.0 / 60.0, 0.0, false, false, false, &fp); // settle onto the floor
+        }
+        let y0 = p.pos.y;
+        let mut min_y = y0;
+        let mut jp = true;
+        for _ in 0..120 {
+            p.step(&map, 1.0 / 60.0, 0.0, jp, true, false, &fp); // jump, holding for max height
+            jp = false;
+            min_y = min_y.min(p.pos.y);
+        }
+        let tiles = (y0 - min_y) / 16.0;
+        assert!(tiles >= 4.0, "a full-hold jump rose only {tiles:.1} tiles (want >= 4)");
+    }
+
+    #[test]
+    fn default_feel_clears_a_four_tile_gap() {
+        let map = long_floor();
+        let fp = FeelParams::default();
+        let mut p = Player::new(8.0 * 16.0, 8.0 * 16.0);
+        for _ in 0..180 {
+            p.step(&map, 1.0 / 60.0, 1.0, false, false, false, &fp); // run up to top speed
+        }
+        let x_launch = p.pos.x;
+        p.step(&map, 1.0 / 60.0, 1.0, true, true, false, &fp); // launch a running jump
+        let mut airborne = 0;
+        while p.state != State::Grounded && airborne < 240 {
+            p.step(&map, 1.0 / 60.0, 1.0, true, false, false, &fp);
+            airborne += 1;
+        }
+        let tiles = (p.pos.x - x_launch) / 16.0;
+        assert!(tiles >= 4.0, "a running jump spanned only {tiles:.1} tiles (want >= 4)");
+    }
+
     #[test]
     fn jump_goes_up_then_returns() {
         let map = flat_world();
