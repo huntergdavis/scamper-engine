@@ -502,6 +502,10 @@ fn run_play(path: &str) {
                 }
                 // Step creatures/items and resolve pounces, pickups, and hits.
                 let hits = step_actors(&mut actors, &world.map, &mut sim.player, &mut kibble, &mut power);
+                let fxclock = sim.clock();
+                for &(e, x, y) in &hits.fx {
+                    sim.fx.spawn(e, x, y, fxclock); // pops / pickups feedback
+                }
                 step_projectiles(&mut projectiles, &mut actors, &world.map, &mut kibble);
                 emit_thrower_sticks(&actors, &mut hostiles, &sim.player);
                 let stick_hit = step_hostiles(&mut hostiles, &world.map, &sim.player);
@@ -804,6 +808,8 @@ struct Hits {
     hurt: bool,  // a non-pounce creature touch
     plug: bool,  // pulled the bath plug → win
     oneup: bool, // collected a Lucky Squeaky → extra life
+    /// Effects to spawn (clip, world center-x, world top-y) for pops / pickups.
+    fx: Vec<(&'static scamper::effects::Effect, f64, f64)>,
 }
 
 fn step_actors(actors: &mut [Actor], map: &TileMap, player: &mut Player, kibble: &mut u32, power: &mut Power) -> Hits {
@@ -818,6 +824,7 @@ fn step_actors(actors: &mut [Actor], map: &TileMap, player: &mut Player, kibble:
         .filter(|a| a.mode == Mode::ShellRoll && a.mob.alive)
         .map(|a| (a.mob.pos.x, a.mob.pos.y, a.mob.w, a.mob.h))
         .collect();
+    let mut hits = Hits::default();
     if !shells.is_empty() {
         for a in actors.iter_mut() {
             if a.mob.alive && !a.item && a.mode == Mode::Walk {
@@ -825,13 +832,13 @@ fn step_actors(actors: &mut [Actor], map: &TileMap, player: &mut Player, kibble:
                 if shells.iter().any(|&(sx, sy, sw, sh)| aabb_overlap(sx, sy, sw, sh, bx, by, bw, bh)) {
                     a.mob.alive = false;
                     *kibble += 2;
+                    hits.fx.push((&scamper::effects::BOP, bx + bw / 2.0, by));
                 }
             }
         }
     }
 
     let (px, py, pw, ph, pvy) = (player.pos.x, player.pos.y, player.w, player.h, player.vel.y);
-    let mut hits = Hits::default();
     for a in actors.iter_mut() {
         if !a.mob.alive {
             continue;
@@ -894,18 +901,22 @@ fn step_actors(actors: &mut [Actor], map: &TileMap, player: &mut Player, kibble:
             "big_kibble" if a.item => {
                 a.mob.alive = false;
                 *power = if *power == Power::Small { Power::Big } else { *power };
+                hits.fx.push((&scamper::effects::SPARKLE, bx + bw / 2.0, by));
             }
             "bubble_bone" if a.item => {
                 a.mob.alive = false;
                 *power = Power::Bubble;
+                hits.fx.push((&scamper::effects::SPARKLE, bx + bw / 2.0, by));
             }
             "lucky_squeaky" if a.item => {
                 a.mob.alive = false;
                 hits.oneup = true; // extra life
+                hits.fx.push((&scamper::effects::SPARKLE, bx + bw / 2.0, by));
             }
             _ if a.item => {
                 a.mob.alive = false;
                 *kibble += 1;
+                hits.fx.push((&scamper::effects::SPARKLE, bx + bw / 2.0, by));
             }
             // A normal creature: pounce pops it into a treat; a side touch hurts.
             _ => {
@@ -913,6 +924,7 @@ fn step_actors(actors: &mut [Actor], map: &TileMap, player: &mut Player, kibble:
                     a.mob.alive = false;
                     *kibble += 2;
                     player.vel.y = POUNCE_BOUNCE;
+                    hits.fx.push((&scamper::effects::BOP, bx + bw / 2.0, by)); // bopped a critter
                 } else {
                     hits.hurt = true;
                 }
