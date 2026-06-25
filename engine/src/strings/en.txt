@@ -1,0 +1,12 @@
+# English strings catalog. Format: `key = value` (one per line; `#` comments and
+# blank lines ignored). To add a language, drop a sibling file (e.g. `fr.txt`)
+# with the same keys and wire a `Lang` arm in strings.rs.
+
+# Effect word-pops — short shouts that burst over the action.
+fx.bonk = BONK!
+fx.woah = WOAH!
+fx.pop = POP!
+fx.yum = YUM!
+fx.wahoo = WAHOO!
+fx.ouch = OUCH!
+fx.oneup = 1-UP!

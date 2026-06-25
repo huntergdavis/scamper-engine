@@ -133,15 +133,33 @@ struct Active {
     start: u64,
 }
 
+/// A floating word shout ("BONK!", "WOAH!") — drawn like an effect but carrying a
+/// translatable text line (see [`crate::strings`]) rather than ASCII-art frames.
+/// It drifts upward as it ages, then vanishes.
+struct WordPop {
+    text: &'static str,
+    tint: (u8, u8, u8),
+    x: f64, // world anchor: horizontal center
+    y: f64, // world anchor: baseline at spawn
+    start: u64,
+}
+
+/// Word pops play at this cadence for this many frames (≈ lifetime in seconds =
+/// frames / fps), rising `WORD_RISE` px per frame.
+const WORD_FPS: u32 = 12;
+const WORD_FRAMES: u64 = 9;
+const WORD_RISE: f64 = 1.6;
+
 /// The set of currently-playing effect instances.
 #[derive(Default)]
 pub struct Effects {
     active: Vec<Active>,
+    words: Vec<WordPop>,
 }
 
 impl Effects {
     pub fn new() -> Self {
-        Effects { active: Vec::new() }
+        Effects { active: Vec::new(), words: Vec::new() }
     }
 
     /// Spawn `fx` anchored at world point (`x`, `y`) (horizontal center, top).
@@ -149,16 +167,24 @@ impl Effects {
         self.active.push(Active { fx, x, y, start: now });
     }
 
-    /// Drop effects whose clip has finished.
+    /// Spawn a floating word shout (e.g. `strings::t("fx.bonk")`) in `tint`,
+    /// centered at world point (`x`, `y`). It rises and fades on its own.
+    pub fn spawn_word(&mut self, text: &'static str, tint: (u8, u8, u8), x: f64, y: f64, now: u64) {
+        self.words.push(WordPop { text, tint, x, y, start: now });
+    }
+
+    /// Drop effects and word pops whose lifetime has finished.
     pub fn update(&mut self, now: u64) {
         self.active.retain(|a| {
             let step = NS_PER_SEC / a.fx.fps.max(1) as u64;
             now.saturating_sub(a.start) < a.fx.frames.len() as u64 * step
         });
+        let wstep = NS_PER_SEC / WORD_FPS as u64;
+        self.words.retain(|w| now.saturating_sub(w.start) < WORD_FRAMES * wstep);
     }
 
     pub fn is_empty(&self) -> bool {
-        self.active.is_empty()
+        self.active.is_empty() && self.words.is_empty()
     }
 
     /// For each live effect: (current frame, tint, z, center-x, top-y in world px).
@@ -170,6 +196,22 @@ impl Effects {
                 let step = NS_PER_SEC / a.fx.fps.max(1) as u64;
                 let i = ((now.saturating_sub(a.start) / step) as usize).min(a.fx.frames.len() - 1);
                 (a.fx.frames[i], a.fx.tint, a.fx.z, a.x, a.y)
+            })
+            .collect()
+    }
+
+    /// Live word pops: (text, tint, z, center-x, top-y in world px). They rise as
+    /// they age and draw in front of everything (`z` is high).
+    pub fn render_words(&self, now: u64) -> Vec<(&'static str, (u8, u8, u8), i32, f64, f64)> {
+        let step = NS_PER_SEC / WORD_FPS as u64;
+        self.words
+            .iter()
+            .filter_map(|w| {
+                let frame = now.saturating_sub(w.start) / step;
+                if frame >= WORD_FRAMES {
+                    return None;
+                }
+                Some((w.text, w.tint, 1500, w.x, w.y - frame as f64 * WORD_RISE))
             })
             .collect()
     }
@@ -189,6 +231,24 @@ mod tests {
         assert!(!fx.is_empty(), "still playing mid-clip");
         fx.update(life + 1);
         assert!(fx.is_empty(), "should be gone after the clip ends");
+    }
+
+    #[test]
+    fn word_pops_rise_then_expire() {
+        let mut fx = Effects::new();
+        fx.spawn_word("BONK!", (255, 255, 255), 100.0, 50.0, 0);
+        let r0 = fx.render_words(0);
+        assert_eq!(r0.len(), 1);
+        assert_eq!(r0[0].0, "BONK!");
+        assert_eq!((r0[0].3, r0[0].4), (100.0, 50.0), "starts at its anchor");
+        // A few frames later it has drifted upward (smaller y).
+        let step = NS_PER_SEC / WORD_FPS as u64;
+        let later = fx.render_words(step * 3);
+        assert!(later[0].4 < 50.0, "word rises as it ages");
+        // After its lifetime it's gone.
+        fx.update(step * (WORD_FRAMES + 1));
+        assert!(fx.is_empty());
+        assert!(fx.render_words(step * (WORD_FRAMES + 1)).is_empty());
     }
 
     #[test]

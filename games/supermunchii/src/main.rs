@@ -519,13 +519,16 @@ fn run_play(path: &str) {
                         // A brick shatters (scuff burst) and may drop a coin.
                         Bonk::Broke(item) => {
                             sim.fx.spawn(&scamper::effects::BONK, bxw, byw, now);
+                            sim.fx.spawn_word(scamper::strings::t("fx.bonk"), (255, 236, 150), bxw, byw - 6.0, now);
                             item
                         }
                         // A question block coughs up its contents and stays.
                         Bonk::Released(item) => Some(item),
                         // Hit a solid that won't budge → a startled exclamation.
                         Bonk::Nothing => {
-                            sim.fx.spawn(&scamper::effects::BANG, sim.player.pos.x + sim.player.w / 2.0, sim.player.pos.y - 6.0, now);
+                            let hx = sim.player.pos.x + sim.player.w / 2.0;
+                            sim.fx.spawn(&scamper::effects::BANG, hx, sim.player.pos.y - 6.0, now);
+                            sim.fx.spawn_word(scamper::strings::t("fx.woah"), (255, 232, 120), hx, sim.player.pos.y - 10.0, now);
                             None
                         }
                     };
@@ -556,16 +559,24 @@ fn run_play(path: &str) {
                 let fxclock = sim.clock();
                 for &(e, x, y) in &hits.fx {
                     sim.fx.spawn(e, x, y, fxclock); // pops / pickups feedback
+                    if e.name == "bop" {
+                        sim.fx.spawn_word(scamper::strings::t("fx.pop"), (255, 236, 150), x, y - 6.0, fxclock);
+                    }
                 }
                 step_projectiles(&mut projectiles, &mut actors, &world.map, &mut kibble);
                 emit_thrower_sticks(&actors, &mut hostiles, &sim.player);
                 let stick_hit = step_hostiles(&mut hostiles, &world.map, &sim.player);
+                let mut got_1up = hits.oneup;
                 if hits.oneup {
                     lives += 1;
                 }
                 while kibble >= next_1up {
                     lives += 1; // 100 kibble = an extra life
                     next_1up += 100;
+                    got_1up = true;
+                }
+                if got_1up {
+                    sim.fx.spawn_word(scamper::strings::t("fx.oneup"), (140, 240, 150), sim.player.pos.x + sim.player.w / 2.0, sim.player.pos.y - 8.0, fxclock);
                 }
                 if hits.plug && !won {
                     won = true; // pulled the bath plug → level complete
@@ -1183,6 +1194,7 @@ fn draw_play_frame(
 
     // Transient effects (puffs, bonks, pops, sparkles) — world-anchored in sim.fx.
     let fxr = sim.fx.render(sim.clock());
+    let words = sim.fx.render_words(sim.clock()); // floating "BONK!"/"WOAH!" shouts
 
     if backend.draws_overlay() {
         // character tiers: stamp each sprite's glyphs (one per cell) over the scene
@@ -1206,6 +1218,12 @@ fn draw_play_frame(
             let ey = sy(*fxy);
             overlays.push(Overlay { lines: lns, col: (ex / cpw).round() as i32, row: (ey / cph).round() as i32, tint: Some(*tint), palette: None, z: 1000 + z });
         }
+        // Word shouts (single text line, centered, drawn above everything).
+        let word_lines: Vec<Vec<String>> = words.iter().map(|(t, ..)| vec![t.to_string()]).collect();
+        for ((text, tint, z, wx, wy), lns) in words.iter().zip(word_lines.iter()) {
+            let ex = sx(*wx) - text.chars().count() as f64 * cpw / 2.0;
+            overlays.push(Overlay { lines: lns, col: (ex / cpw).round() as i32, row: (sy(*wy) / cph).round() as i32, tint: Some(*tint), palette: None, z: 1000 + z });
+        }
         backend.present(out, fb, cols, rows, full_redraw, &overlays);
     } else {
         // pixel tiers: rasterize each sprite into the framebuffer in its colors
@@ -1214,6 +1232,9 @@ fn draw_play_frame(
         }
         for &(frame, tint, _z, fxx, fxy) in &fxr {
             draw_effect_pixels(fb, frame, tint, sx(fxx), sy(fxy), cpw, cph);
+        }
+        for &(text, tint, _z, wx, wy) in &words {
+            draw_effect_pixels(fb, &[text], tint, sx(wx) - text.chars().count() as f64 * cpw / 2.0, sy(wy), cpw, cph);
         }
         backend.present(out, fb, cols, rows, full_redraw, &[]);
     }
