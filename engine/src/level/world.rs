@@ -232,6 +232,77 @@ pub fn camera(player_cx: f64, player_cy: f64, view_w: f64, view_h: f64, level_w:
     (cx, cy)
 }
 
+/// A clamped side-scroll camera with integer **"tiny-world" magnification**.
+///
+/// `zoom` magnifies the *environment*, not the characters. Render the world into
+/// a buffer of `view_w × view_h` px — `1/zoom` of the screen — then blow it up
+/// ×`zoom` with [`Framebuffer::upscale_from`](crate::Framebuffer::upscale_from).
+/// Position sprites with [`View::sx`]/[`View::sy`] and draw them at a *constant*
+/// size: at `zoom = 4` a normal hero looks tiny against giant tiles; `zoom = 1` is
+/// the ordinary 1:1 view. This is the whole trick behind shrinking the world on a
+/// power-up instead of growing the hero.
+///
+/// ```
+/// use scamper::level::View;
+/// let v = View::centered(500.0, 50.0, 320, 240, 4000.0, 240.0, 4);
+/// assert_eq!((v.view_w, v.view_h), (80, 60)); // 1/4 of the screen, in world px
+/// // 10 world px from the camera corner → 10 × zoom = 40 screen px.
+/// assert!((v.sx(v.cam_x + 10.0) - 40.0).abs() < 1e-9);
+/// ```
+#[derive(Clone, Copy, Debug)]
+pub struct View {
+    /// World-px coordinate shown at the screen's top-left.
+    pub cam_x: f64,
+    pub cam_y: f64,
+    /// Magnification of the environment (≥ 1).
+    pub zoom: usize,
+    /// Size of the world slice shown, in world px (= screen px ÷ zoom).
+    pub view_w: usize,
+    pub view_h: usize,
+}
+
+impl View {
+    /// A view centered on world point (`cx`,`cy`), filling a `screen_w × screen_h`
+    /// px target at `zoom`×, clamped to a `world_w × world_h` level.
+    pub fn centered(cx: f64, cy: f64, screen_w: usize, screen_h: usize, world_w: f64, world_h: f64, zoom: usize) -> View {
+        let zoom = zoom.max(1);
+        let view_w = (screen_w / zoom).max(1);
+        let view_h = (screen_h / zoom).max(1);
+        let (cam_x, cam_y) = camera(cx, cy, view_w as f64, view_h as f64, world_w, world_h);
+        View { cam_x, cam_y, zoom, view_w, view_h }
+    }
+
+    /// Map a world x to its on-screen pixel (offset from the camera, magnified).
+    #[inline]
+    pub fn sx(&self, wx: f64) -> f64 {
+        (wx - self.cam_x) * self.zoom as f64
+    }
+    /// Map a world y to its on-screen pixel.
+    #[inline]
+    pub fn sy(&self, wy: f64) -> f64 {
+        (wy - self.cam_y) * self.zoom as f64
+    }
+
+    /// Floor the camera to whole world px — for smooth-scrolling pixel backends.
+    pub fn snap_pixels(&mut self) {
+        self.cam_x = self.cam_x.floor();
+        self.cam_y = self.cam_y.floor();
+    }
+
+    /// Snap the camera to the *pre-magnification* cell sub-grid, so cell-sampling
+    /// text backends don't alias static tiles while scrolling. `cell_w`/`cell_h`
+    /// are screen px per terminal cell (the grid is those ÷ zoom in world px).
+    pub fn snap_cells(&mut self, cell_w: f64, cell_h: f64) {
+        let (gw, gh) = (cell_w / self.zoom as f64, cell_h / self.zoom as f64);
+        if gw > 0.0 {
+            self.cam_x = (self.cam_x / gw).floor() * gw;
+        }
+        if gh > 0.0 {
+            self.cam_y = (self.cam_y / gh).floor() * gh;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

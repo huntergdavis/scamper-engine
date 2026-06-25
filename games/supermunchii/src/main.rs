@@ -9,7 +9,7 @@ use scamper::framebuffer::{Framebuffer, Rgba};
 use scamper::input::{Input, K_DOWN, K_ESC, K_HELP, K_N, K_Q, K_S, K_T, K_TAB, K_Y};
 use scamper::level::art::{self, Theme};
 use scamper::level::ir::Level;
-use scamper::level::world::{camera, Bonk, LevelWorld};
+use scamper::level::world::{Bonk, LevelWorld};
 use scamper::math::Vec2;
 use scamper::mob::{aabb_overlap, stomp, Gait, Mob};
 use scamper::player::{FeelParams, Player, State};
@@ -1050,31 +1050,25 @@ fn draw_play_frame(
     zoom: usize,
 ) {
     let zoom = zoom.max(1);
-    let zf = zoom as f64;
     let pal = art::palette(world.theme);
     let pcx = sim.player.pos.x + sim.player.w / 2.0;
     let pcy = sim.player.pos.y + sim.player.h / 2.0;
-    // When zoomed in, the visible slice of the world is 1/zoom of the screen, so
-    // the camera operates on that smaller world viewport (it follows Munchii more
-    // tightly). The environment is rendered into a small buffer at 1× and then
-    // magnified ×zoom; only the tiles grow, so a constant-size Munchii is dwarfed.
-    let (view_w, view_h) = ((fb_w / zoom).max(1), (fb_h / zoom).max(1));
-    let (cam_x, cam_y) = camera(pcx, pcy, view_w as f64, view_h as f64, world.px_w(), world.px_h());
     let cpw = fb_w as f64 / cols.max(1) as f64; // px per terminal cell (w)
     let cph = fb_h as f64 / rows.max(1) as f64; // px per terminal cell (h)
-    // Snap the camera so tiles land on the same sample sub-grid. Pixel backends
-    // (Kitty) scroll per-pixel; cell-sampling backends must snap to a whole *screen*
-    // cell — which, in the pre-magnified world buffer, is cpw/zoom (see pixel_exact).
-    let (cam_x, cam_y) = if backend.pixel_exact() {
-        (cam_x.floor(), cam_y.floor())
+    // The tiny-world camera (see engine `View`): it follows Munchii over a 1/zoom
+    // slice of the world, which is rendered small and magnified — only the tiles
+    // grow, so a constant-size Munchii is dwarfed. Pixel backends scroll per-pixel;
+    // cell-sampling backends snap to the pre-magnification cell grid (no flicker).
+    let mut view = scamper::level::View::centered(pcx, pcy, fb_w, fb_h, world.px_w(), world.px_h(), zoom);
+    if backend.pixel_exact() {
+        view.snap_pixels();
     } else {
-        let (gw, gh) = (cpw / zf, cph / zf);
-        ((cam_x / gw).floor() * gw, (cam_y / gh).floor() * gh)
-    };
-    // Map a world point to its on-screen pixel (the environment is magnified, so
-    // world offsets from the camera scale by zoom).
-    let sx = |wx: f64| (wx - cam_x) * zf;
-    let sy = |wy: f64| (wy - cam_y) * zf;
+        view.snap_cells(cpw, cph);
+    }
+    let (view_w, view_h) = (view.view_w, view.view_h);
+    let (cam_x, cam_y) = (view.cam_x, view.cam_y);
+    let sx = |wx: f64| view.sx(wx);
+    let sy = |wy: f64| view.sy(wy);
 
     // Render the environment (tiles + goal) into a small buffer, then magnify.
     // (At zoom 1 the buffer is unused — a 1×1 placeholder keeps the binding live.)
