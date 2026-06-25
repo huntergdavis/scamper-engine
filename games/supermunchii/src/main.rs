@@ -670,6 +670,10 @@ fn run_play(path: &str) {
                     sim.fx.spawn(&scamper::effects::DUST, sim.player.pos.x + sim.player.w / 2.0, sim.player.pos.y + sim.player.h, now);
                     shake.bump(0.2);
                 }
+                // Leaving the ground upward (a jump) → a little kick-off puff.
+                if !pre_air && !sim.player.grounded && sim.player.vel.y < 0.0 {
+                    sim.fx.spawn(&scamper::effects::DUST, sim.player.pos.x + sim.player.w / 2.0, sim.player.pos.y + sim.player.h, now);
+                }
                 if sim.player.grounded {
                     combo = 0; // touching down ends the air combo
                     // Standing on a crumbling plank starts it shaking.
