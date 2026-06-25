@@ -261,30 +261,58 @@ debug_menu() {
     done
 }
 
+# A single sample game's actions. Super Munchii for now; add a function like this
+# per game and list it in games_menu as the engine grows more samples.
+munchii_menu() {
+    while true; do
+        menu "Super Munchii  (sample game)" \
+            "megalevel  (random stitch \xc2\xb7 red-team romp)" \
+            "play a level  (campaign)" \
+            "sandbox arena  (movement playground)" \
+            "browse imported levels" \
+            "back"
+        case "$MENU_SEL" in
+            0) play_mega ;;
+            1) play_level ;;
+            2) run_game ;;
+            3) import_browser ;;
+            *) return ;;
+        esac
+    done
+}
+
+# The sample-games picker — one entry per game built on the engine.
+games_menu() {
+    while true; do
+        menu "SCAMPER \xc2\xb7 sample games" \
+            "Super Munchii  (platformer)" \
+            "back"
+        case "$MENU_SEL" in
+            0) munchii_menu ;;
+            *) return ;;
+        esac
+    done
+}
+
 interactive_menu() {
     cargo build "${profile_args[@]}"
     while true; do
-        menu "SCAMPER  (munchii)" \
-            "megalevel  (random stitch \xc2\xb7 red-team romp)" \
-            "play the game  (sandbox arena)" \
-            "play a level  (campaign)" \
-            "browse imported levels" \
-            "record a run" \
-            "replay a run" \
+        # Top level = the engine: its sample games, plus the shared dev tools.
+        menu "SCAMPER  (a terminal 2D game engine)" \
+            "sample games" \
             "sprite viewer  (Tab cycles backends)" \
             "tile viewer  (Tab gfx \xc2\xb7 space tile \xc2\xb7 t theme)" \
+            "record a run" \
+            "replay a run" \
             "debug tools" \
             "quit"
         case "$MENU_SEL" in
-            0) play_mega ;;
-            1) run_game ;;
-            2) play_level ;;
-            3) import_browser ;;
-            4) record_run ;;
-            5) replay_browser ;;
-            6) "target/$profile_dir/sprite-lab" ;;
-            7) "target/$profile_dir/tile-lab" ;;
-            8) debug_menu ;;
+            0) games_menu ;;
+            1) "target/$profile_dir/sprite-lab" ;;
+            2) "target/$profile_dir/tile-lab" ;;
+            3) record_run ;;
+            4) replay_browser ;;
+            5) debug_menu ;;
             *) break ;;
         esac
     done
