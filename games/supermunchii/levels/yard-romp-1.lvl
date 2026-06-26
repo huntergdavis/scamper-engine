@@ -6,8 +6,8 @@ spawn 2 12
 goal flag 62 3
 medals 18 32
 # --- ground: two tiles thick, with a 4-wide pit at x28..31 ---
-R 0 13 28 ground
-R 0 14 28 ground
+R 0 13 30 ground
+R 0 14 30 ground
 R 32 13 32 ground
 R 32 14 32 ground
 # --- a crumbling-plank shelf (optional high route; collapses underfoot) ---

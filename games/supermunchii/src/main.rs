@@ -459,8 +459,7 @@ fn run_play(path: &str) {
     let mut boss_cd: u32 = 0; // boss i-frames between pounces (ticks)
     let mut boss_t: u64 = 0; // last boss telegraph emit (ns)
     const GLIDE_FALL: f64 = 72.0; // capped descent (px/s) while gliding
-    let base_max_run = sim.fp.max_run;
-    let base_run_accel = sim.fp.run_accel;
+    let base_fp = sim.fp; // unscaled feel; per-frame we scale it by 1/size-zoom
     let mut kibble: u32 = 0;
     let mut next_1up: u32 = 100; // every 100 kibble → an extra life
     let mut lives: i32 = 3;
@@ -619,24 +618,27 @@ fn run_play(path: &str) {
         if assist {
             invincible = invincible.max(3); // practice mode keeps the star shield up
         }
-        // Zoomies Treat: a timed speed burst. Boost top speed + accel while it
-        // lasts, and streak a dash trail behind Munchii (a delighter that also
-        // signals the buff). Restores the base feel when it runs out.
+        // Scale the whole feel by 1/size-zoom so on-screen motion is consistent at
+        // every size: a tiny Munchii in a 4× world moves/jumps the same *apparent*
+        // amount as a big one (he just covers fewer world tiles — short reach is the
+        // cost of being small). Then layer the buffs on the scaled base.
+        let fk = 1.0 / power.zoom() as f64;
+        sim.fp = base_fp.scaled(fk);
+        let scaled_max_run = sim.fp.max_run; // the size-scaled top speed (for buffs)
+        // Zoomies Treat: a timed speed burst (+ dash-trail delighter).
         if zoomies > 0 {
-            sim.fp.max_run = base_max_run * 1.6;
-            sim.fp.run_accel = base_run_accel * 1.7;
-            if sim.player.grounded && sim.player.vel.x.abs() > base_max_run && now.saturating_sub(dash_t) > 70 * 1_000_000 {
+            sim.fp.max_run = scaled_max_run * 1.6;
+            sim.fp.run_accel *= 1.7;
+            if sim.player.grounded && sim.player.vel.x.abs() > scaled_max_run && now.saturating_sub(dash_t) > 70 * 1_000_000 {
                 let behind = sim.player.pos.x + sim.player.w / 2.0 - sim.player.facing as f64 * sim.player.w;
                 sim.fx.spawn(&scamper::effects::DASH, behind, sim.player.pos.y + sim.player.h * 0.4, now);
                 dash_t = now;
             }
-        } else {
-            sim.fp.max_run = base_max_run;
-            sim.fp.run_accel = base_run_accel;
         }
-        // A dash in progress overrides the cap so the burst isn't clamped away.
+        // A dash in progress overrides the cap so the burst isn't clamped away
+        // (also size-scaled, so the dash distance looks the same at every size).
         if dashing > 0 {
-            sim.fp.max_run = sim.fp.max_run.max(DASH_SPEED);
+            sim.fp.max_run = sim.fp.max_run.max(DASH_SPEED * fk);
         }
         // Wall-slide friction sparks — surface the engine's wall-slide/jump in play.
         if sim.player.state == State::WallSliding && now.saturating_sub(wallspark_t) > 60 * 1_000_000 {
@@ -1422,12 +1424,13 @@ fn build_actors(world: &LevelWorld) -> Vec<Actor> {
         .collect()
 }
 
-/// Put a `?` block holding `item` ~3 tiles above the ground in column `cx` (a
-/// jump-bonk away), if there's a clear, reachable spot there. Returns success.
+/// Put a `?` block holding `item` 2 tiles above the ground in column `cx` (a
+/// jump-bonk away once you've grown a little), if there's a clear spot. Returns
+/// success.
 fn place_powerup_block(world: &mut LevelWorld, cx: i32, item: &str) -> bool {
     let surface = (0..world.h).find(|&cy| world.map.is_solid(cx, cy));
     if let Some(sy) = surface {
-        let by = sy - 3;
+        let by = sy - 2;
         if by >= 1 && !world.map.is_solid(cx, by) && !world.is_block(cx, by) {
             world.add_question_block(cx, by, item);
             return true;
@@ -1436,25 +1439,38 @@ fn place_powerup_block(world: &mut LevelWorld, cx: i32, item: &str) -> bool {
     false
 }
 
-/// Scatter a handful of power-up `?` blocks through a level — deterministic per
-/// `seed` (so a level plays the same each time), always landing one in the opening
-/// scene. The size power-ups (▲ grow / ▼ shrink) dominate the pool.
+/// Drop a loose `item` standing on the ground in column `cx` (walk-into; reachable
+/// even when tiny), if the surface there has headroom. Returns success.
+fn place_ground_item(world: &mut LevelWorld, cx: i32, item: &str) -> bool {
+    let surface = (0..world.h).find(|&cy| world.map.is_solid(cx, cy));
+    if let Some(sy) = surface {
+        if sy >= 1 && !world.map.is_solid(cx, sy - 1) {
+            world.ents.push(scamper::level::world::Ent { kind: item.to_string(), cx, cy: sy - 1 });
+            return true;
+        }
+    }
+    false
+}
+
+/// Scatter a handful of power-ups through a level — deterministic per `seed` (so a
+/// level plays the same each run). The opening always has a ground-level ▲ grow
+/// (reachable while tiny, so you can grow at once); the rest are `?` blocks. Size
+/// power-ups (grow/shrink/super) dominate the pool.
 fn scatter_powerups(world: &mut LevelWorld, seed: u64) {
-    let pool = ["grow", "shrink", "grow", "shrink", "super", "star_bone", "zoomies_treat"];
+    let pool = ["grow", "shrink", "grow", "super", "star_bone", "zoomies_treat"];
     let mut rng = seed | 1;
     let mut next = move || {
         rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
         (rng >> 33) as usize
     };
-    // Guaranteed: one in the opening (scan the first dozen columns past spawn).
+    // Guaranteed opener: a ground grow a few steps past spawn (walk into it).
     let spawn_cx = (world.spawn.0 / TILE) as i32;
-    for off in 3..15 {
-        let item = pool[next() % pool.len()];
-        if place_powerup_block(world, spawn_cx + off, item) {
+    for off in 2..12 {
+        if place_ground_item(world, spawn_cx + off, "grow") {
             break;
         }
     }
-    // Plus a few more scattered across the rest of the level.
+    // Plus a few `?` blocks scattered across the rest of the level.
     for _ in 0..4 {
         let cx = 6 + (next() as i32 % (world.w - 10).max(1));
         let item = pool[next() % pool.len()];
@@ -3925,19 +3941,18 @@ mod tests {
         l.spawn = (2, 11);
         l.tiles.push(TileSpan { x: 0, y: 12, len: 80, kind: TileKind::Ground });
         let mut world = LevelWorld::from_level(&l);
-        let before = world.blocks.len();
+        let blocks_before = world.blocks.len();
         scatter_powerups(&mut world, level_seed(&l.id));
-        let added = world.blocks.len() - before;
+        // A handful of `?` blocks were scattered, each holding a real power-up.
+        let added = world.blocks.len() - blocks_before;
         assert!(added >= 2, "scatters several blocks (added {added})");
-        // One must sit in the opening — within ~15 tiles past the spawn column.
-        let scx = (world.spawn.0 / TILE) as i32;
-        let near = world.blocks.keys().any(|&(cx, _)| cx > scx && cx <= scx + 16);
-        assert!(near, "a power-up block lands in the first scene");
-        // Every added block holds a real power-up and is reachable (not in terrain).
-        for (&(cx, cy), b) in &world.blocks {
-            assert!(b.contains.is_some(), "block at {cx},{cy} holds an item");
-            assert!(!world.map.is_solid(cx, cy + 1) || cy < 12, "sits above ground");
+        for (_, b) in &world.blocks {
+            assert!(b.contains.is_some(), "every scattered block holds an item");
         }
+        // The opening always has a ground-level grow within reach of a tiny spawn.
+        let scx = (world.spawn.0 / TILE) as i32;
+        let opener = world.ents.iter().find(|e| e.kind == "grow").expect("a ground grow is placed");
+        assert!(opener.cx > scx && opener.cx <= scx + 12, "the grow lands in the opening scene");
     }
 
     /// The ▲ grow power-up steps size up (Small→Big); ▼ shrink steps it down.

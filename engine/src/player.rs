@@ -43,6 +43,36 @@ pub struct FeelParams {
     pub down_fast_fall: f64,
 }
 
+impl FeelParams {
+    /// Scale every *spatial* quantity (velocities in px/s and accelerations in
+    /// px/s²) by `k`, leaving timers and counts alone. Because positions integrate
+    /// as `v·t + ½·a·t²`, scaling both velocity and acceleration by `k` scales the
+    /// whole trajectory by `k` over the *same* time — so a game can render a
+    /// magnified world (zoom z) and run the player at `k = 1/z` to keep on-screen
+    /// motion identical across sizes (a tiny hero in a giant world doesn't look
+    /// like he's sprinting). Jumps cover `k×` the world distance.
+    pub fn scaled(self, k: f64) -> FeelParams {
+        FeelParams {
+            gravity_rise: self.gravity_rise * k,
+            gravity_fall: self.gravity_fall * k,
+            max_fall: self.max_fall * k,
+            run_accel: self.run_accel * k,
+            turn_accel: self.turn_accel * k,
+            air_accel: self.air_accel * k,
+            ground_friction: self.ground_friction * k,
+            air_friction: self.air_friction * k,
+            max_run: self.max_run * k,
+            jump_speed: self.jump_speed * k,
+            wall_slide_max_fall: self.wall_slide_max_fall * k,
+            wall_jump_vx: self.wall_jump_vx * k,
+            wall_jump_vy: self.wall_jump_vy * k,
+            down_fast_fall: self.down_fast_fall * k,
+            // timers/counts are unitless in time — unchanged
+            ..self
+        }
+    }
+}
+
 impl Default for FeelParams {
     fn default() -> Self {
         FeelParams {
