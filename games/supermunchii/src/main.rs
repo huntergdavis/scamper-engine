@@ -6,7 +6,7 @@ use scamper::backend::{AsciiBackend, Backend, KittyBackend, MonoBackend, Overlay
 use scamper::capture::{self, InputFrame, Recording, Snapshots};
 use scamper::munchii;
 use scamper::framebuffer::{Framebuffer, Rgba};
-use scamper::input::{Input, K_DOWN, K_ESC, K_G, K_HELP, K_N, K_P, K_Q, K_S, K_T, K_TAB, K_X, K_Y};
+use scamper::input::{Input, K_1, K_2, K_3, K_4, K_DOWN, K_ESC, K_G, K_HELP, K_N, K_P, K_Q, K_S, K_T, K_TAB, K_X, K_Y};
 use scamper::level::art::{self, Theme};
 use scamper::level::ir::Level;
 use scamper::level::world::{Bonk, LevelWorld};
@@ -548,6 +548,24 @@ fn run_play(path: &str) {
             assist = !assist; // practice mode: invulnerability for learning a level
             full_redraw = true;
         }
+        // Test shortcuts: 1/2/3/4 jump Munchii straight to a size (tiny→huge).
+        if !help {
+            let pick = if input.pressed(K_1) {
+                Some(Power::Tiny)
+            } else if input.pressed(K_2) {
+                Some(Power::Small)
+            } else if input.pressed(K_3) {
+                Some(Power::Big)
+            } else if input.pressed(K_4) {
+                Some(Power::Huge)
+            } else {
+                None
+            };
+            if let Some(p) = pick {
+                power = p;
+                full_redraw = true;
+            }
+        }
         if input.pressed(K_TAB) {
             switch_backend(&mut backend);
             full_redraw = true;
@@ -915,7 +933,7 @@ fn run_play(path: &str) {
                 } else if (hits.hurt || stick_hit) && invincible == 0 {
                     if has_bubble {
                         has_bubble = false; // a hit knocks off the throw gear first
-                    } else if power == Power::Small {
+                    } else if power == Power::Tiny {
                         lives -= 1; // wipeout → lose a life, back to the last checkpoint
                         sim = sim_at(respawn);
                     } else {
@@ -1176,45 +1194,44 @@ fn run_play(path: &str) {
 /// separate flag — size and gear are orthogonal now.)
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Power {
+    Tiny,
     Small,
     Big,
     Huge,
 }
 
 impl Power {
-    /// The size after taking a hit (Huge→Big→Small).
+    /// Sizes smallest→largest, for stepping.
+    const LADDER: [Power; 4] = [Power::Tiny, Power::Small, Power::Big, Power::Huge];
+    fn rung(self) -> usize {
+        Self::LADDER.iter().position(|&p| p == self).unwrap_or(1)
+    }
+    /// The size after taking a hit — one rung down.
     fn dropped(self) -> Power {
-        match self {
-            Power::Huge => Power::Big,
-            _ => Power::Small,
-        }
+        Self::LADDER[self.rung().saturating_sub(1)]
     }
-    /// Size step UP (the ▲ grow power-up): Small→Big→Huge, capping at Huge.
+    /// Size step UP (the ▲ grow power-up), capping at Huge.
     fn grown(self) -> Power {
-        match self {
-            Power::Small => Power::Big,
-            _ => Power::Huge,
-        }
+        Self::LADDER[(self.rung() + 1).min(Self::LADDER.len() - 1)]
     }
-    /// Size step DOWN (the ▼ shrink power-up): Huge→Big→Small.
+    /// Size step DOWN (the ▼ shrink power-up), bottoming at Tiny.
     fn shrunk(self) -> Power {
-        match self {
-            Power::Huge => Power::Big,
-            _ => Power::Small,
-        }
+        Self::LADDER[self.rung().saturating_sub(1)]
     }
     fn label(self) -> &'static str {
         match self {
+            Power::Tiny => "tiny",
             Power::Small => "small",
             Power::Big => "big",
             Power::Huge => "HUGE",
         }
     }
     /// How much the *environment* is magnified at this size — the world shrinks as
-    /// Munchii grows: Small 4× (giant world, tiny hero) → Big 2× → Huge 1× (normal
-    /// world, full-size hero). His on-screen size stays constant; the tiles change.
+    /// Munchii grows: Tiny 8× → Small 4× → Big 2× → Huge 1× (normal world, full-size
+    /// hero). His on-screen size stays constant; the tiles change around him.
     fn zoom(self) -> usize {
         match self {
+            Power::Tiny => 8,
             Power::Small => 4,
             Power::Big => 2,
             Power::Huge => 1,
@@ -3021,6 +3038,8 @@ fn render_play_help(out: &mut Vec<u8>, active_backend: &str) {
     hline(out, r, "Dash (dodge)      X   \u{2022}  a quick burst with brief invulnerability");
     r += 1;
     hline(out, r, "Assist (practice) G   \u{2022}  toggle invulnerability to learn a level");
+    r += 1;
+    hline(out, r, "Size (test)       1 2 3 4   \u{2022}  jump to tiny / small / big / huge");
     r += 2;
     hline(out, r, "\x1b[1mPower-ups (gear, not damage)\x1b[0m");
     r += 1;
@@ -3970,12 +3989,15 @@ mod tests {
             let _ = step_actors(&mut actors, &world.map, &mut player, &mut kibble, &mut power, false);
             power
         };
+        assert_eq!(collect("grow", Power::Tiny), Power::Small, "grow: tiny → small");
         assert_eq!(collect("grow", Power::Small), Power::Big, "grow: small → big");
         assert_eq!(collect("grow", Power::Big), Power::Huge, "grow again: big → huge");
         assert_eq!(collect("grow", Power::Huge), Power::Huge, "grow caps at huge");
         assert_eq!(collect("shrink", Power::Huge), Power::Big, "shrink: huge → big");
         assert_eq!(collect("shrink", Power::Big), Power::Small, "shrink: big → small");
-        assert_eq!(collect("super", Power::Small), Power::Huge, "super → straight to huge");
+        assert_eq!(collect("shrink", Power::Small), Power::Tiny, "shrink: small → tiny");
+        assert_eq!(collect("shrink", Power::Tiny), Power::Tiny, "shrink bottoms at tiny");
+        assert_eq!(collect("super", Power::Tiny), Power::Huge, "super → straight to huge");
     }
 
     /// Collecting a Flutter Collar unlocks gliding (flags `collar`).

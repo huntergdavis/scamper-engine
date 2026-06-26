@@ -19,6 +19,10 @@ pub const K_K: u32 = 107;
 pub const K_Q: u32 = 113;
 pub const K_T: u32 = 116;
 pub const K_Y: u32 = 121;
+pub const K_1: u32 = 49;
+pub const K_2: u32 = 50;
+pub const K_3: u32 = 51;
+pub const K_4: u32 = 52;
 pub const K_G: u32 = 103;
 pub const K_N: u32 = 110;
 pub const K_P: u32 = 112;
@@ -195,7 +199,7 @@ impl Input {
                 let code = b as u32;
                 match code {
                     K_A | K_D | K_W | K_S | K_SPACE | K_Z | K_K | K_TAB | K_HELP | K_Q
-                    | K_Y | K_N | K_T | K_P | K_X | K_G => self.legacy_byte(code),
+                    | K_Y | K_N | K_T | K_P | K_X | K_G | K_1 | K_2 | K_3 | K_4 => self.legacy_byte(code),
                     _ => {}
                 }
                 i += 1;
