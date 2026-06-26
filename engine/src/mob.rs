@@ -34,6 +34,9 @@ pub enum Gait {
     /// Drift in the facing direction ignoring *all* collision and gravity — a
     /// phasing mover (a ghost). The game steers `facing`/`speed`/`pos.y` directly.
     Phase,
+    /// Glide back and forth horizontally around the home x (no gravity) — a tram /
+    /// horizontal moving platform you can ride.
+    Track,
     /// Free projectile: gravity-driven arc, moves by its own velocity, stops dead
     /// on any solid (sets `blocked`). Used for thrown sticks.
     Ballistic,
@@ -57,7 +60,12 @@ pub struct Mob {
     pub age: u32,      // ticks lived (for timers / oscillation)
     pub blocked: bool, // hit a wall on the last horizontal move (projectiles die on this)
     pub home_y: f64,   // anchor for the Bob gait (set to the spawn y)
+    pub home_x: f64,   // anchor for the Track gait (set to the spawn x)
 }
+
+/// Track (tram) oscillation: glide this many px each way over this many ticks.
+const TRACK_AMP: f64 = 52.0;
+const TRACK_PERIOD: f64 = 200.0;
 
 /// Bob (pipe-plant) oscillation: rise this many px and back over this many ticks.
 const BOB_AMP: f64 = 26.0;
@@ -73,7 +81,7 @@ const SWOOP_PERIOD: f64 = 70.0;
 
 impl Mob {
     pub fn new(x: f64, y: f64, w: f64, h: f64, facing: i8, speed: f64, gait: Gait) -> Self {
-        Mob { pos: vec2(x, y), vel: vec2(0.0, 0.0), w, h, facing, speed, gait, alive: true, age: 0, blocked: false, home_y: y }
+        Mob { pos: vec2(x, y), vel: vec2(0.0, 0.0), w, h, facing, speed, gait, alive: true, age: 0, blocked: false, home_y: y, home_x: x }
     }
 
     /// Advance one tick against the solid tilemap.
@@ -83,6 +91,13 @@ impl Mob {
         }
         self.age = self.age.wrapping_add(1);
         self.blocked = false;
+
+        // Track: glide horizontally around the home x (a rideable tram), no gravity.
+        if self.gait == Gait::Track {
+            let w = std::f64::consts::TAU / TRACK_PERIOD;
+            self.pos.x = self.home_x + TRACK_AMP * (self.age as f64 * w).sin();
+            return;
+        }
 
         // Flyers ignore gravity: cruise horizontally, reverse at walls.
         if self.gait == Gait::Fly {
@@ -299,6 +314,21 @@ mod tests {
         assert!(hi - lo > 20.0, "swoop should weave vertically (span {})", hi - lo);
         assert!(m.pos.x > start_x, "and drift sideways");
         assert!(m.pos.y > 0.0, "never falls under gravity");
+    }
+
+    #[test]
+    fn track_glides_horizontally_around_home_without_gravity() {
+        let map = flat();
+        let start_x = 3.0 * TILE;
+        let mut m = Mob::new(start_x, 2.0 * TILE, 28.0, 6.0, 1, 0.0, Gait::Track);
+        let (mut lo, mut hi) = (start_x, start_x);
+        for _ in 0..super::TRACK_PERIOD as u32 {
+            m.step(&map);
+            lo = lo.min(m.pos.x);
+            hi = hi.max(m.pos.x);
+        }
+        assert!(hi - lo > 80.0, "tram glides a wide horizontal arc (span {})", hi - lo);
+        assert_eq!(m.pos.y, 2.0 * TILE, "no gravity — holds its height");
     }
 
     #[test]

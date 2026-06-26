@@ -28,6 +28,8 @@ E chaser 36 12
 E trampoline 40 12
 E kibble 40 6
 E swooper 44 7
+# --- a tram glides across the second pit (or just jump it) ---
+E tram 49 12
 # --- past the second pit: a riding lift to a high coin, a star, a guard ---
 E lift 54 9
 E kibble 54 5

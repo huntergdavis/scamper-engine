@@ -777,8 +777,9 @@ fn run_play(path: &str) {
                     sim.fx.spawn(&scamper::effects::DUST, sim.player.pos.x + sim.player.w / 2.0, sim.player.pos.y + sim.player.h, sim.clock());
                     skid_cd = 9;
                 }
-                // Snapshot lift positions so we can carry the player by their delta.
-                let lifts_pre: Vec<(usize, f64)> = actors.iter().enumerate().filter(|(_, a)| a.kind == "lift").map(|(i, a)| (i, a.mob.pos.x)).collect();
+                // Snapshot rideable-platform positions so we can carry the player by
+                // their delta (vertical lift or horizontal tram).
+                let lifts_pre: Vec<(usize, f64)> = actors.iter().enumerate().filter(|(_, a)| a.kind == "lift" || a.kind == "tram").map(|(i, a)| (i, a.mob.pos.x)).collect();
                 // Step creatures/items and resolve pounces, pickups, and hits.
                 let hits = step_actors(&mut actors, &world.map, &mut sim.player, &mut kibble, &mut power, invincible > 0);
                 // Ride moving platforms: land on a lift's top and get carried along.
@@ -1348,6 +1349,8 @@ fn gait_for(kind: &str, item: bool) -> (Gait, f64, f64, f64) {
         (Gait::Hop, 0.5, 12.0, 12.0) // a bouncing critter — time your pounce mid-hop
     } else if kind == "lift" {
         (Gait::Bob, 0.0, 28.0, 6.0) // a vertical elevator platform — ride it up/down
+    } else if kind == "tram" {
+        (Gait::Track, 0.0, 30.0, 6.0) // a horizontal tram — ride it across a gap
     } else if kind == "trampoline" {
         (Gait::Still, 0.0, 16.0, 8.0) // a bounce pad — inert, launches you on landing
     } else if kind == "haunt" {
@@ -1596,8 +1599,8 @@ fn step_actors(actors: &mut [Actor], map: &TileMap, player: &mut Player, kibble:
                     hits.hurt = true;
                 }
             }
-            // A lift is ridden (resolved in run_play), never fought — ignore contact.
-            "lift" => {}
+            // A lift/tram is ridden (resolved in run_play), never fought.
+            "lift" | "tram" => {}
             // Trampoline: landing on it from above launches Munchii sky-high.
             "trampoline" => {
                 if stomp(px, py, pw, ph, pvy, bx, by, bw, bh) {

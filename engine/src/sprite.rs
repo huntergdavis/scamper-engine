@@ -61,6 +61,7 @@ pub const ALL: &[Sprite] = &[
     Sprite { id: "swooper", role: Role::Creature, w: 6, h: 2, anims: SWOOPER, palette: swooper_rgb },
     Sprite { id: "trampoline", role: Role::Creature, w: 5, h: 2, anims: TRAMPOLINE, palette: trampoline_rgb },
     Sprite { id: "lift", role: Role::Creature, w: 6, h: 2, anims: LIFT, palette: lift_rgb },
+    Sprite { id: "tram", role: Role::Creature, w: 6, h: 2, anims: TRAM, palette: tram_rgb },
     Sprite { id: "star_bone", role: Role::Item, w: 3, h: 2, anims: STAR_BONE, palette: star_rgb },
     Sprite { id: "chaser", role: Role::Creature, w: 4, h: 2, anims: CHASER, palette: chaser_rgb },
     Sprite { id: "haunt", role: Role::Creature, w: 4, h: 3, anims: HAUNT, palette: haunt_rgb },
@@ -188,6 +189,14 @@ fn lift_rgb(ch: char) -> (u8, u8, u8) {
         '#' | ':' => (196, 188, 170),           // deck
         '|' => (130, 130, 138),                 // chains
         _ => (150, 144, 132),                   // frame
+    }
+}
+/// Tram: a steel deck on rail wheels.
+fn tram_rgb(ch: char) -> (u8, u8, u8) {
+    match ch {
+        '#' => (198, 200, 210),                 // deck
+        'o' => (60, 64, 74),                    // wheels
+        _ => (120, 126, 140),                   // rail / frame
     }
 }
 /// Star Bone: a radiant gold power-up.
@@ -357,6 +366,10 @@ const TRAMPOLINE: &[Anim] = &[Anim { name: "idle", fps: 3, frames: TRAMPOLINE_F 
 // dots shift to read as motion.
 const LIFT_F: &[&[&str]] = &[&["|    |", "[####]"], &["|    |", "[::::]"]];
 const LIFT: &[Anim] = &[Anim { name: "idle", fps: 3, frames: LIFT_F }];
+
+// Tram — a horizontal riding platform on a rail. Wheels shuffle as it glides.
+const TRAM_F: &[&[&str]] = &[&["[####]", "=o==o="], &["[####]", "=o==o="], &["[####]", "==o=o="]];
+const TRAM: &[Anim] = &[Anim { name: "idle", fps: 6, frames: TRAM_F }];
 
 // Star Bone — an invincibility power-up: a glowing winged bone that twinkles.
 const STAR_BONE_F: &[&[&str]] = &[&["\\*/", "(=)"], &["/*\\", "(=)"]];
