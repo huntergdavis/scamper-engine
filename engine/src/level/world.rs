@@ -165,6 +165,17 @@ impl LevelWorld {
         self.blocks.get(&(cx, cy)).map(|b| !b.used).unwrap_or(false)
     }
 
+    /// Add a solid question block at (cx,cy) holding `item` (for procedurally
+    /// scattered power-up blocks). No-op if the cell is out of bounds.
+    pub fn add_question_block(&mut self, cx: i32, cy: i32, item: impl Into<String>) {
+        if cx < 0 || cy < 0 || cx >= self.w || cy >= self.h {
+            return;
+        }
+        self.map.set(cx as usize, cy as usize, true);
+        self.kinds.insert((cx, cy), TileKind::Question);
+        self.blocks.insert((cx, cy), Block { breakable: false, contains: Some(item.into()), used: false });
+    }
+
     /// Head-bonk the block at cell (cx,cy) from below. A breakable brick shatters
     /// (and drops any coin it held); a non-breakable question block coughs up its
     /// contents once and stays solid but inert. Returns what happened.

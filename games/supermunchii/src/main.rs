@@ -428,6 +428,7 @@ fn run_play(path: &str) {
     let mut backend: Box<dyn Backend> = Box::new(KittyBackend::new());
 
     let mut world = LevelWorld::from_level(&level);
+    scatter_powerups(&mut world, level_seed(&level.id));
     let mut sim = sim_at(world.spawn);
     let mut respawn = world.spawn; // advances to the last checkpoint passed
     let mut next_cp = 0usize; // index of the next un-passed checkpoint
@@ -968,6 +969,7 @@ fn run_play(path: &str) {
                 cur_path = next;
                 level = lvl;
                 world = LevelWorld::from_level(&level);
+                scatter_powerups(&mut world, level_seed(&level.id));
                 sim = sim_at(world.spawn);
                 respawn = world.spawn;
                 next_cp = 0;
@@ -995,6 +997,7 @@ fn run_play(path: &str) {
                 if let Some((lvl, spawn)) = parse_warp(&target, &dir, &level) {
                     level = lvl;
                     world = LevelWorld::from_level(&level);
+                    scatter_powerups(&mut world, level_seed(&level.id));
                     sim = sim_at(spawn);
                     respawn = spawn;
                     next_cp = 0;
@@ -1408,6 +1411,51 @@ fn build_actors(world: &LevelWorld) -> Vec<Actor> {
             Actor { mob: Mob::new(e.cx as f64 * TILE, e.cy as f64 * TILE, w, h, -1, speed, gait), kind: e.kind.clone(), item, mode: Mode::Walk, alerted: false }
         })
         .collect()
+}
+
+/// Put a `?` block holding `item` ~3 tiles above the ground in column `cx` (a
+/// jump-bonk away), if there's a clear, reachable spot there. Returns success.
+fn place_powerup_block(world: &mut LevelWorld, cx: i32, item: &str) -> bool {
+    let surface = (0..world.h).find(|&cy| world.map.is_solid(cx, cy));
+    if let Some(sy) = surface {
+        let by = sy - 3;
+        if by >= 1 && !world.map.is_solid(cx, by) && !world.is_block(cx, by) {
+            world.add_question_block(cx, by, item);
+            return true;
+        }
+    }
+    false
+}
+
+/// Scatter a handful of power-up `?` blocks through a level — deterministic per
+/// `seed` (so a level plays the same each time), always landing one in the opening
+/// scene. The size power-ups (▲ grow / ▼ shrink) dominate the pool.
+fn scatter_powerups(world: &mut LevelWorld, seed: u64) {
+    let pool = ["grow", "shrink", "grow", "shrink", "star_bone", "zoomies_treat"];
+    let mut rng = seed | 1;
+    let mut next = move || {
+        rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        (rng >> 33) as usize
+    };
+    // Guaranteed: one in the opening (scan the first dozen columns past spawn).
+    let spawn_cx = (world.spawn.0 / TILE) as i32;
+    for off in 3..15 {
+        let item = pool[next() % pool.len()];
+        if place_powerup_block(world, spawn_cx + off, item) {
+            break;
+        }
+    }
+    // Plus a few more scattered across the rest of the level.
+    for _ in 0..4 {
+        let cx = 6 + (next() as i32 % (world.w - 10).max(1));
+        let item = pool[next() % pool.len()];
+        place_powerup_block(world, cx, item);
+    }
+}
+
+/// A stable per-level seed from its id, so scattering is reproducible.
+fn level_seed(id: &str) -> u64 {
+    id.bytes().fold(0xcbf29ce484222325, |h, b| (h ^ b as u64).wrapping_mul(0x100000001b3))
 }
 
 /// Step Sudsball projectiles: fly, expire on a wall or after their lifetime, and
@@ -3851,6 +3899,29 @@ mod tests {
         assert!(!hits.hurt, "invincible: no harm");
         assert!(!actors[0].mob.alive, "the spiky prickle is bulldozed");
         assert_eq!(kibble, 2, "and pays out");
+    }
+
+    /// Scattering adds power-up blocks, always one in the opening scene, all
+    /// holding pool items and placed in clear cells above the ground.
+    #[test]
+    fn scatter_seeds_powerup_blocks_with_one_near_spawn() {
+        let mut l = Level::new("scatter-test", "overworld", 80, 14);
+        l.spawn = (2, 11);
+        l.tiles.push(TileSpan { x: 0, y: 12, len: 80, kind: TileKind::Ground });
+        let mut world = LevelWorld::from_level(&l);
+        let before = world.blocks.len();
+        scatter_powerups(&mut world, level_seed(&l.id));
+        let added = world.blocks.len() - before;
+        assert!(added >= 2, "scatters several blocks (added {added})");
+        // One must sit in the opening — within ~15 tiles past the spawn column.
+        let scx = (world.spawn.0 / TILE) as i32;
+        let near = world.blocks.keys().any(|&(cx, _)| cx > scx && cx <= scx + 16);
+        assert!(near, "a power-up block lands in the first scene");
+        // Every added block holds a real power-up and is reachable (not in terrain).
+        for (&(cx, cy), b) in &world.blocks {
+            assert!(b.contains.is_some(), "block at {cx},{cy} holds an item");
+            assert!(!world.map.is_solid(cx, cy + 1) || cy < 12, "sits above ground");
+        }
     }
 
     /// The ▲ grow power-up steps size up (Small→Big); ▼ shrink steps it down.
