@@ -142,6 +142,29 @@ impl Framebuffer {
         }
     }
 
+    /// Like [`upscale_from`](Self::upscale_from), but treats `key`-colored source
+    /// pixels as transparent — they're skipped, leaving whatever is already in
+    /// `self`. Lets a magnified layer (tiles) composite *over* a screen-scale layer
+    /// already drawn (a backdrop), by keying out the source's sky.
+    pub fn upscale_over(&mut self, src: &Framebuffer, scale: usize, key: Rgba) {
+        let scale = scale.max(1);
+        let (sw, sh) = (src.width, src.height);
+        for y in 0..self.height {
+            let sy = (y / scale).min(sh.saturating_sub(1));
+            let srow = sy * sw * 4;
+            let drow = y * self.width * 4;
+            for x in 0..self.width {
+                let sx = (x / scale).min(sw.saturating_sub(1));
+                let si = srow + sx * 4;
+                if src.px[si] == key.r && src.px[si + 1] == key.g && src.px[si + 2] == key.b {
+                    continue; // keyed-out (sky) — keep the backdrop underneath
+                }
+                let di = drow + x * 4;
+                self.px[di..di + 4].copy_from_slice(&src.px[si..si + 4]);
+            }
+        }
+    }
+
     /// Bresenham line (used for debug overlays like velocity vectors).
     pub fn line(&mut self, x0: i32, y0: i32, x1: i32, y1: i32, c: Rgba) {
         let dx = (x1 - x0).abs();

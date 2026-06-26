@@ -1853,19 +1853,25 @@ fn draw_play_frame(
     let sx = |wx: f64| view.sx(wx);
     let sy = |wy: f64| view.sy(wy);
 
-    // Render the environment (tiles + goal) into a small buffer, then magnify.
-    // (At zoom 1 the buffer is unused — a 1×1 placeholder keeps the binding live.)
-    let mut wfb_store = Framebuffer::new(if zoom == 1 { 1 } else { view_w }, if zoom == 1 { 1 } else { view_h });
-    let env: &mut Framebuffer = if zoom == 1 { fb } else { &mut wfb_store };
-    env.clear(pal.sky);
-    // Parallax backdrop behind the tiles (theme-specific motif; scrolls slower).
-    let (ew, eh) = (env.width, env.height);
-    art::draw_backdrop(env, world.theme, &pal, cam_x, ew, eh);
+    // The parallax backdrop is drawn at SCREEN scale (constant, like a far horizon
+    // that doesn't resize with Munchii) directly into fb. The tiles then composite
+    // over it — magnified ×zoom — keying out the sky so the backdrop shows through.
+    fb.clear(pal.sky);
+    art::draw_backdrop(fb, world.theme, &pal, cam_x, fb_w, fb_h);
     let t = TILE as i32;
     let tx0 = (cam_x / TILE).floor() as i32;
     let tx1 = ((cam_x + view_w as f64) / TILE).ceil() as i32;
     let ty0 = (cam_y / TILE).floor() as i32;
     let ty1 = ((cam_y + view_h as f64) / TILE).ceil() as i32;
+    // Draw the tiles + goal post into the world layer (1× world): straight into fb
+    // at zoom 1, or into a small buffer that's magnified over the backdrop otherwise.
+    let mut wfb_store = Framebuffer::new(if zoom == 1 { 1 } else { view_w }, if zoom == 1 { 1 } else { view_h });
+    let env: &mut Framebuffer = if zoom == 1 {
+        fb
+    } else {
+        wfb_store.clear(pal.sky);
+        &mut wfb_store
+    };
     for ty in ty0..ty1 {
         for tx in tx0..tx1 {
             if let Some(kind) = world.kind_at(tx, ty) {
@@ -1873,14 +1879,13 @@ fn draw_play_frame(
             }
         }
     }
-    // goal post (drawn into the environment buffer so it magnifies with the tiles)
     if let Some((gx, gy)) = world.goal {
         let gsx = (gx - cam_x) as i32;
         env.fill_rect(gsx, 0, 2, view_h as i32, Rgba::rgb(235, 235, 245));
         env.fill_rect(gsx - 7, (gy - cam_y) as i32, 7, 5, Rgba::rgb(232, 84, 84));
     }
     if zoom != 1 {
-        fb.upscale_from(&wfb_store, zoom);
+        fb.upscale_over(&wfb_store, zoom, pal.sky);
     }
     // Build the on-screen sprites: world entities (creatures / items) first, then
     // Munchii on top. Each carries its own palette so the colored tiers draw it in
