@@ -25,16 +25,35 @@ fn timespec_from_ns(ns: u64) -> libc::timespec {
 /// EINTR (so signals like SIGWINCH/SIGTERM are handled promptly by the loop).
 pub fn sleep_until_ns(target_ns: u64, spin_margin_ns: u64) {
     let sleep_target = target_ns.saturating_sub(spin_margin_ns);
-    if now_ns() < sleep_target {
-        let ts = timespec_from_ns(sleep_target);
-        // clock_nanosleep returns the errno value directly (0 on success).
-        let r = unsafe {
-            libc::clock_nanosleep(
-                libc::CLOCK_MONOTONIC,
-                libc::TIMER_ABSTIME,
-                &ts,
-                std::ptr::null_mut(),
-            )
+    let start = now_ns();
+    if start < sleep_target {
+        // Linux: absolute-deadline sleep against CLOCK_MONOTONIC. macOS lacks
+        // clock_nanosleep/TIMER_ABSTIME, so sleep the relative remaining interval.
+        #[cfg(target_os = "linux")]
+        let r = {
+            let ts = timespec_from_ns(sleep_target);
+            // clock_nanosleep returns the errno value directly (0 on success).
+            unsafe {
+                libc::clock_nanosleep(
+                    libc::CLOCK_MONOTONIC,
+                    libc::TIMER_ABSTIME,
+                    &ts,
+                    std::ptr::null_mut(),
+                )
+            }
+        };
+        #[cfg(not(target_os = "linux"))]
+        let r = {
+            let ts = timespec_from_ns(sleep_target - start);
+            // nanosleep returns -1 and sets errno on interruption.
+            let rc = unsafe { libc::nanosleep(&ts, std::ptr::null_mut()) };
+            if rc == 0 {
+                0
+            } else {
+                std::io::Error::last_os_error()
+                    .raw_os_error()
+                    .unwrap_or(0)
+            }
         };
         // On EINTR (a signal like SIGWINCH/SIGTERM, since we don't set SA_RESTART),
         // bail immediately — skip the spin tail so the loop reacts to the signal now.
