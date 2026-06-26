@@ -646,15 +646,28 @@ fn run_play(path: &str) {
             wallspark_t = now;
         }
         // Ambient particles: snowfall / bubbles / drifting leaves, by theme — a
-        // living backdrop, sprinkled across the visible band around Munchii.
-        if let Some(amb) = ambient_fx(world.theme) {
-            if now.saturating_sub(ambient_t) > 200 * 1_000_000 {
-                let half = fb_w as f64 / (2.0 * power.zoom() as f64);
-                let r = (now / 1_000_000 % 1000) as f64 / 1000.0;
-                let ax = sim.player.pos.x + sim.player.w / 2.0 - half + r * 2.0 * half;
-                let ay = sim.player.pos.y - fb_h as f64 / power.zoom() as f64 * 0.35;
-                sim.fx.spawn(amb, ax, ay, now);
-                ambient_t = now;
+        // living backdrop that falls from the TOP of the view across its full width.
+        // Only while zoomed out (powered): the tiny-world Small view is too cramped
+        // for weather, and anchoring near the player just litters dots on his head.
+        if power.zoom() == 1 {
+            if let Some(amb) = ambient_fx(world.theme) {
+                if now.saturating_sub(ambient_t) > 260 * 1_000_000 {
+                    let half_w = fb_w as f64 / 2.0;
+                    let half_h = fb_h as f64 / 2.0;
+                    let r = (now / 1_000_000 % 997) as f64 / 997.0;
+                    let pcx = sim.player.pos.x + sim.player.w / 2.0;
+                    let pcy = sim.player.pos.y + sim.player.h / 2.0;
+                    let ax = pcx - half_w + r * 2.0 * half_w; // across the visible width
+                    let ay = pcy - half_h; // from the top edge of the view
+                    // Bubbles rise; snow/leaves fall (with a little horizontal sway).
+                    let (vx, vy) = match world.theme {
+                        scamper::level::Theme::Underwater => ((r - 0.5) * 12.0, -48.0),
+                        scamper::level::Theme::Snow => ((r - 0.5) * 14.0, 38.0),
+                        _ => ((r - 0.5) * 22.0, 30.0),
+                    };
+                    sim.fx.spawn_drift(amb, ax, ay, vx, vy, now);
+                    ambient_t = now;
+                }
             }
         }
         // Invincibility: a continuous sparkle halo so the Star state reads in every
@@ -668,7 +681,7 @@ fn run_play(path: &str) {
         // reads distinctly from plain Big gear in every tier (incl. mono B&W).
         if power == Power::Bubble && now.saturating_sub(aura_t) > 130 * 1_000_000 {
             let bx = sim.player.pos.x + sim.player.w / 2.0 + ((now / 7_000_000) % 7) as f64 - 3.0;
-            sim.fx.spawn(&scamper::effects::BUBBLE, bx, sim.player.pos.y - 2.0, now);
+            sim.fx.spawn_drift(&scamper::effects::BUBBLE, bx, sim.player.pos.y - 2.0, 0.0, -40.0, now);
             aura_t = now;
         }
         // Glide feathers: a gentle wisp trail while actively floating.

@@ -138,34 +138,33 @@ pub static DASH: Effect = Effect {
     frames: &[&["»»"], &["» "], &["· "]],
 };
 
-// Ambient snowflake — drifts down the screen (the glyph descends through the
-// frame grid). Spawned continuously in snowy levels for a gentle snowfall.
+// Ambient snowflake — a twinkling flake; its fall comes from the drift velocity
+// it's spawned with (see Effects::spawn_drift). Long, slow clip so it travels.
 pub static SNOW: Effect = Effect {
     name: "snow",
-    fps: 6,
+    fps: 2,
     tint: (236, 244, 255),
     z: 3,
-    frames: &[&["*", " ", " ", " "], &[" ", "*", " ", " "], &[" ", " ", "*", " "], &[" ", " ", " ", "."]],
+    frames: &[&["*"], &["+"], &["*"], &["·"]],
 };
 
-// Ambient leaf — flutters down with a little side-to-side sway (overworld).
+// Ambient leaf — a fluttering glyph; drifts/falls via its spawn velocity.
 pub static LEAF: Effect = Effect {
     name: "leaf",
-    fps: 6,
+    fps: 2,
     tint: (150, 200, 90),
     z: 3,
-    frames: &[&[" ,", "  ", "  ", "  "], &["  ", "', ", "  ", "  "], &["  ", "  ", " ,", "  "], &["  ", "  ", "  ", "' "]],
+    frames: &[&[","], &["'"], &[","], &["°"]],
 };
 
-// Bubble-gear aura — a soap bubble that wobbles up off Munchii and pops. Emitted
-// continuously while he wears the Bubble Bone, so that tier reads distinctly (the
-// round "o(O)" glyphs show even in mono B&W) from plain Big gear.
+// A soap bubble — wobbles as it travels (rises) under its drift velocity. Used by
+// the Bubble-gear aura and the underwater ambient. The round glyphs read in mono.
 pub static BUBBLE: Effect = Effect {
     name: "bubble",
-    fps: 10,
+    fps: 3,
     tint: (170, 220, 255),
     z: 2,
-    frames: &[&["o", " "], &["O", "°"], &["(O)", " ' "], &[" ° ", "   "]],
+    frames: &[&["o"], &["O"], &["o"], &["·"]],
 };
 
 // Collect / block-release sparkle.
@@ -190,6 +189,8 @@ struct Active {
     fx: &'static Effect,
     x: f64, // world (framebuffer-px) anchor: horizontal center
     y: f64, // world anchor: top of the clip
+    vx: f64, // drift velocity (px/sec) — for falling/rising particles
+    vy: f64,
     start: u64,
 }
 
@@ -224,7 +225,13 @@ impl Effects {
 
     /// Spawn `fx` anchored at world point (`x`, `y`) (horizontal center, top).
     pub fn spawn(&mut self, fx: &'static Effect, x: f64, y: f64, now: u64) {
-        self.active.push(Active { fx, x, y, start: now });
+        self.active.push(Active { fx, x, y, vx: 0.0, vy: 0.0, start: now });
+    }
+
+    /// Spawn `fx` that drifts at (`vx`, `vy`) px/sec as it plays — for traveling
+    /// particles like falling snow/leaves or rising bubbles.
+    pub fn spawn_drift(&mut self, fx: &'static Effect, x: f64, y: f64, vx: f64, vy: f64, now: u64) {
+        self.active.push(Active { fx, x, y, vx, vy, start: now });
     }
 
     /// Spawn a floating word shout (e.g. `strings::t("fx.bonk")`) in `tint`,
@@ -253,9 +260,11 @@ impl Effects {
             .iter()
             .filter(|a| !a.fx.frames.is_empty()) // a clip with no frames can't index
             .map(|a| {
+                let elapsed = now.saturating_sub(a.start);
                 let step = NS_PER_SEC / a.fx.fps.max(1) as u64;
-                let i = ((now.saturating_sub(a.start) / step) as usize).min(a.fx.frames.len() - 1);
-                (a.fx.frames[i], a.fx.tint, a.fx.z, a.x, a.y)
+                let i = ((elapsed / step) as usize).min(a.fx.frames.len() - 1);
+                let secs = elapsed as f64 / NS_PER_SEC as f64;
+                (a.fx.frames[i], a.fx.tint, a.fx.z, a.x + a.vx * secs, a.y + a.vy * secs)
             })
             .collect()
     }
