@@ -424,6 +424,9 @@ fn run_play(path: &str) {
     const DASH_FRAMES: u32 = 9;
     const DASH_CD: u32 = 40;
     let mut combo: u32 = 0; // consecutive air-pounces (resets on landing)
+    let mut coin_streak: u32 = 0; // coins grabbed in quick succession (fever)
+    let mut streak_t: u64 = 0; // last coin time (ns); the streak decays after a beat
+    let mut coin_mult: u32 = 1; // current coin multiplier from the streak
     let mut boss_hp: i32 = 3; // Baron Whiskers' health (only matters if he's present)
     let mut boss_cd: u32 = 0; // boss i-frames between pounces (ticks)
     let mut boss_t: u64 = 0; // last boss telegraph emit (ns)
@@ -685,6 +688,7 @@ fn run_play(path: &str) {
                 if glide && !sim.player.grounded && inp.jump_held && sim.player.vel.y > GLIDE_FALL {
                     sim.player.vel.y = GLIDE_FALL;
                 }
+                let mut coin_gain = 0u32; // coins banked this step (drives the streak)
                 // Head-bonk a block from below: questions/coin-blocks cough up an
                 // item, breakable bricks shatter.
                 if sim.player.bonked_head {
@@ -720,6 +724,7 @@ fn run_play(path: &str) {
                             // A coin leaps out of the top of the block and is banked.
                             sim.fx.spawn(&scamper::effects::COIN, bxw, byw - TILE, now);
                             kibble += 1;
+                            coin_gain += 1;
                         } else {
                             sim.fx.spawn(&scamper::effects::SPARKLE, bxw, byw, now);
                             // pop the power-up out onto the block top to grab
@@ -755,6 +760,28 @@ fn run_play(path: &str) {
                     let (pxw, pyw) = hits.pop_xy;
                     sim.fx.spawn_word(scamper::strings::t("fx.pop"), (255, 236, 150), pxw, pyw - 6.0, fxclock);
                     shake.bump(0.25);
+                }
+                // Coin fever: grabbing coins in quick succession ramps a multiplier
+                // (each coin past the first few pays extra). The streak decays if you
+                // go ~1.5s without a coin; a tier-up shouts "x2/x3/x4 FEVER".
+                coin_gain += hits.coins;
+                if coin_gain > 0 {
+                    if now.saturating_sub(streak_t) > 1500 * 1_000_000 {
+                        coin_streak = 0;
+                    }
+                    coin_streak += coin_gain;
+                    streak_t = now;
+                    let m = (1 + coin_streak / 4).min(4);
+                    if m > 1 {
+                        kibble += coin_gain * (m - 1); // bonus coins from the fever
+                    }
+                    if m > coin_mult {
+                        sim.fx.spawn_word(mult_word(m), (255, 214, 96), sim.player.pos.x + sim.player.w / 2.0, sim.player.pos.y - 12.0, fxclock);
+                    }
+                    coin_mult = m;
+                } else if now.saturating_sub(streak_t) > 1500 * 1_000_000 {
+                    coin_streak = 0;
+                    coin_mult = 1;
                 }
                 // Air combo: chaining pounces before landing escalates the reward.
                 // Each pounce past the first banks a bonus kibble and shouts the tally.
@@ -1206,6 +1233,15 @@ fn medal_for(secs: u32, gold: u32, silver: u32) -> (&'static str, &'static str) 
     }
 }
 
+/// Coin-fever multiplier shout (static, for a word pop) when the streak tiers up.
+fn mult_word(m: u32) -> &'static str {
+    match m {
+        0 | 1 | 2 => "x2 FEVER",
+        3 => "x3 FEVER",
+        _ => "x4 FEVER!",
+    }
+}
+
 /// Air-combo shout for an `n`-pounce chain (static so it can float as a word pop).
 fn combo_word(n: u32) -> &'static str {
     match n {
@@ -1371,6 +1407,7 @@ struct Hits {
     pounces: u32,  // creatures pounced this step (drives the air combo)
     pops: u32,     // critters popped this step, by any means (drives the POP! cue)
     pop_xy: (f64, f64), // a representative pop location (for the cue)
+    coins: u32,    // kibble coins collected this step (drives the coin streak)
     bounced: bool, // landed on a trampoline → launched high
     boss_hit: bool, // pounced the boss this step (gated by i-frames in run_play)
     star: bool,     // collected a Star Bone → invincibility
@@ -1542,6 +1579,7 @@ fn step_actors(actors: &mut [Actor], map: &TileMap, player: &mut Player, kibble:
                 a.mob.alive = false;
                 hits.zoomies = true; // timed speed burst
                 *kibble += 1;
+                hits.coins += 1;
                 hits.fx.push((&scamper::effects::SPARKLE, bx + bw / 2.0, by));
             }
             "flutter_collar" if a.item => {
@@ -1557,6 +1595,7 @@ fn step_actors(actors: &mut [Actor], map: &TileMap, player: &mut Player, kibble:
             _ if a.item => {
                 a.mob.alive = false;
                 *kibble += 1;
+                hits.coins += 1;
                 // A loose kibble pops a coin like a coin-block does (consistent feedback).
                 let fx = if a.kind == "kibble" { &scamper::effects::COIN } else { &scamper::effects::SPARKLE };
                 hits.fx.push((fx, bx + bw / 2.0, by));
