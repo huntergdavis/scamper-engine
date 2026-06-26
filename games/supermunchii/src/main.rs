@@ -3731,6 +3731,7 @@ mod tests {
     /// occupies a much thicker on-screen band than at 1× (a single tile blows up
     /// to a 4-row block), while Munchii's sprite stays a constant glyph size.
     #[test]
+    #[test]
     fn zoom_magnifies_the_environment() {
         use std::cell::RefCell;
         use std::rc::Rc;
