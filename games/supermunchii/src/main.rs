@@ -1918,6 +1918,7 @@ fn draw_play_frame(
         } else {
             an.frames[fi].iter().map(|s| s.to_string()).collect()
         };
+        let elines = scale_lines(&elines, zoom); // grow with the magnified world
         let efw = elines.iter().map(|l| l.chars().count()).max().unwrap_or(1) as f64;
         let (emw, emh) = (efw * cpw, elines.len() as f64 * cph);
         let elx = sx(exw) - emw / 2.0;
@@ -1932,6 +1933,7 @@ fn draw_play_frame(
         let fi = (sim.clock() / (NS_PER_SEC / an.fps.max(1) as u64)) as usize % n;
         for p in projectiles {
             let pl: Vec<String> = an.frames[fi].iter().map(|s| s.to_string()).collect();
+            let pl = scale_lines(&pl, zoom);
             let pfw = pl.iter().map(|l| l.chars().count()).max().unwrap_or(1) as f64;
             let (pmw, pmh) = (pfw * cpw, pl.len() as f64 * cph);
             let plx = sx(p.pos.x + p.w / 2.0) - pmw / 2.0;
@@ -1947,6 +1949,7 @@ fn draw_play_frame(
         let fi = (sim.clock() / (NS_PER_SEC / an.fps.max(1) as u64)) as usize % n;
         for h in hostiles {
             let hl: Vec<String> = an.frames[fi].iter().map(|s| s.to_string()).collect();
+            let hl = scale_lines(&hl, zoom);
             let hfw = hl.iter().map(|l| l.chars().count()).max().unwrap_or(1) as f64;
             let (hmw, hmh) = (hfw * cpw, hl.len() as f64 * cph);
             let hlx = sx(h.pos.x + h.w / 2.0) - hmw / 2.0;
@@ -2734,6 +2737,24 @@ fn flip_line(s: &str) -> String {
             other => other,
         })
         .collect()
+}
+
+/// Magnify a glyph sprite by integer `k`: repeat each char `k`× across and each
+/// row `k`× down. World objects (enemies, items, projectiles) are scaled by the
+/// size-zoom so they grow *with* the magnified tiles — only Munchii stays constant
+/// (he's the size anchor: a tiny hero among a giant, consistently-scaled world).
+fn scale_lines(lines: &[String], k: usize) -> Vec<String> {
+    if k <= 1 {
+        return lines.to_vec();
+    }
+    let mut out = Vec::with_capacity(lines.len() * k);
+    for line in lines {
+        let wide: String = line.chars().flat_map(|c| std::iter::repeat(c).take(k)).collect();
+        for _ in 0..k {
+            out.push(wide.clone());
+        }
+    }
+    out
 }
 
 /// Munchii's looping pose for his current movement state. The double-jump burst
