@@ -63,6 +63,8 @@ pub const ALL: &[Sprite] = &[
     Sprite { id: "lift", role: Role::Creature, w: 6, h: 2, anims: LIFT, palette: lift_rgb },
     Sprite { id: "tram", role: Role::Creature, w: 6, h: 2, anims: TRAM, palette: tram_rgb },
     Sprite { id: "star_bone", role: Role::Item, w: 3, h: 2, anims: STAR_BONE, palette: star_rgb },
+    Sprite { id: "grow", role: Role::Item, w: 4, h: 2, anims: GROW, palette: grow_rgb },
+    Sprite { id: "shrink", role: Role::Item, w: 4, h: 2, anims: SHRINK, palette: shrink_rgb },
     Sprite { id: "chaser", role: Role::Creature, w: 4, h: 2, anims: CHASER, palette: chaser_rgb },
     Sprite { id: "haunt", role: Role::Creature, w: 4, h: 3, anims: HAUNT, palette: haunt_rgb },
     Sprite { id: "hardhat", role: Role::Creature, w: 6, h: 2, anims: HARDHAT, palette: hard_rgb },
@@ -205,6 +207,14 @@ fn star_rgb(ch: char) -> (u8, u8, u8) {
         '*' | '\\' | '/' => (255, 244, 150),    // twinkle
         _ => (240, 232, 200),                   // bone
     }
+}
+/// Grow arrow: a warm orange-red "get bigger" up-arrow.
+fn grow_rgb(_ch: char) -> (u8, u8, u8) {
+    (255, 150, 70)
+}
+/// Shrink arrow: a cool blue "get smaller" down-arrow.
+fn shrink_rgb(_ch: char) -> (u8, u8, u8) {
+    (110, 190, 255)
 }
 /// Chaser: a rusty-red hunter — dark eye, pale bared teeth.
 fn chaser_rgb(ch: char) -> (u8, u8, u8) {
@@ -374,6 +384,14 @@ const TRAM: &[Anim] = &[Anim { name: "idle", fps: 6, frames: TRAM_F }];
 // Star Bone — an invincibility power-up: a glowing winged bone that twinkles.
 const STAR_BONE_F: &[&[&str]] = &[&["\\*/", "(=)"], &["/*\\", "(=)"]];
 const STAR_BONE: &[Anim] = &[Anim { name: "idle", fps: 6, frames: STAR_BONE_F }];
+
+// Grow — the ▲ power-up that makes Munchii bigger. A bold up-arrow that pulses.
+const GROW_F: &[&[&str]] = &[&[" /\\ ", "/||\\"], &[" /\\ ", " || "]];
+const GROW: &[Anim] = &[Anim { name: "idle", fps: 4, frames: GROW_F }];
+
+// Shrink — the ▼ power-up that makes him smaller. A bold down-arrow that pulses.
+const SHRINK_F: &[&[&str]] = &[&["\\||/", " \\/ "], &[" || ", " \\/ "]];
+const SHRINK: &[Anim] = &[Anim { name: "idle", fps: 4, frames: SHRINK_F }];
 
 // Chaser — a snarling critter that hunts Munchii. Bared teeth + angry brows read
 // as aggression; the feet shuffle as it scrambles.

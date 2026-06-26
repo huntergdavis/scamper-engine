@@ -1175,6 +1175,21 @@ impl Power {
             _ => Power::Small,
         }
     }
+    /// Size step UP (the ▲ grow power-up). 2 sizes today (Small→Big); a third tier
+    /// slots in here later. Bubble is already big-tier, so it stays.
+    fn grown(self) -> Power {
+        match self {
+            Power::Small => Power::Big,
+            other => other,
+        }
+    }
+    /// Size step DOWN (the ▼ shrink power-up): anything big-tier → Small.
+    fn shrunk(self) -> Power {
+        match self {
+            Power::Small => Power::Small,
+            _ => Power::Small,
+        }
+    }
     fn label(self) -> &'static str {
         match self {
             Power::Small => "small",
@@ -1241,7 +1256,7 @@ struct Actor {
 
 /// Item kinds collect on touch; everything else is a creature you pounce.
 fn is_item(kind: &str) -> bool {
-    matches!(kind, "kibble" | "big_kibble" | "bubble_bone" | "zoomies_treat" | "lucky_squeaky" | "flutter_collar" | "star_bone")
+    matches!(kind, "kibble" | "big_kibble" | "grow" | "shrink" | "bubble_bone" | "zoomies_treat" | "lucky_squeaky" | "flutter_collar" | "star_bone")
 }
 
 /// Creatures that curl into a kickable ball when pounced (instead of popping).
@@ -1621,10 +1636,16 @@ fn step_actors(actors: &mut [Actor], map: &TileMap, player: &mut Player, kibble:
                     hits.bounced = true;
                 }
             }
-            // Big Kibble grows a small Munchii; Bubble Bone gears up; else treats.
-            "big_kibble" if a.item => {
+            // ▲ Grow (and Big Kibble): steps Munchii's size up.
+            "grow" | "big_kibble" if a.item => {
                 a.mob.alive = false;
-                *power = if *power == Power::Small { Power::Big } else { *power };
+                *power = power.grown();
+                hits.fx.push((&scamper::effects::SPARKLE, bx + bw / 2.0, by));
+            }
+            // ▼ Shrink: steps his size down.
+            "shrink" if a.item => {
+                a.mob.alive = false;
+                *power = power.shrunk();
                 hits.fx.push((&scamper::effects::SPARKLE, bx + bw / 2.0, by));
             }
             "bubble_bone" if a.item => {
@@ -3830,6 +3851,26 @@ mod tests {
         assert!(!hits.hurt, "invincible: no harm");
         assert!(!actors[0].mob.alive, "the spiky prickle is bulldozed");
         assert_eq!(kibble, 2, "and pays out");
+    }
+
+    /// The ▲ grow power-up steps size up (Small→Big); ▼ shrink steps it down.
+    #[test]
+    fn grow_and_shrink_change_munchii_size() {
+        let collect = |kind: &str, start: Power| -> Power {
+            let mut l = Level::new("t", "overworld", 12, 10);
+            l.tiles.push(TileSpan { x: 0, y: 8, len: 12, kind: TileKind::Ground });
+            l.entities.push(Entity { kind: kind.into(), x: 5, y: 7, props: vec![] });
+            let world = LevelWorld::from_level(&l);
+            let mut actors = build_actors(&world);
+            let (bx, by) = (actors[0].mob.pos.x, actors[0].mob.pos.y);
+            let mut player = Player::new(bx, by);
+            let (mut kibble, mut power) = (0, start);
+            let _ = step_actors(&mut actors, &world.map, &mut player, &mut kibble, &mut power, false);
+            power
+        };
+        assert_eq!(collect("grow", Power::Small), Power::Big, "grow: small → big");
+        assert_eq!(collect("shrink", Power::Big), Power::Small, "shrink: big → small");
+        assert_eq!(collect("grow", Power::Big), Power::Big, "grow caps at big (for now)");
     }
 
     /// Collecting a Flutter Collar unlocks gliding (flags `collar`).
