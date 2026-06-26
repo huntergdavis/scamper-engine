@@ -1065,6 +1065,17 @@ fn run_play(path: &str) {
                 use std::fmt::Write;
                 let _ = write!(status, "\x1b[1;{}H\x1b[1;7m ⛑ ASSIST \x1b[0m", (cols as usize).saturating_sub(10).max(1));
             }
+            // Active coin-fever multiplier, top-left (row 2, clear of the centered
+            // boss bar). Written every frame — text when hot, blanks to erase when
+            // it lapses (this cell isn't otherwise repainted).
+            if !won && !game_over {
+                use std::fmt::Write;
+                if coin_mult > 1 {
+                    let _ = write!(status, "\x1b[2;3H\x1b[1;7m x{coin_mult} FEVER \x1b[0m");
+                } else {
+                    let _ = write!(status, "\x1b[2;3H          "); // erase a lapsed indicator
+                }
+            }
             // Boss health bar: only while Baron Whiskers is present and the fight's on.
             if !won && !game_over && actors.iter().any(|a| a.kind == "baron_whiskers" && a.mob.alive) {
                 let pips: String = (0..3).map(|i| if (i as i32) < boss_hp { '♥' } else { '·' }).collect();
