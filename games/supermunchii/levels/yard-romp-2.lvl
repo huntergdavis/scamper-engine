@@ -4,6 +4,7 @@ theme snow
 size 72 15
 spawn 2 12
 goal flag 70 3
+medals 22 40
 # --- ground in three runs with two 4-wide (jumpable) pits ---
 R 0 13 24 ground
 R 0 14 24 ground

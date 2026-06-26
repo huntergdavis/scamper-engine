@@ -4,6 +4,7 @@ theme overworld
 size 64 15
 spawn 2 12
 goal flag 62 3
+medals 18 32
 # --- ground: two tiles thick, with a 4-wide pit at x28..31 ---
 R 0 13 28 ground
 R 0 14 28 ground

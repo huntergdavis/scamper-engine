@@ -3,6 +3,7 @@ id boss-tub
 theme castle
 size 40 15
 spawn 2 12
+medals 30 60
 # --- the bath-house arena: a solid floor Baron Whiskers paces ---
 R 0 13 40 ground
 R 0 14 40 ground

@@ -135,6 +135,9 @@ pub struct Level {
     pub tiles: Vec<TileSpan>,
     pub entities: Vec<Entity>,
     pub checkpoints: Vec<(i32, i32)>,
+    /// Optional medal-time targets in seconds: (gold, silver). Bronze is anything
+    /// slower than silver. `None` lets the game apply default thresholds.
+    pub medals: Option<(u32, u32)>,
 }
 
 impl Level {
@@ -149,6 +152,7 @@ impl Level {
             tiles: Vec::new(),
             entities: Vec::new(),
             checkpoints: Vec::new(),
+            medals: None,
         }
     }
 
@@ -175,6 +179,9 @@ impl Level {
         let _ = writeln!(s, "spawn {} {}", self.spawn.0, self.spawn.1);
         if let Some(g) = &self.goal {
             let _ = writeln!(s, "goal {} {} {}", one_line(&g.kind), g.x, g.y);
+        }
+        if let Some((gold, silver)) = self.medals {
+            let _ = writeln!(s, "medals {gold} {silver}");
         }
         for t in &self.tiles {
             if t.len == 1 {
@@ -264,6 +271,11 @@ impl Level {
                 }
                 "C" => {
                     lvl.checkpoints.push((next_i32(&mut it, "C x")?, next_i32(&mut it, "C y")?));
+                }
+                "medals" => {
+                    let gold = next_i32(&mut it, "medals gold")?.max(0) as u32;
+                    let silver = next_i32(&mut it, "medals silver")?.max(0) as u32;
+                    lvl.medals = Some((gold, silver));
                 }
                 other => return Err(bad(format!("unknown line tag {other:?}"))),
             }
@@ -388,6 +400,7 @@ mod tests {
             props: vec![("warp".into(), "yard-romp-1a@3,12".into())],
         });
         l.checkpoints.push((24, 11));
+        l.medals = Some((18, 32));
         l
     }
 
