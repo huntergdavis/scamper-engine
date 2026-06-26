@@ -321,6 +321,34 @@ fn load_level_file(path: &str) -> std::io::Result<Level> {
     Level::from_text(&std::fs::read_to_string(path)?)
 }
 
+/// Tally (gold, silver, bronze) medals earned across the `.lvl` files in `dir`,
+/// using each level's targets against its persisted best time. Returns `None` for
+/// dirs with more than a campaign's worth of levels (skips the huge imported set).
+fn medal_tally(dir: &std::path::Path, bests: &std::collections::HashMap<String, u32>) -> Option<(u32, u32, u32)> {
+    let files: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().map(|x| x == "lvl").unwrap_or(false))
+        .collect();
+    if files.is_empty() || files.len() > 24 {
+        return None; // a campaign-sized set only — not the imported/mega dir
+    }
+    let (mut g, mut s, mut b) = (0u32, 0u32, 0u32);
+    for f in files {
+        if let Ok(lvl) = load_level_file(&f.to_string_lossy()) {
+            if let Some(&best) = bests.get(&lvl.id) {
+                let (mg, ms) = lvl.medals.unwrap_or((25, 55));
+                match medal_for(best, mg, ms).0 {
+                    "GOLD" => g += 1,
+                    "SILVER" => s += 1,
+                    _ => b += 1,
+                }
+            }
+        }
+    }
+    Some((g, s, b))
+}
+
 /// The next `*.lvl` file (alphabetical) in the same directory as `current`, or
 /// `None` if `current` is the last one. Used to auto-advance on level completion.
 /// Where per-level best clear-times persist (per-user home; falls back to cwd).
@@ -470,8 +498,15 @@ fn run_play(path: &str) {
     let mut level_kibble0: u32 = 0; // kibble total at the level's start (for the tally)
 
     // A title card to open the session — any key starts, q quits, and it
-    // auto-starts after a few seconds so it never blocks an unattended run.
-    if !show_title_card(&mut out, &mut input, cols, rows) {
+    // auto-starts after a few seconds so it never blocks an unattended run. If the
+    // player has medals in this level set, show the running tally as meta-progress.
+    let medal_line = std::path::Path::new(&cur_path)
+        .parent()
+        .and_then(|d| medal_tally(d, &bests))
+        .filter(|&(g, s, b)| g + s + b > 0)
+        .map(|(g, s, b)| format!("medals earned —  {g} gold · {s} silver · {b} bronze"))
+        .unwrap_or_default();
+    if !show_title_card(&mut out, &mut input, cols, rows, &medal_line) {
         drop(guard);
         return;
     }
@@ -2766,7 +2801,7 @@ fn hline(out: &mut Vec<u8>, row: u16, s: &str) {
 
 /// The opening title card. Any key (or a ~4s timeout, so unattended runs aren't
 /// blocked) starts the game; q/Esc quits — returns false then.
-fn show_title_card(out: &mut Vec<u8>, input: &mut Input, cols: u16, rows: u16) -> bool {
+fn show_title_card(out: &mut Vec<u8>, input: &mut Input, cols: u16, rows: u16, medals: &str) -> bool {
     use std::io::Write;
     out.clear();
     out.extend_from_slice(b"\x1b[2J");
@@ -2777,6 +2812,9 @@ fn show_title_card(out: &mut Vec<u8>, input: &mut Input, cols: u16, rows: u16) -
     let mid = (rows as i32 / 2).max(2);
     cen(out, mid - 2, "\x1b[1m★  S U P E R   M U N C H I I  ★\x1b[0m");
     cen(out, mid, "a sample game on the scamper engine");
+    if !medals.is_empty() {
+        cen(out, mid + 1, medals);
+    }
     cen(out, mid + 3, "\x1b[7m press any key to start \x1b[0m");
     cen(out, mid + 4, "move: arrows · jump: \u{2191} · throw: space · h help · q quit");
     {
