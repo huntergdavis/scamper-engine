@@ -465,6 +465,7 @@ fn run_play(path: &str) {
     let mut next_1up: u32 = 100; // every 100 kibble → an extra life
     let mut lives: i32 = 3;
     let mut power = Power::Small;
+    let mut has_bubble = false; // Bubble Bone throw gear (separate from size)
     let mut invuln: u32 = 0; // ticks of post-hit invulnerability
     let mut invincible: u32 = 0; // Star Bone: enemy-immunity + bulldoze, ticks left
     let mut star_t: u64 = 0; // last star-sparkle emit (ns)
@@ -578,11 +579,9 @@ fn run_play(path: &str) {
             let dir = if sim.player.facing >= 0 { 1i8 } else { -1i8 };
             let px = sim.player.pos.x + sim.player.w / 2.0;
             let py = sim.player.pos.y + sim.player.h * 0.4;
-            let (speed, size, cooldown) = match power {
-                Power::Small => (2.6, 4.0, 24),
-                Power::Big => (3.2, 4.0, 16),
-                Power::Bubble => (4.2, 5.0, 9),
-            };
+            // The Bubble Bone is the throw specialist: fast, big, far. Without it,
+            // a basic lob.
+            let (speed, size, cooldown) = if has_bubble { (4.2, 5.0, 9) } else { (3.0, 4.0, 18) };
             projectiles.push(Mob::new(px, py, size, size, dir, speed, Gait::Fly));
             fire_cd = cooldown;
         }
@@ -679,7 +678,7 @@ fn run_play(path: &str) {
         }
         // Bubble gear trails soap bubbles — a continuous aura so the Bubble state
         // reads distinctly from plain Big gear in every tier (incl. mono B&W).
-        if power == Power::Bubble && now.saturating_sub(aura_t) > 130 * 1_000_000 {
+        if has_bubble && now.saturating_sub(aura_t) > 130 * 1_000_000 {
             let bx = sim.player.pos.x + sim.player.w / 2.0 + ((now / 7_000_000) % 7) as f64 - 3.0;
             sim.fx.spawn_drift(&scamper::effects::BUBBLE, bx, sim.player.pos.y - 2.0, 0.0, -40.0, now);
             aura_t = now;
@@ -867,6 +866,9 @@ fn run_play(path: &str) {
                     glide = true; // unlock gliding
                     sim.fx.spawn_word(scamper::strings::t("fx.float"), (180, 230, 255), sim.player.pos.x + sim.player.w / 2.0, sim.player.pos.y - 8.0, fxclock);
                 }
+                if hits.bubble {
+                    has_bubble = true; // throw gear
+                }
                 if hits.star {
                     invincible = STAR_TICKS;
                     sim.fx.spawn_word(scamper::strings::t("fx.star"), (255, 240, 120), sim.player.pos.x + sim.player.w / 2.0, sim.player.pos.y - 8.0, fxclock);
@@ -909,11 +911,13 @@ fn run_play(path: &str) {
                 if invuln > 0 {
                     invuln -= 1;
                 } else if (hits.hurt || stick_hit) && invincible == 0 {
-                    if power == Power::Small {
+                    if has_bubble {
+                        has_bubble = false; // a hit knocks off the throw gear first
+                    } else if power == Power::Small {
                         lives -= 1; // wipeout → lose a life, back to the last checkpoint
                         sim = sim_at(respawn);
                     } else {
-                        power = power.dropped(); // shed a tier of gear
+                        power = power.dropped(); // shed a size tier
                     }
                     invuln = 90; // ~1.5s of grace so you don't re-hit instantly
                     glide = false; // a hit knocks the collar loose
@@ -943,6 +947,7 @@ fn run_play(path: &str) {
             } else {
                 sim = sim_at(respawn);
                 power = Power::Small;
+                has_bubble = false;
                 invuln = 90;
             }
             full_redraw = true;
@@ -977,6 +982,7 @@ fn run_play(path: &str) {
                 projectiles.clear();
                 hostiles.clear();
                 power = Power::Small;
+                has_bubble = false;
                 play_bgm(&level);
                 won = false;
                 boss_hp = 3;
@@ -1005,6 +1011,7 @@ fn run_play(path: &str) {
                     projectiles.clear();
                     hostiles.clear();
                     power = Power::Small;
+                    has_bubble = false;
                     play_bgm(&level);
                     boss_hp = 3;
                     boss_cd = 0;
@@ -1160,36 +1167,37 @@ fn run_play(path: &str) {
     eprintln!("scamp: play done.");
 }
 
-/// Munchii's power tier (gear, not damage): small → big (took a Big Kibble) →
-/// bubble (a Bubble Bone — can lob Sudsballs). A hit drops one tier; a hit while
-/// small is a wipeout (respawn). Mirrors the classic three-tier model.
+/// Munchii's SIZE tier — the core axis. Small → Big → Huge, grown/shrunk by the
+/// ▲/▼ power-ups (or the ⏫ super). The world magnifies as he shrinks (the whole
+/// twist): Small is a flea in a 4× world, Huge stands full-size in a 1× world. A
+/// hit drops one tier; a hit while Small is a wipeout. (The Bubble throw gear is a
+/// separate flag — size and gear are orthogonal now.)
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Power {
     Small,
     Big,
-    Bubble,
+    Huge,
 }
 
 impl Power {
-    /// The tier after taking a hit (Bubble→Big→Small).
+    /// The size after taking a hit (Huge→Big→Small).
     fn dropped(self) -> Power {
         match self {
-            Power::Bubble => Power::Big,
+            Power::Huge => Power::Big,
             _ => Power::Small,
         }
     }
-    /// Size step UP (the ▲ grow power-up). 2 sizes today (Small→Big); a third tier
-    /// slots in here later. Bubble is already big-tier, so it stays.
+    /// Size step UP (the ▲ grow power-up): Small→Big→Huge, capping at Huge.
     fn grown(self) -> Power {
         match self {
             Power::Small => Power::Big,
-            other => other,
+            _ => Power::Huge,
         }
     }
-    /// Size step DOWN (the ▼ shrink power-up): anything big-tier → Small.
+    /// Size step DOWN (the ▼ shrink power-up): Huge→Big→Small.
     fn shrunk(self) -> Power {
         match self {
-            Power::Small => Power::Small,
+            Power::Huge => Power::Big,
             _ => Power::Small,
         }
     }
@@ -1197,16 +1205,17 @@ impl Power {
         match self {
             Power::Small => "small",
             Power::Big => "big",
-            Power::Bubble => "bubble",
+            Power::Huge => "HUGE",
         }
     }
-    /// How much the *environment* is magnified while wearing this gear. Tiny
-    /// Munchii is a flea in a 4× world; powering up snaps the tiles down to 1× so
-    /// he's suddenly the big one — the whole twist, with no character resize.
+    /// How much the *environment* is magnified at this size — the world shrinks as
+    /// Munchii grows: Small 4× (giant world, tiny hero) → Big 2× → Huge 1× (normal
+    /// world, full-size hero). His on-screen size stays constant; the tiles change.
     fn zoom(self) -> usize {
         match self {
             Power::Small => 4,
-            _ => 1,
+            Power::Big => 2,
+            Power::Huge => 1,
         }
     }
     /// Munchii's hitbox (world px) for this gear: it shrinks with the world (base
@@ -1259,7 +1268,7 @@ struct Actor {
 
 /// Item kinds collect on touch; everything else is a creature you pounce.
 fn is_item(kind: &str) -> bool {
-    matches!(kind, "kibble" | "big_kibble" | "grow" | "shrink" | "bubble_bone" | "zoomies_treat" | "lucky_squeaky" | "flutter_collar" | "star_bone")
+    matches!(kind, "kibble" | "big_kibble" | "grow" | "shrink" | "super" | "bubble_bone" | "zoomies_treat" | "lucky_squeaky" | "flutter_collar" | "star_bone")
 }
 
 /// Creatures that curl into a kickable ball when pounced (instead of popping).
@@ -1431,7 +1440,7 @@ fn place_powerup_block(world: &mut LevelWorld, cx: i32, item: &str) -> bool {
 /// `seed` (so a level plays the same each time), always landing one in the opening
 /// scene. The size power-ups (▲ grow / ▼ shrink) dominate the pool.
 fn scatter_powerups(world: &mut LevelWorld, seed: u64) {
-    let pool = ["grow", "shrink", "grow", "shrink", "star_bone", "zoomies_treat"];
+    let pool = ["grow", "shrink", "grow", "shrink", "super", "star_bone", "zoomies_treat"];
     let mut rng = seed | 1;
     let mut next = move || {
         rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
@@ -1529,6 +1538,7 @@ struct Hits {
     oneup: bool,   // collected a Lucky Squeaky → extra life
     zoomies: bool, // collected a Zoomies Treat → timed speed burst
     collar: bool,  // collected a Flutter Collar → unlocks gliding
+    bubble: bool,  // collected a Bubble Bone → throw gear
     pounces: u32,  // creatures pounced this step (drives the air combo)
     pops: u32,     // critters popped this step, by any means (drives the POP! cue)
     pop_xy: (f64, f64), // a representative pop location (for the cue)
@@ -1696,9 +1706,15 @@ fn step_actors(actors: &mut [Actor], map: &TileMap, player: &mut Player, kibble:
                 *power = power.shrunk();
                 hits.fx.push((&scamper::effects::SPARKLE, bx + bw / 2.0, by));
             }
+            // ⏫ Super: jump straight to the biggest size.
+            "super" if a.item => {
+                a.mob.alive = false;
+                *power = Power::Huge;
+                hits.fx.push((&scamper::effects::SPARKLE, bx + bw / 2.0, by));
+            }
             "bubble_bone" if a.item => {
                 a.mob.alive = false;
-                *power = Power::Bubble;
+                hits.bubble = true; // throw gear (separate from size)
                 hits.fx.push((&scamper::effects::SPARKLE, bx + bw / 2.0, by));
             }
             "lucky_squeaky" if a.item => {
@@ -3940,8 +3956,11 @@ mod tests {
             power
         };
         assert_eq!(collect("grow", Power::Small), Power::Big, "grow: small → big");
+        assert_eq!(collect("grow", Power::Big), Power::Huge, "grow again: big → huge");
+        assert_eq!(collect("grow", Power::Huge), Power::Huge, "grow caps at huge");
+        assert_eq!(collect("shrink", Power::Huge), Power::Big, "shrink: huge → big");
         assert_eq!(collect("shrink", Power::Big), Power::Small, "shrink: big → small");
-        assert_eq!(collect("grow", Power::Big), Power::Big, "grow caps at big (for now)");
+        assert_eq!(collect("super", Power::Small), Power::Huge, "super → straight to huge");
     }
 
     /// Collecting a Flutter Collar unlocks gliding (flags `collar`).
@@ -4016,7 +4035,7 @@ mod tests {
             let rows = cols.saturating_add(1);
             for &won in &[false, true] {
                 for &over in &[false, true] {
-                    render_play_status(&mut buf, &lvl, State::Grounded, "mono", won, over, 12_345, 3, Power::Bubble, true, true, true, 99, rows, cols);
+                    render_play_status(&mut buf, &lvl, State::Grounded, "mono", won, over, 12_345, 3, Power::Huge, true, true, true, 99, rows, cols);
                 }
             }
             render_tiles_status(&mut buf, Theme::Castle, "ascii", rows, cols);

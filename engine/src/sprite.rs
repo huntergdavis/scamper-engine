@@ -65,6 +65,7 @@ pub const ALL: &[Sprite] = &[
     Sprite { id: "star_bone", role: Role::Item, w: 3, h: 2, anims: STAR_BONE, palette: star_rgb },
     Sprite { id: "grow", role: Role::Item, w: 4, h: 2, anims: GROW, palette: grow_rgb },
     Sprite { id: "shrink", role: Role::Item, w: 4, h: 2, anims: SHRINK, palette: shrink_rgb },
+    Sprite { id: "super", role: Role::Item, w: 4, h: 2, anims: SUPER, palette: super_rgb },
     Sprite { id: "chaser", role: Role::Creature, w: 4, h: 2, anims: CHASER, palette: chaser_rgb },
     Sprite { id: "haunt", role: Role::Creature, w: 4, h: 3, anims: HAUNT, palette: haunt_rgb },
     Sprite { id: "hardhat", role: Role::Creature, w: 6, h: 2, anims: HARDHAT, palette: hard_rgb },
@@ -215,6 +216,10 @@ fn grow_rgb(_ch: char) -> (u8, u8, u8) {
 /// Shrink arrow: a cool blue "get smaller" down-arrow.
 fn shrink_rgb(_ch: char) -> (u8, u8, u8) {
     (110, 190, 255)
+}
+/// Super arrow: a hot magenta "max size" double-up-arrow.
+fn super_rgb(_ch: char) -> (u8, u8, u8) {
+    (255, 120, 200)
 }
 /// Chaser: a rusty-red hunter — dark eye, pale bared teeth.
 fn chaser_rgb(ch: char) -> (u8, u8, u8) {
@@ -392,6 +397,10 @@ const GROW: &[Anim] = &[Anim { name: "idle", fps: 4, frames: GROW_F }];
 // Shrink — the ▼ power-up that makes him smaller. A bold down-arrow that pulses.
 const SHRINK_F: &[&[&str]] = &[&["\\||/", " \\/ "], &[" || ", " \\/ "]];
 const SHRINK: &[Anim] = &[Anim { name: "idle", fps: 4, frames: SHRINK_F }];
+
+// Super — the ⏫ double-up-arrow that jumps straight to the biggest size.
+const SUPER_F: &[&[&str]] = &[&[" /\\ ", " /\\ "], &["/^^\\", "/||\\"]];
+const SUPER: &[Anim] = &[Anim { name: "idle", fps: 6, frames: SUPER_F }];
 
 // Chaser — a snarling critter that hunts Munchii. Bared teeth + angry brows read
 // as aggression; the feet shuffle as it scrambles.
