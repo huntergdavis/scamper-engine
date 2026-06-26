@@ -2898,7 +2898,7 @@ fn render_play_help(out: &mut Vec<u8>, active_backend: &str) {
     r += 1;
     hline(out, r, "Double jump       jump again in mid-air");
     r += 1;
-    hline(out, r, "Crouch / pipe     S / \u{2193}   (enter a pipe while standing on it)");
+    hline(out, r, "Crouch / pipe     S / \u{2193}   (enter a pipe, or drop through a platform)");
     r += 1;
     hline(out, r, "Throw Sudsball    Space (or C)  \u{2022}  always ready — bonks critters");
     r += 1;

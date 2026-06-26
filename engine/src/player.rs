@@ -86,6 +86,9 @@ pub struct Player {
     pub did_double: bool,
     pub was_engaged: bool, // was engaging a wall last frame (for rising-edge regrant)
     pub bonked_head: bool, // hit a ceiling/block from below this step (head-bonk)
+    /// Seconds left in a "drop through one-way platforms" window (press down on a
+    /// semisolid to fall through). One-way collision is ignored while > 0.
+    pub drop_through: f64,
 }
 
 const PROBE: f64 = 1.0;
@@ -110,6 +113,7 @@ impl Player {
             did_double: false,
             was_engaged: false,
             bonked_head: false,
+            drop_through: 0.0,
         }
     }
 
@@ -143,6 +147,16 @@ impl Player {
         // --- contacts (from current rest position) ---
         self.grounded = self.detect_grounded(map);
         self.wall_dir = self.detect_wall(map);
+
+        // Drop-through: pressing down while standing on a one-way platform (and not
+        // on solid ground) opens a brief window where one-way collision is ignored,
+        // so the player falls through the semisolid ledge.
+        let on_solid = map.overlaps(self.pos.x + INSET, self.pos.y + self.h, self.w - 2.0 * INSET, PROBE);
+        let on_oneway_only = !on_solid && map.on_oneway(self.pos.x + INSET, self.w - 2.0 * INSET, self.pos.y + self.h);
+        if down_held && self.grounded && on_oneway_only {
+            self.drop_through = 0.12;
+        }
+        self.drop_through = (self.drop_through - dt).max(0.0);
 
         // --- timers ---
         if self.grounded {
@@ -312,7 +326,7 @@ impl Player {
             // Solid contact stops on any axis; a one-way platform only stops a
             // descending box whose feet cross its top (jump up through it freely).
             let blocked = map.overlaps(nx, ny, self.w, self.h)
-                || (dy > 0.0 && map.lands_on_oneway(nx, self.w, self.pos.y + self.h, ny + self.h));
+                || (dy > 0.0 && self.drop_through <= 0.0 && map.lands_on_oneway(nx, self.w, self.pos.y + self.h, ny + self.h));
             if blocked {
                 // Head-bump corner correction: when rising into a ceiling corner, if
                 // a small sideways nudge clears it, slip past and keep rising instead
@@ -365,6 +379,36 @@ mod tests {
             "####################",
         ];
         TileMap::from_ascii(&rows)
+    }
+
+    #[test]
+    fn drop_through_one_way_platform_lands_on_the_floor_below() {
+        let rows = [
+            "....................",
+            "....................",
+            "....................",
+            "....................",
+            "....................",
+            "....................",
+            "....................",
+            "....................",
+            "....................",
+            "....................",
+            "####################", // solid floor (row 10)
+        ];
+        let mut map = TileMap::from_ascii(&rows);
+        map.set_oneway(5, 6, true); // a one-way platform at (5,6) → top y=96
+        let fp = FeelParams::default();
+        let mut p = Player::new(80.0, 70.0); // col 5, above the platform → falls onto it
+        for _ in 0..30 {
+            p.step(&map, 1.0 / 60.0, 0.0, false, false, false, &fp); // settle (no down)
+        }
+        assert!(p.grounded && (p.pos.y - 80.0).abs() < 3.0, "rests on the one-way platform (y={})", p.pos.y);
+        for _ in 0..90 {
+            p.step(&map, 1.0 / 60.0, 0.0, false, false, true, &fp); // hold down → drop through
+        }
+        // Floor top is row 10 → y=160; player h=16 → rests near 144, well below the platform.
+        assert!((p.pos.y - 144.0).abs() < 3.0, "dropped through to the floor below (y={})", p.pos.y);
     }
 
     #[test]
