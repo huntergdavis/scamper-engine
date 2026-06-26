@@ -437,8 +437,6 @@ fn run_play(path: &str) {
     let mut hostiles: Vec<Mob> = Vec::new(); // enemy thrown sticks
     let mut fire_cd: u32 = 0; // throw cooldown (frames)
     let mut aura_t: u64 = 0; // last bubble-aura emit (ns)
-    let mut ambient_t: u64 = 0; // last ambient-particle emit (ns)
-    let mut wallspark_t: u64 = 0; // last wall-slide friction spark (ns)
     let mut dash_t: u64 = 0; // last zoomies dash-trail emit (ns)
     let mut shake = scamper::shake::Shake::new(); // camera juice on impacts
     let mut frame_ix: u64 = 0; // render-frame counter (drives the shake tremble)
@@ -649,7 +647,7 @@ fn run_play(path: &str) {
             sim.fp.run_accel *= 1.7;
             if sim.player.grounded && sim.player.vel.x.abs() > scaled_max_run && now.saturating_sub(dash_t) > 70 * 1_000_000 {
                 let behind = sim.player.pos.x + sim.player.w / 2.0 - sim.player.facing as f64 * sim.player.w;
-                sim.fx.spawn(&scamper::effects::DASH, behind, sim.player.pos.y + sim.player.h * 0.4, now);
+                sim.fx.spawn(&scamper::effects::DASH, behind, sim.player.pos.y + sim.player.h * 0.4, sim.clock());
                 dash_t = now;
             }
         }
@@ -658,62 +656,33 @@ fn run_play(path: &str) {
         if dashing > 0 {
             sim.fp.max_run = sim.fp.max_run.max(DASH_SPEED * fk);
         }
-        // Wall-slide friction sparks — surface the engine's wall-slide/jump in play.
-        if sim.player.state == State::WallSliding && now.saturating_sub(wallspark_t) > 60 * 1_000_000 {
-            let side = if sim.player.wall_dir > 0 { sim.player.w } else { 0.0 };
-            sim.fx.spawn(&scamper::effects::SPARK, sim.player.pos.x + side, sim.player.pos.y + sim.player.h * 0.5, now);
-            wallspark_t = now;
-        }
-        // Ambient particles: snowfall / bubbles / drifting leaves, by theme — a
-        // living backdrop that falls from the TOP of the view across its full width.
-        // Only while zoomed out (powered): the tiny-world Small view is too cramped
-        // for weather, and anchoring near the player just litters dots on his head.
-        if power.zoom() == 1 {
-            if let Some(amb) = ambient_fx(world.theme) {
-                if now.saturating_sub(ambient_t) > 260 * 1_000_000 {
-                    let half_w = fb_w as f64 / 2.0;
-                    let half_h = fb_h as f64 / 2.0;
-                    let r = (now / 1_000_000 % 997) as f64 / 997.0;
-                    let pcx = sim.player.pos.x + sim.player.w / 2.0;
-                    let pcy = sim.player.pos.y + sim.player.h / 2.0;
-                    let ax = pcx - half_w + r * 2.0 * half_w; // across the visible width
-                    let ay = pcy - half_h; // from the top edge of the view
-                    // Bubbles rise; snow/leaves fall (with a little horizontal sway).
-                    let (vx, vy) = match world.theme {
-                        scamper::level::Theme::Underwater => ((r - 0.5) * 12.0, -48.0),
-                        scamper::level::Theme::Snow => ((r - 0.5) * 14.0, 38.0),
-                        _ => ((r - 0.5) * 22.0, 30.0),
-                    };
-                    sim.fx.spawn_drift(amb, ax, ay, vx, vy, now);
-                    ambient_t = now;
-                }
-            }
-        }
+        // (Wall-slide friction sparks live in Sim::step now, on the tick clock, so
+        // they spawn *and* expire on the same clock fx.update() runs on.)
         // Invincibility: a continuous sparkle halo so the Star state reads in every
         // tier (incl. mono B&W), even though Munchii himself isn't hidden.
         if invincible > 0 && now.saturating_sub(star_t) > 70 * 1_000_000 {
             let off = ((now / 5_000_000) % 9) as f64 - 4.0;
-            sim.fx.spawn(&scamper::effects::SPARKLE, sim.player.pos.x + sim.player.w / 2.0 + off, sim.player.pos.y - 2.0 + off.abs() * 0.5, now);
+            sim.fx.spawn(&scamper::effects::SPARKLE, sim.player.pos.x + sim.player.w / 2.0 + off, sim.player.pos.y - 2.0 + off.abs() * 0.5, sim.clock());
             star_t = now;
         }
         // Bubble gear trails soap bubbles — a continuous aura so the Bubble state
         // reads distinctly from plain Big gear in every tier (incl. mono B&W).
         if has_bubble && now.saturating_sub(aura_t) > 130 * 1_000_000 {
             let bx = sim.player.pos.x + sim.player.w / 2.0 + ((now / 7_000_000) % 7) as f64 - 3.0;
-            sim.fx.spawn_drift(&scamper::effects::BUBBLE, bx, sim.player.pos.y - 2.0, 0.0, -40.0, now);
+            sim.fx.spawn_drift(&scamper::effects::BUBBLE, bx, sim.player.pos.y - 2.0, 0.0, -40.0, sim.clock());
             aura_t = now;
         }
         // Glide feathers: a gentle wisp trail while actively floating.
         if glide && !sim.player.grounded && sim.player.vel.y > 0.0 && input.jump_held() && now.saturating_sub(glide_t) > 90 * 1_000_000 {
             let fx = sim.player.pos.x + sim.player.w / 2.0 + ((now / 5_000_000) % 5) as f64 - 2.0;
-            sim.fx.spawn(&scamper::effects::FEATHER, fx, sim.player.pos.y + sim.player.h * 0.5, now);
+            sim.fx.spawn(&scamper::effects::FEATHER, fx, sim.player.pos.y + sim.player.h * 0.5, sim.clock());
             glide_t = now;
         }
         // Boss telegraph: an angry alert pops over Baron Whiskers as he paces, so
         // he reads as a live threat (and hints "jump his head").
         if !won && now.saturating_sub(boss_t) > 1100 * 1_000_000 {
             if let Some(b) = actors.iter().find(|a| a.kind == "baron_whiskers" && a.mob.alive) {
-                sim.fx.spawn(&scamper::effects::BANG, b.mob.pos.x + b.mob.w / 2.0, b.mob.pos.y - 8.0, now);
+                sim.fx.spawn(&scamper::effects::BANG, b.mob.pos.x + b.mob.w / 2.0, b.mob.pos.y - 8.0, sim.clock());
                 boss_t = now;
             }
         }
@@ -735,12 +704,11 @@ fn run_play(path: &str) {
                 dashing = dashing.saturating_sub(1); // dash burst window
                 // Touchdown after a real fall → a dust scuff + a soft thump.
                 if pre_air && sim.player.grounded && pre_vy > 220.0 {
-                    sim.fx.spawn(&scamper::effects::DUST, sim.player.pos.x + sim.player.w / 2.0, sim.player.pos.y + sim.player.h, now);
-                    shake.bump(0.2);
+                    shake.bump(0.2); // the dust scuff itself is emitted by Sim::step on every landing
                 }
                 // Leaving the ground upward (a jump) → a little kick-off puff.
                 if !pre_air && !sim.player.grounded && sim.player.vel.y < 0.0 {
-                    sim.fx.spawn(&scamper::effects::DUST, sim.player.pos.x + sim.player.w / 2.0, sim.player.pos.y + sim.player.h, now);
+                    sim.fx.spawn(&scamper::effects::DUST, sim.player.pos.x + sim.player.w / 2.0, sim.player.pos.y + sim.player.h, sim.clock());
                 }
                 if sim.player.grounded {
                     combo = 0; // touching down ends the air combo
@@ -976,7 +944,7 @@ fn run_play(path: &str) {
         // sparkle marks it). One-way: passing right of a checkpoint banks it.
         while next_cp < world.checkpoints.len() && sim.player.pos.x + sim.player.w / 2.0 >= world.checkpoints[next_cp].0 {
             respawn = world.checkpoints[next_cp];
-            sim.fx.spawn(&scamper::effects::SPARKLE, respawn.0, respawn.1 - TILE, now);
+            sim.fx.spawn(&scamper::effects::SPARKLE, respawn.0, respawn.1 - TILE, sim.clock());
             next_cp += 1;
         }
         // goal reached → level complete; after a short beat, auto-advance to the
@@ -1317,16 +1285,6 @@ fn pop_fx(kind: &str) -> &'static scamper::effects::Effect {
 
 /// The ambient particle that drifts through a theme (snowfall, bubbles, leaves),
 /// or none for the bare themes. Spawned continuously for a living backdrop.
-fn ambient_fx(theme: scamper::level::Theme) -> Option<&'static scamper::effects::Effect> {
-    use scamper::level::Theme;
-    match theme {
-        Theme::Snow => Some(&scamper::effects::SNOW),
-        Theme::Underwater => Some(&scamper::effects::BUBBLE),
-        Theme::Overworld => Some(&scamper::effects::LEAF),
-        _ => None,
-    }
-}
-
 /// The medal (name, ★ rating) for clearing in `secs` against a level's (gold,
 /// silver) time targets — a per-level, time-based reward (bronze = slower).
 fn medal_for(secs: u32, gold: u32, silver: u32) -> (&'static str, &'static str) {
