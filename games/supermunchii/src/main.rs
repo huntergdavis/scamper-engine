@@ -1057,9 +1057,14 @@ fn run_play(path: &str) {
             full_redraw = false;
             let secs = ((if won { won_at } else { now }).saturating_sub(level_start) / 1_000_000_000) as u32;
             render_play_status(&mut status, &level, sim.player.state, backend.name(), won, game_over, kibble, lives, power, zoomies > 0, glide, invincible > 0, secs, rows + 1, cols);
+            // Top-of-screen HUD overlays (progress bar, fever, boss bar, assist) are
+            // text drawn over the play area. On the Kitty tier that punches into the
+            // transmitted image every frame and makes it flicker, so they're text-tier
+            // only; the bottom status line (below the image) shows on every tier.
+            let overlay_hud = !backend.pixel_exact();
             // Slim level-progress bar on the top row: a marker rides ─── toward a ⚑
             // at the level's end. (Skipped during cards so they aren't cluttered.)
-            if !won && !game_over && !paused && now >= intro_until {
+            if overlay_hud && !won && !game_over && !paused && now >= intro_until {
                 use std::fmt::Write;
                 let bw = (cols as usize).saturating_sub(6).max(4);
                 let frac = (sim.player.pos.x / world.px_w().max(1.0)).clamp(0.0, 1.0);
@@ -1070,14 +1075,14 @@ fn run_play(path: &str) {
                 }
                 let _ = write!(status, "\x1b[1;3H\x1b[2m{bar}\x1b[0m\x1b[1;{}H⚑", bw + 3);
             }
-            if assist && !won && !game_over {
+            if overlay_hud && assist && !won && !game_over {
                 use std::fmt::Write;
                 let _ = write!(status, "\x1b[1;{}H\x1b[1;7m ⛑ ASSIST \x1b[0m", (cols as usize).saturating_sub(10).max(1));
             }
             // Active coin-fever multiplier, top-left (row 2, clear of the centered
             // boss bar). Written every frame — text when hot, blanks to erase when
             // it lapses (this cell isn't otherwise repainted).
-            if !won && !game_over {
+            if overlay_hud && !won && !game_over {
                 use std::fmt::Write;
                 if coin_mult > 1 {
                     let _ = write!(status, "\x1b[2;3H\x1b[1;7m x{coin_mult} FEVER \x1b[0m");
@@ -1086,7 +1091,7 @@ fn run_play(path: &str) {
                 }
             }
             // Boss health bar: only while Baron Whiskers is present and the fight's on.
-            if !won && !game_over && actors.iter().any(|a| a.kind == "baron_whiskers" && a.mob.alive) {
+            if overlay_hud && !won && !game_over && actors.iter().any(|a| a.kind == "baron_whiskers" && a.mob.alive) {
                 let pips: String = (0..3).map(|i| if (i as i32) < boss_hp { '♥' } else { '·' }).collect();
                 let bar = format!(" BARON WHISKERS  {pips} ");
                 scamper::ui::center_card(&mut status, cols, 2, &[&bar], true);
