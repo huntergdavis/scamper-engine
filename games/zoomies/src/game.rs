@@ -455,7 +455,9 @@ fn draw_frame(
             let cx = lx + mw / 2.0;
             sprites.push((lines, lx, ly, sp.palette));
             // A red "-" tag above it: this one HURTS (reads in B&W by shape alone).
-            sprites.push((vec!["-".to_string()], cx - cpw / 2.0, ly - cph, minus_rgb as fn(char) -> (u8, u8, u8)));
+            let bar = bigtext("-");
+            let bw = bar[0].chars().count() as f64 * cpw;
+            sprites.push((bar, cx - bw / 2.0, ly - 6.0 * cph, minus_rgb as fn(char) -> (u8, u8, u8)));
         }
     }
 
@@ -476,8 +478,12 @@ fn draw_frame(
             let ly = sy(tr.y + tr.h) - mh;
             let cx = lx + mw / 2.0;
             sprites.push((lines, lx, ly, sp.palette));
-            // A green "+" tag above it: this one HEALS.
-            sprites.push((vec!["+".to_string()], cx - cpw / 2.0, ly - cph, plus_rgb as fn(char) -> (u8, u8, u8)));
+            // A green medical-cross marker, spelled in the pixel font so "good" reads
+            // in black & white by shape (not just color). Gently bobs to catch the eye.
+            let cross = bigtext("✚");
+            let cw = cross[0].chars().count() as f64 * cpw;
+            let bob = (sim.clock() as f64 / 1.0e9 * 5.0).sin() * cph * 0.6;
+            sprites.push((cross, cx - cw / 2.0, ly - 6.0 * cph + bob, plus_rgb as fn(char) -> (u8, u8, u8)));
         }
     }
 
@@ -498,7 +504,9 @@ fn draw_frame(
             let ly = sy(b.pos.y + b.h) - mh;
             let cx = lx + mw / 2.0;
             sprites.push((lines, lx, ly, sp.palette));
-            sprites.push((vec!["-".to_string()], cx - cpw / 2.0, ly - cph, minus_rgb as fn(char) -> (u8, u8, u8)));
+            let bar = bigtext("-");
+            let bw = bar[0].chars().count() as f64 * cpw;
+            sprites.push((bar, cx - bw / 2.0, ly - 6.0 * cph, minus_rgb as fn(char) -> (u8, u8, u8)));
         }
     }
 
