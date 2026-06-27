@@ -180,6 +180,10 @@ pub fn run(input: &mut Input, difficulty: Difficulty, seed: u64) -> Outcome {
                     swap_backend(&mut backend, &mut out, fidelity);
                     shake.bump(0.6);
                     full_redraw = true;
+                    let px = sim.player.pos.x + sim.player.w / 2.0;
+                    let clk = sim.clock();
+                    sim.fx.spawn(&scamper::effects::BANG, px, sim.player.pos.y - 4.0, clk);
+                    sim.fx.spawn_word("OUCH!", (255, 120, 110), px, sim.player.pos.y - 12.0, clk);
                 }
                 Tick::Heal => {
                     // A steak restores a fidelity tier — rebuild the renderer one step
@@ -190,6 +194,10 @@ pub fn run(input: &mut Input, difficulty: Difficulty, seed: u64) -> Outcome {
                         full_redraw = true;
                     }
                     shake.bump(0.3);
+                    let px = sim.player.pos.x + sim.player.w / 2.0;
+                    let clk = sim.clock();
+                    sim.fx.spawn(&scamper::effects::SPARKLE, px, sim.player.pos.y, clk);
+                    sim.fx.spawn_word("YUM!", (140, 240, 150), px, sim.player.pos.y - 12.0, clk);
                 }
                 Tick::Continue => {}
             }
@@ -433,8 +441,13 @@ fn draw_frame(
         sprites.push((lines, lx, ly, munchii::beagle_rgb as fn(char) -> (u8, u8, u8)));
     }
 
+    // Transient effects (jump puff / landing dust from Sim::step, plus our hit/heal
+    // bursts) and floating word-pops, world-anchored on the tick clock.
+    let fxr = sim.fx.render(sim.clock());
+    let words = sim.fx.render_words(sim.clock());
+
     if backend.draws_overlay() {
-        let overlays: Vec<Overlay> = sprites
+        let mut overlays: Vec<Overlay> = sprites
             .iter()
             .enumerate()
             .map(|(i, (lns, lx, ly, p))| Overlay {
@@ -446,10 +459,25 @@ fn draw_frame(
                 z: i as i32,
             })
             .collect();
+        let fx_lines: Vec<Vec<String>> = fxr.iter().map(|(frame, ..)| frame.iter().map(|s| s.to_string()).collect()).collect();
+        for ((frame, tint, z, fxx, fxy), lns) in fxr.iter().zip(fx_lines.iter()) {
+            let w = frame.iter().map(|l| l.chars().count()).max().unwrap_or(0) as f64;
+            overlays.push(Overlay { lines: lns, col: ((sx(*fxx) - w * cpw / 2.0) / cpw).round() as i32, row: (sy(*fxy) / cph).round() as i32, tint: Some(*tint), palette: None, z: 1000 + z });
+        }
+        let word_lines: Vec<Vec<String>> = words.iter().map(|(t, ..)| vec![t.to_string()]).collect();
+        for ((text, tint, z, wx, wy), lns) in words.iter().zip(word_lines.iter()) {
+            overlays.push(Overlay { lines: lns, col: ((sx(*wx) - text.chars().count() as f64 * cpw / 2.0) / cpw).round() as i32, row: (sy(*wy) / cph).round() as i32, tint: Some(*tint), palette: None, z: 2000 + z });
+        }
         backend.present(out, fb, cols, rows, full_redraw, &overlays);
     } else {
         for (lns, lx, ly, p) in &sprites {
             draw_sprite_pixels(fb, lns, *lx, *ly, cpw, cph, *p);
+        }
+        for &(frame, tint, _z, fxx, fxy) in &fxr {
+            draw_effect_pixels(fb, frame, tint, sx(fxx), sy(fxy), cpw, cph);
+        }
+        for &(text, tint, _z, wx, wy) in &words {
+            draw_effect_pixels(fb, &[text], tint, sx(wx), sy(wy), cpw, cph);
         }
         backend.present(out, fb, cols, rows, full_redraw, &[]);
     }
@@ -473,6 +501,25 @@ fn draw_hud(dist: u32, speed: f64, fidelity: u8, cols: u16, status_row: u16) {
     let mut o = std::io::stdout().lock();
     let _ = write!(o, "\x1b[{};1H\x1b[2K\x1b[7m{text}\x1b[0m", status_row);
     let _ = o.flush();
+}
+
+/// Rasterize an effect clip / word into the framebuffer (pixel tiers): each glyph a
+/// cell-sized block in the effect tint. `ax`/`ay` = clip anchor (center-x, top-y).
+fn draw_effect_pixels(fb: &mut Framebuffer, frame: &[&str], tint: (u8, u8, u8), ax: f64, ay: f64, cpw: f64, cph: f64) {
+    let w_cells = frame.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+    let left = ax - w_cells as f64 * cpw / 2.0;
+    let col = Rgba::rgb(tint.0, tint.1, tint.2);
+    for (gr, line) in frame.iter().enumerate() {
+        for (gc, ch) in line.chars().enumerate() {
+            if ch != ' ' {
+                let x0 = (left + gc as f64 * cpw).floor() as i32;
+                let x1 = (left + (gc as f64 + 1.0) * cpw).floor() as i32;
+                let y0 = (ay + gr as f64 * cph).floor() as i32;
+                let y1 = (ay + (gr as f64 + 1.0) * cph).floor() as i32;
+                fb.fill_rect(x0, y0, (x1 - x0).max(1), (y1 - y0).max(1), col);
+            }
+        }
+    }
 }
 
 /// Rasterize a glyph sprite into the framebuffer (pixel tiers). Spaces transparent.
