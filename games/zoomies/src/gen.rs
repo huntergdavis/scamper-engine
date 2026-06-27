@@ -99,6 +99,12 @@ fn speed_at(t: &Tuning, x_px: f64) -> f64 {
     t.start_speed + (t.max_speed - t.start_speed) * f
 }
 
+/// The auto-run speed (px/s) at world x for a difficulty — what the gameplay loop
+/// ramps `max_run` to. (Speed is independent of row count.)
+pub fn run_speed(difficulty: Difficulty, x_px: f64) -> f64 {
+    speed_at(&tuning(difficulty, 24), x_px)
+}
+
 /// Safety margin: the player is only asked to clear 80% of what the physics allow,
 /// so imperfect timing still makes it.
 const SAFETY: f64 = 0.8;

@@ -17,6 +17,7 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
 
+mod game;
 mod gen;
 
 /// Enter key (kitty reports it as CSI 13 u). Space also selects, for legacy terminals.
@@ -228,7 +229,16 @@ fn menu_loop(input: &mut Input) {
         }
         if select {
             match ITEMS[menu.selected()] {
-                Item::Run => show_card(&mut out, input, &["Zoomies", "", "the run lands in a later step —", "rooftops, rising speed, fidelity = health.", "", "press any key"]),
+                Item::Run => {
+                    let outcome = game::run(input, diff, now_ns());
+                    let head = match outcome {
+                        game::Outcome::Maxed { .. } => "You maxed the course!",
+                        game::Outcome::Fell { .. } => "You fell between the buildings!",
+                        game::Outcome::Quit { .. } => "Run ended",
+                    };
+                    let dist = format!("{} m", outcome.distance());
+                    show_card(&mut out, input, &[head, "", &dist, "", "press any key"]);
+                }
                 Item::Difficulty => {
                     diff = diff.next();
                     save.set_difficulty(diff);
