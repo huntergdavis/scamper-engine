@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build and launch Scamper.
 #   ./run.sh                   # play the game (default)
-#   ./run.sh -i                # interactive menu (arcade / levels / tools)
+#   ./run.sh -i                # interactive menu (arcade · engine tools)
 #   ./run.sh arcade            # the game picker (Super Munchii · Zoomies)
 #   ./run.sh zoomies           # Zoomies: the rooftop infinite-runner sample
 #   ./run.sh sprites           # sprite-lab: view sprite animations
@@ -307,6 +307,7 @@ munchii_menu() {
 tools_menu() {
     while true; do
         menu "SCAMPER \xc2\xb7 engine tools" \
+            "Super Munchii levels  (campaign \xc2\xb7 sandbox \xc2\xb7 imported)" \
             "sprite viewer  (Tab cycles backends)" \
             "tile viewer  (Tab gfx \xc2\xb7 space tile \xc2\xb7 t theme)" \
             "record a run" \
@@ -314,61 +315,29 @@ tools_menu() {
             "debug tools" \
             "back"
         case "$MENU_SEL" in
-            0) "target/$profile_dir/sprite-lab" ;;
-            1) "target/$profile_dir/tile-lab" ;;
-            2) record_run ;;
-            3) replay_browser ;;
-            4) debug_menu ;;
+            0) munchii_menu ;;
+            1) "target/$profile_dir/sprite-lab" ;;
+            2) "target/$profile_dir/tile-lab" ;;
+            3) record_run ;;
+            4) replay_browser ;;
+            5) debug_menu ;;
             *) return ;;
         esac
     done
 }
 
-# A quick how-to-play card (shown from the menu; in-game 'h' has the full list).
-how_to_play() {
-    printf '\033[2J\033[H'
-    cat <<'EOF'
-
-  SUPER MUNCHII — how to play
-
-    Move / run     A D  or  <- ->   (hold to build speed; tap the other way to skid)
-    Jump           Z / K / W / Up   (hold for height; jump again mid-air to double)
-    Throw          Space (or C)     (lob a Sudsball — always ready)
-    Dash (dodge)   X                (quick burst + brief invulnerability)
-    Crouch / pipe  S / Down          p pause  ·  h in-game help  ·  q quit
-
-  Goal: reach the bath plug (or beat the boss). Pounce critters from above —
-  but spiky ones must be popped with a Sudsball. Chain pounces for a COMBO.
-
-  Gear changes how you play:
-    Big Kibble  -> bigger & tougher        Bubble Bone -> fast, far Sudsballs
-    Zoomies     -> speed burst             Flutter Collar -> hold jump to glide
-    Star Bone   -> brief invincibility      100 kibble = an extra life
-
-  Watch for: trampolines (bounce high), lifts (ride them), crumbling planks
-  (stand and they drop!), and checkpoints (respawn there).
-
-  press a key to go back…
-EOF
-    IFS= read -rsn1
-}
-
 interactive_menu() {
     cargo build "${profile_args[@]}"
     while true; do
-        # Front door: into the arcade (the game picker), the Super Munchii level
-        # browsers, the controls card, or the engine tools.
+        # Front door: just the arcade (the game picker — each game owns its own
+        # menus/help) and the engine/dev tools. Everything else lives inside those.
         menu "SCAMPER  (a terminal 2D game engine)" \
             "Arcade  (Super Munchii \xc2\xb7 Zoomies)" \
-            "Super Munchii levels & sandbox" \
-            "How to play  (Super Munchii)" \
             "Engine tools" \
             "quit"
         case "$MENU_SEL" in
             0) run_arcade ;;
-            1) munchii_menu ;;
-            2) how_to_play ;;
-            3) tools_menu ;;
+            1) tools_menu ;;
             *) break ;;
         esac
     done
