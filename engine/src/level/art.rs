@@ -257,17 +257,25 @@ pub fn draw_backdrop(fb: &mut Framebuffer, theme: Theme, p: &Palette, cam_x: f64
             layer(0.18, 120, &mut |fb, x| kelp(fb, x, base, (h as f64 * 0.5) as i32, far));
             layer(0.34, 96, &mut |fb, x| kelp(fb, x, base, (h as f64 * 0.66) as i32, near));
         }
-        // Rooftops: a parallax city skyline of flat-topped towers rising from the
-        // bottom edge. The near layer pairs a tall tower (with a little rooftop water
-        // tank) and a squat neighbor for a varied silhouette.
+        // Rooftops: a deep, four-layer parallax city skyline rising from the bottom
+        // edge — distant towers barely creep while foreground rooftops rush past, so
+        // the parallax always reads (the game's whole vibe). Each layer is a faint
+        // additive step so B&W stays clean.
         Theme::Rooftop => {
             let base = h;
-            layer(0.18, 150, &mut |fb, x| tower(fb, x, base, 30, (h as f64 * 0.5) as i32, far));
-            layer(0.34, 120, &mut |fb, x| {
+            let deepest = bump(3);
+            let fore = bump(16);
+            layer(0.07, 70, &mut |fb, x| tower(fb, x, base, 18, (h as f64 * 0.34) as i32, deepest));
+            layer(0.16, 130, &mut |fb, x| tower(fb, x, base, 28, (h as f64 * 0.5) as i32, far));
+            layer(0.30, 110, &mut |fb, x| {
                 let tall = (h as f64 * 0.68) as i32;
                 tower(fb, x, base, 26, tall, near);
                 tower(fb, x + 60, base, 38, (h as f64 * 0.42) as i32, near);
                 tower(fb, x, base - tall, 8, 6, near); // rooftop water tank
+            });
+            layer(0.50, 90, &mut |fb, x| {
+                tower(fb, x, base, 46, (h as f64 * 0.26) as i32, fore);
+                tower(fb, x + 30, base - (h as f64 * 0.26) as i32, 6, 5, fore); // a vent stack
             });
         }
         // Overworld / Snow: rolling hills.
