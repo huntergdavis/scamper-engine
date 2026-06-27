@@ -1346,6 +1346,7 @@ fn bgm_for(theme: &str) -> &'static str {
         Theme::Underwater => "splash",
         Theme::Castle => "bath-house",
         Theme::Snow => "chill",
+        Theme::Rooftop => "skyline",
         Theme::Overworld => "romp",
     }
 }

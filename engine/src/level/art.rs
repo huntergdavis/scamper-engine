@@ -25,6 +25,7 @@ pub enum Theme {
     Underwater,
     Castle,
     Snow,
+    Rooftop,
 }
 
 impl Theme {
@@ -34,6 +35,7 @@ impl Theme {
             "underwater" | "water" => Theme::Underwater,
             "castle" | "bath" | "bathhouse" => Theme::Castle,
             "snow" | "ice" => Theme::Snow,
+            "rooftop" | "rooftops" | "city" => Theme::Rooftop,
             _ => Theme::Overworld,
         }
     }
@@ -44,10 +46,11 @@ impl Theme {
             Theme::Underwater => "underwater",
             Theme::Castle => "castle",
             Theme::Snow => "snow",
+            Theme::Rooftop => "rooftop",
         }
     }
     /// Cycle order for the preview tool.
-    pub const ALL: [Theme; 5] = [Theme::Overworld, Theme::Underground, Theme::Underwater, Theme::Castle, Theme::Snow];
+    pub const ALL: [Theme; 6] = [Theme::Overworld, Theme::Underground, Theme::Underwater, Theme::Castle, Theme::Snow, Theme::Rooftop];
 }
 
 /// Named colors a theme provides to the tile patterns.
@@ -161,6 +164,26 @@ pub fn palette(theme: Theme) -> Palette {
             deco: c(150, 172, 206),
             hint: c(96, 112, 142),
         },
+        // Rooftops at night: deep-indigo sky, slate blue-gray roof bodies with a
+        // bright parapet lip, warm "lit window" accents. Lumas mirror the Castle
+        // theme's spread (gray stone) so the tile kinds stay mono-distinct.
+        Theme::Rooftop => Palette {
+            sky: c(18, 20, 40),
+            ground: c(92, 100, 124),
+            ground_top: c(150, 160, 188),
+            ground_dark: c(58, 64, 86),
+            brick: c(112, 108, 128),
+            mortar: c(48, 48, 64),
+            block: c(230, 196, 110),
+            block_rivet: c(120, 86, 30),
+            accent: c(64, 52, 24),
+            pipe: c(96, 132, 110),
+            platform: c(128, 134, 156),
+            hazard_a: c(180, 60, 40),
+            hazard_b: c(255, 170, 70),
+            deco: c(100, 104, 122),
+            hint: c(56, 58, 72),
+        },
     }
 }
 
@@ -234,6 +257,19 @@ pub fn draw_backdrop(fb: &mut Framebuffer, theme: Theme, p: &Palette, cam_x: f64
             layer(0.18, 120, &mut |fb, x| kelp(fb, x, base, (h as f64 * 0.5) as i32, far));
             layer(0.34, 96, &mut |fb, x| kelp(fb, x, base, (h as f64 * 0.66) as i32, near));
         }
+        // Rooftops: a parallax city skyline of flat-topped towers rising from the
+        // bottom edge. The near layer pairs a tall tower (with a little rooftop water
+        // tank) and a squat neighbor for a varied silhouette.
+        Theme::Rooftop => {
+            let base = h;
+            layer(0.18, 150, &mut |fb, x| tower(fb, x, base, 30, (h as f64 * 0.5) as i32, far));
+            layer(0.34, 120, &mut |fb, x| {
+                let tall = (h as f64 * 0.68) as i32;
+                tower(fb, x, base, 26, tall, near);
+                tower(fb, x + 60, base, 38, (h as f64 * 0.42) as i32, near);
+                tower(fb, x, base - tall, 8, 6, near); // rooftop water tank
+            });
+        }
         // Overworld / Snow: rolling hills.
         _ => {
             let base_y = (h as f64 * 0.66) as i32;
@@ -241,6 +277,12 @@ pub fn draw_backdrop(fb: &mut Framebuffer, theme: Theme, p: &Palette, cam_x: f64
             layer(0.34, 132, &mut |fb, x| hump(fb, x, base_y, 96, 44, near));
         }
     }
+}
+
+/// A flat-topped building silhouette: a `width`-wide rectangle rising `height` from
+/// `base_y` (used for the rooftop skyline parallax).
+fn tower(fb: &mut Framebuffer, cx: i32, base_y: i32, width: i32, height: i32, color: Rgba) {
+    fb.fill_rect(cx - width / 2, base_y - height, width, height.max(1), color);
 }
 
 /// A rounded hump (hill) — base centered at (`cx`,`base_y`), tapering up.
