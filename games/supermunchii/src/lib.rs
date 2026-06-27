@@ -7,8 +7,9 @@ use scamper::backend::{AsciiBackend, Backend, KittyBackend, MonoBackend, Overlay
 use scamper::capture::{self, InputFrame, Recording, Snapshots};
 use scamper::munchii;
 use scamper::framebuffer::{Framebuffer, Rgba};
-use scamper::input::{Input, K_1, K_2, K_3, K_4, K_DOWN, K_ESC, K_G, K_HELP, K_N, K_P, K_Q, K_S, K_T, K_TAB, K_X, K_Y};
+use scamper::input::{Input, K_1, K_2, K_3, K_4, K_DOWN, K_ENTER, K_ESC, K_G, K_HELP, K_N, K_P, K_Q, K_S, K_SPACE, K_T, K_TAB, K_UP, K_W, K_X, K_Y};
 use scamper::level::art::{self, Theme};
+use scamper::menu::Menu;
 use scamper::level::ir::Level;
 use scamper::level::world::{Bonk, LevelWorld};
 use scamper::math::Vec2;
@@ -20,10 +21,167 @@ use scamper::world::{TileMap, TILE};
 use scamper::{dlog, kitty, terminal};
 use std::io::Write;
 
-/// Launch straight into live play — the entry the arcade launcher calls when this
-/// game is chosen from the picker. (The standalone binary goes through [`run_cli`].)
+/// The arcade's entry for Super Munchii: its own menu of ways to play — the same
+/// options the old run.sh `munchii_menu` offered. Each choice drops the menu's
+/// terminal guard before launching (run_play / run_live take their own), then the
+/// menu re-opens on return. (The standalone binary goes through [`run_cli`].)
 pub fn launch() {
-    run_live(None);
+    let labels = vec![
+        "Megalevel  (random stitch)".to_string(),
+        "Play a level  (campaign)".to_string(),
+        "Sandbox arena".to_string(),
+        "Browse imported levels".to_string(),
+        "Back".to_string(),
+    ];
+    let mut menu = Menu::new("★  S U P E R   M U N C H I I  ★", labels);
+    loop {
+        let choice = {
+            let _guard = match terminal::TerminalGuard::enter() {
+                Ok(g) => g,
+                Err(e) => {
+                    eprintln!("super munchii needs an interactive terminal (Kitty/Ghostty/foot). ({e})");
+                    return;
+                }
+            };
+            let mut input = Input::new(terminal::probe_kitty_keyboard());
+            menu_pick(&mut input, &mut menu)
+        }; // guard drops here, before we launch a level
+
+        match choice {
+            Some(0) => run_play(&default_test_level()),
+            Some(1) => {
+                let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("levels");
+                if let Some(p) = pick_level("play a level", &dir) {
+                    run_play(&p);
+                }
+            }
+            Some(2) => run_live(None),
+            Some(3) => {
+                if let Some(p) = pick_level("imported levels", std::path::Path::new("imported/lvl")) {
+                    run_play(&p);
+                }
+            }
+            _ => return, // Back / quit
+        }
+    }
+}
+
+/// Render a menu and poll until a row is chosen — `Some(index)` to act, `None` to
+/// back out (q / Esc / Ctrl-C). Caller owns the terminal guard.
+fn menu_pick(input: &mut Input, menu: &mut Menu) -> Option<usize> {
+    let mut out: Vec<u8> = Vec::new();
+    loop {
+        let ws = terminal::query_winsize();
+        out.clear();
+        out.extend_from_slice(b"\x1b[2J");
+        let mut s = String::new();
+        menu.render(&mut s, ws.cols, (ws.rows as i32 / 2 - 4).max(1) as u16);
+        out.extend_from_slice(s.as_bytes());
+        {
+            let mut o = std::io::stdout().lock();
+            let _ = o.write_all(&out);
+            let _ = o.flush();
+        }
+        if terminal::quit_requested() {
+            return None;
+        }
+        input.poll();
+        if input.quit || input.pressed(K_Q) || input.pressed(K_ESC) {
+            return None;
+        }
+        if input.pressed(K_UP) || input.pressed(K_W) {
+            menu.up();
+        }
+        if input.pressed(K_DOWN) || input.pressed(K_S) {
+            menu.down();
+        }
+        if input.pressed(K_ENTER) || input.pressed(K_SPACE) {
+            return Some(menu.selected());
+        }
+        sleep_until_ns(now_ns() + 16_000_000, 1_000_000);
+    }
+}
+
+/// Browse `*.lvl` files under `dir` (recursively) and return the chosen path, or
+/// `None` if there are none / the player backs out. Owns its own terminal guard.
+fn pick_level(title: &str, dir: &std::path::Path) -> Option<String> {
+    let _guard = terminal::TerminalGuard::enter().ok()?;
+    let mut input = Input::new(terminal::probe_kitty_keyboard());
+    let mut out: Vec<u8> = Vec::new();
+
+    let mut paths: Vec<String> = Vec::new();
+    collect_lvls(dir, &mut paths);
+    paths.sort();
+    if paths.is_empty() {
+        // A brief "nothing here" card until any key.
+        loop {
+            let ws = terminal::query_winsize();
+            out.clear();
+            out.extend_from_slice(b"\x1b[2J");
+            let mut s = String::new();
+            let msg = format!("no levels under {}", dir.display());
+            scamper::ui::center_card(&mut s, ws.cols, (ws.rows / 2).max(1), &[&msg, "", "press any key"], true);
+            out.extend_from_slice(s.as_bytes());
+            {
+                let mut o = std::io::stdout().lock();
+                let _ = o.write_all(&out);
+                let _ = o.flush();
+            }
+            if terminal::quit_requested() {
+                return None;
+            }
+            input.poll();
+            if input.quit || input.any_pressed() {
+                return None;
+            }
+            sleep_until_ns(now_ns() + 16_000_000, 1_000_000);
+        }
+    }
+
+    // Display the path relative to `dir`, without the .lvl extension.
+    let names: Vec<String> = paths
+        .iter()
+        .map(|p| {
+            std::path::Path::new(p)
+                .strip_prefix(dir)
+                .unwrap_or_else(|_| std::path::Path::new(p))
+                .with_extension("")
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    let mut menu = Menu::new(title.to_string(), names);
+    loop {
+        let ws = terminal::query_winsize();
+        out.clear();
+        out.extend_from_slice(b"\x1b[2J");
+        let mut s = String::new();
+        let max_rows = (ws.rows as usize).saturating_sub(6).max(4);
+        menu.render_windowed(&mut s, ws.cols, 2, max_rows);
+        out.extend_from_slice(s.as_bytes());
+        {
+            let mut o = std::io::stdout().lock();
+            let _ = o.write_all(&out);
+            let _ = o.flush();
+        }
+        if terminal::quit_requested() {
+            return None;
+        }
+        input.poll();
+        if input.quit || input.pressed(K_Q) || input.pressed(K_ESC) {
+            return None;
+        }
+        if input.pressed(K_UP) || input.pressed(K_W) {
+            menu.up();
+        }
+        if input.pressed(K_DOWN) || input.pressed(K_S) {
+            menu.down();
+        }
+        if input.pressed(K_ENTER) || input.pressed(K_SPACE) {
+            return Some(paths[menu.selected()].clone());
+        }
+        sleep_until_ns(now_ns() + 16_000_000, 1_000_000);
+    }
 }
 
 /// The standalone `scamp` command-line entry: dispatches a subcommand from `args`

@@ -61,6 +61,30 @@ impl Menu {
         let refs: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
         ui::center_card(out, cols, top_row, &refs, true);
     }
+
+    /// Like [`render`](Self::render) but shows at most `max_rows` items, scrolling a
+    /// window to keep the cursor in view (for long lists like a level browser). A
+    /// "↑/↓ more" hint marks a clipped end.
+    pub fn render_windowed(&self, out: &mut String, cols: u16, top_row: u16, max_rows: usize) {
+        let n = self.items.len();
+        let win = max_rows.max(1);
+        // Start so the cursor is centered, clamped to the list ends.
+        let start = if n <= win { 0 } else { self.cursor.saturating_sub(win / 2).min(n - win) };
+        let end = (start + win).min(n);
+        let mut lines: Vec<String> = vec![self.title.clone(), String::new()];
+        if start > 0 {
+            lines.push("   ↑ more".to_string());
+        }
+        for i in start..end {
+            let marker = if i == self.cursor { "▶ " } else { "  " };
+            lines.push(format!("{marker}{}", self.items[i]));
+        }
+        if end < n {
+            lines.push("   ↓ more".to_string());
+        }
+        let refs: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
+        ui::center_card(out, cols, top_row, &refs, true);
+    }
 }
 
 #[cfg(test)]
@@ -106,6 +130,20 @@ mod tests {
         m.down();
         m.up();
         assert_eq!(m.selected(), 0);
+    }
+
+    #[test]
+    fn windowed_render_scrolls_to_keep_cursor_visible() {
+        let items: Vec<String> = (0..20).map(|i| format!("item{i}")).collect();
+        let mut m = Menu::new("Long", items);
+        for _ in 0..15 {
+            m.down(); // cursor = 15
+        }
+        let mut out = String::new();
+        m.render_windowed(&mut out, 40, 2, 5);
+        assert!(out.contains("item15"), "cursor item visible: {out:?}");
+        assert!(out.contains("↑ more") && out.contains("↓ more"), "both ends clipped");
+        assert!(!out.contains("item0"), "far items windowed out");
     }
 
     #[test]
