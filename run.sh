@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Build and launch Scamper.
-#   ./run.sh                   # play the game (default)
-#   ./run.sh -i                # interactive menu (arcade · engine tools)
-#   ./run.sh arcade            # the game picker (Super Munchii · Zoomies)
+#   ./run.sh                   # interactive menu (arcade · engine tools) — default
+#   ./run.sh arcade            # straight to the game picker (Super Munchii · Zoomies)
 #   ./run.sh zoomies           # Zoomies: the rooftop infinite-runner sample
 #   ./run.sh sprites           # sprite-lab: view sprite animations
 #   ./run.sh verify ./scratch  # headless: scripted scenarios + PNG dumps
@@ -344,9 +343,9 @@ interactive_menu() {
     printf '\033[2J\033[H'
 }
 
-# -i / --interactive: the menu. Otherwise dispatch directly (back-compatible).
+# No args (or -i): the interactive menu. Otherwise dispatch directly (a subcommand).
 case "${1:-}" in
-    -i | --interactive | -interactive)
+    "" | -i | --interactive | -interactive)
         interactive_menu
         ;;
     arcade | -a | games)
@@ -360,10 +359,6 @@ case "${1:-}" in
     sprites | lab | sprite-lab)
         cargo build "${profile_args[@]}" --bin sprite-lab
         exec "target/$profile_dir/sprite-lab"
-        ;;
-    "")
-        cargo build "${profile_args[@]}" --bin supermunchii
-        run_game
         ;;
     *)
         cargo build "${profile_args[@]}" --bin supermunchii
