@@ -32,27 +32,31 @@ const COURSE_TILES: i32 = 4000;
 /// Invulnerability after a hit (~1.25s of i-frames at 60 Hz).
 const HIT_GRACE: u32 = 75;
 
-/// How a run ended.
+/// How a run ended, carrying the final `score` (distance boosted by the pristine
+/// multiplier — see the run loop).
 pub enum Outcome {
-    /// Fell into a gap after `distance` metres.
-    Fell { distance: u32 },
+    /// Fell into a gap.
+    Fell { score: u32 },
     /// Took a hit at mono (tier 1) — out of fidelity.
-    Downed { distance: u32 },
+    Downed { score: u32 },
     /// Reached the end of the course.
-    Maxed { distance: u32 },
+    Maxed { score: u32 },
     /// Player quit back to the menu mid-run.
-    Quit { distance: u32 },
+    Quit { score: u32 },
 }
 
 impl Outcome {
-    pub fn distance(&self) -> u32 {
+    pub fn score(&self) -> u32 {
         match *self {
-            Outcome::Fell { distance }
-            | Outcome::Downed { distance }
-            | Outcome::Maxed { distance }
-            | Outcome::Quit { distance } => distance,
+            Outcome::Fell { score } | Outcome::Downed { score } | Outcome::Maxed { score } | Outcome::Quit { score } => score,
         }
     }
+}
+
+/// Why a tick ended the run (the score is added by the run loop, which owns it).
+enum EndReason {
+    Fell,
+    Maxed,
 }
 
 /// What one sim tick produced.
@@ -60,7 +64,7 @@ enum Tick {
     Continue,
     Hit,
     Heal,
-    Ended(Outcome),
+    Ended(EndReason),
 }
 
 /// The backend for a fidelity tier: 4 = Kitty pixels, 3 = half-blocks, 2 = ASCII,
@@ -87,6 +91,12 @@ fn plus_rgb(_: char) -> (u8, u8, u8) {
 }
 fn minus_rgb(_: char) -> (u8, u8, u8) {
     (240, 110, 100)
+}
+
+/// The pristine multiplier for a full-fidelity streak length (ticks): 1× ramping to
+/// a 3× cap over ~10s of clean (tier-4) play. A hit resets the streak.
+fn pristine_mult(pristine_ticks: u32) -> f64 {
+    1.0 + (pristine_ticks as f64 / 600.0).min(2.0)
 }
 
 /// The HUD fidelity bar: filled pips for current tier, hollow for lost ones.
@@ -152,6 +162,8 @@ pub fn run(input: &mut Input, difficulty: Difficulty, seed: u64) -> Outcome {
     let mut treats = course.treats.clone(); // live list; collected ones are removed
     // Patrol birds: Track gait oscillates them ±~3 tiles around their home x.
     let mut birds = build_birds(&course);
+    let mut score = 0.0f64; // distance, boosted by the pristine multiplier
+    let mut pristine = 0u32; // ticks held at full fidelity (drives the multiplier)
     let mut pending_jump = false;
     let mut full_redraw = true;
     let mut acc: u64 = 0;
@@ -162,7 +174,7 @@ pub fn run(input: &mut Input, difficulty: Difficulty, seed: u64) -> Outcome {
     let outcome = 'game: loop {
         input.poll();
         if scamper::terminal::quit_requested() || input.quit || input.pressed(K_Q) || input.pressed(K_ESC) {
-            break 'game Outcome::Quit { distance: distance_m(&sim, &course) };
+            break 'game Outcome::Quit { score: score as u32 };
         }
         if input.pressed(K_SPACE) || input.pressed(K_UP) || input.pressed(K_W) {
             pending_jump = true;
@@ -178,21 +190,26 @@ pub fn run(input: &mut Input, difficulty: Difficulty, seed: u64) -> Outcome {
         }
         acc += elapsed;
         while acc >= SIM_DT_NS {
+            let px0 = sim.player.pos.x;
             let tick = advance(&mut sim, &course, &mut treats, &mut birds, difficulty, base_fp, pending_jump, jump_held, down_held, death_y, course_end_px, &mut invuln);
             pending_jump = false;
             acc -= SIM_DT_NS;
             match tick {
-                Tick::Ended(o) => {
-                    if matches!(o, Outcome::Fell { .. }) {
-                        draw_frame(&mut *backend, &mut out, &mut fb, &course, &treats, &birds, &sim, cam_x, (0.0, 0.0), cols, rows, fb_w, fb_h, true, fidelity, invuln, difficulty);
+                Tick::Ended(reason) => {
+                    let s = score as u32;
+                    if matches!(reason, EndReason::Fell) {
+                        let mult = pristine_mult(pristine);
+                        draw_frame(&mut *backend, &mut out, &mut fb, &course, &treats, &birds, &sim, cam_x, (0.0, 0.0), cols, rows, fb_w, fb_h, true, fidelity, invuln, difficulty, s, mult);
+                        break 'game Outcome::Fell { score: s };
                     }
-                    break 'game o;
+                    break 'game Outcome::Maxed { score: s };
                 }
                 Tick::Hit => {
                     let (nf, dead) = hit_result(fidelity);
                     fidelity = nf;
+                    pristine = 0; // a hit breaks the streak → multiplier resets to 1×
                     if dead {
-                        break 'game Outcome::Downed { distance: distance_m(&sim, &course) };
+                        break 'game Outcome::Downed { score: score as u32 };
                     }
                     // Tear the old renderer down and rebuild one tier lower, with a jolt.
                     swap_backend(&mut backend, &mut out, fidelity);
@@ -219,6 +236,14 @@ pub fn run(input: &mut Input, difficulty: Difficulty, seed: u64) -> Outcome {
                 }
                 Tick::Continue => {}
             }
+            // Pristine bonus: the multiplier grows only while at full fidelity, and
+            // scores the distance covered this tick.
+            if fidelity >= 4 {
+                pristine += 1;
+            } else {
+                pristine = 0;
+            }
+            score += ((sim.player.pos.x - px0).max(0.0) / TILE) * pristine_mult(pristine);
         }
 
         // Camera: follow the player, never backtrack (forced rightward).
@@ -227,7 +252,7 @@ pub fn run(input: &mut Input, difficulty: Difficulty, seed: u64) -> Outcome {
         let sh = shake.offset(frame, 5.0);
         frame += 1;
         let needs_redraw = full_redraw || shake.active();
-        draw_frame(&mut *backend, &mut out, &mut fb, &course, &treats, &birds, &sim, cam_x, sh, cols, rows, fb_w, fb_h, needs_redraw, fidelity, invuln, difficulty);
+        draw_frame(&mut *backend, &mut out, &mut fb, &course, &treats, &birds, &sim, cam_x, sh, cols, rows, fb_w, fb_h, needs_redraw, fidelity, invuln, difficulty, score as u32, pristine_mult(pristine));
         full_redraw = false;
         sleep_until_ns(now_ns() + 16_000_000, 1_000_000);
     };
@@ -258,9 +283,6 @@ fn swap_backend(backend: &mut Box<dyn Backend>, out: &mut Vec<u8>, tier: u8) {
     out.clear();
 }
 
-fn distance_m(sim: &Sim, course: &gen::Course) -> u32 {
-    ((sim.player.pos.x - course.spawn.0).max(0.0) / TILE) as u32
-}
 
 /// Advance one sim tick: ramp speed, drive auto-run + jump, count down i-frames, then
 /// check hazards and the end conditions. Pure of rendering, so it's headless-testable.
@@ -294,10 +316,10 @@ fn advance(
 
     let p = &sim.player;
     if p.pos.y > death_y {
-        return Tick::Ended(Outcome::Fell { distance: distance_m(sim, course) });
+        return Tick::Ended(EndReason::Fell);
     }
     if p.pos.x + p.w >= course_end_px {
-        return Tick::Ended(Outcome::Maxed { distance: distance_m(sim, course) });
+        return Tick::Ended(EndReason::Maxed);
     }
     // Grab a steak (any tick, even mid-i-frames) → heal a tier.
     if let Some(i) = treats.iter().position(|t| {
@@ -347,6 +369,8 @@ fn draw_frame(
     fidelity: u8,
     invuln: u32,
     difficulty: Difficulty,
+    score: u32,
+    mult: f64,
 ) {
     out.clear(); // the backends append this frame's bytes; we flush them below
     let pal = art::palette(art::Theme::Rooftop);
@@ -509,12 +533,12 @@ fn draw_frame(
 
     // HUD on the row just below the play image (not over it — avoids fighting the
     // Kitty image at the top, which flickers on recomposite).
-    draw_hud(distance_m(sim, course), gen::run_speed(difficulty, sim.player.pos.x), fidelity, cols, rows + 1);
+    draw_hud(score, mult, gen::run_speed(difficulty, sim.player.pos.x), fidelity, cols, rows + 1);
 }
 
-/// A single status row (distance, speed, fidelity bar) on `status_row`, full width.
-fn draw_hud(dist: u32, speed: f64, fidelity: u8, cols: u16, status_row: u16) {
-    let text = format!("  ⚡ {dist} m    {:.0} px/s    fidelity {}  ", speed, fidelity_pips(fidelity));
+/// A single status row (score, pristine multiplier, speed, fidelity) full width.
+fn draw_hud(score: u32, mult: f64, speed: f64, fidelity: u8, cols: u16, status_row: u16) {
+    let text = format!("  ⚡ {score}   ×{:.1}   {:.0} px/s   fidelity {}  ", mult, speed, fidelity_pips(fidelity));
     let text: String = text.chars().take(cols as usize).collect();
     let mut o = std::io::stdout().lock();
     let _ = write!(o, "\x1b[{};1H\x1b[2K\x1b[7m{text}\x1b[0m", status_row);
@@ -599,22 +623,33 @@ mod tests {
         let mut invuln = 0u32;
         let mut treats = course.treats.clone();
         let mut birds = build_birds(&course);
+        let mut score = 0.0f64;
+        let mut pristine = 0u32;
         for tick in 0..6000u32 {
             let jp = jump(&sim, &course);
+            let px0 = sim.player.pos.x;
             match advance(&mut sim, &course, &mut treats, &mut birds, difficulty, base_fp, jp, jp, false, death_y, course_end_px, &mut invuln) {
-                Tick::Ended(o) => return (o, tick),
+                Tick::Ended(EndReason::Fell) => return (Outcome::Fell { score: score as u32 }, tick),
+                Tick::Ended(EndReason::Maxed) => return (Outcome::Maxed { score: score as u32 }, tick),
                 Tick::Hit => {
                     let (nf, dead) = hit_result(fidelity);
                     fidelity = nf;
+                    pristine = 0;
                     if dead {
-                        return (Outcome::Downed { distance: distance_m(&sim, &course) }, tick);
+                        return (Outcome::Downed { score: score as u32 }, tick);
                     }
                 }
                 Tick::Heal => fidelity = (fidelity + 1).min(4),
                 Tick::Continue => {}
             }
+            if fidelity >= 4 {
+                pristine += 1;
+            } else {
+                pristine = 0;
+            }
+            score += ((sim.player.pos.x - px0).max(0.0) / TILE) * pristine_mult(pristine);
         }
-        (Outcome::Quit { distance: distance_m(&sim, &course) }, 6000)
+        (Outcome::Quit { score: score as u32 }, 6000)
     }
 
     #[test]
@@ -624,12 +659,19 @@ mod tests {
         // auto-run, and gap-death detection.
         let (outcome, _) = simulate(7, Difficulty::Standard, 14, |_, _| false);
         match outcome {
-            Outcome::Fell { distance } => {
-                assert!(distance >= 3, "should clear some opening roof first, got {distance} m");
-                assert!(distance < 60, "without jumping it can't get far, got {distance} m");
+            Outcome::Fell { score } => {
+                assert!(score >= 3, "should clear some opening roof first, got {score}");
+                assert!(score < 80, "without jumping it can't get far, got {score}");
             }
-            other => panic!("expected a fall without jumping, got {} m", other.distance()),
+            other => panic!("expected a fall without jumping, got {}", other.score()),
         }
+    }
+
+    #[test]
+    fn pristine_multiplier_grows_then_caps() {
+        assert!((pristine_mult(0) - 1.0).abs() < 1e-9, "starts at 1x");
+        assert!(pristine_mult(300) > 1.4 && pristine_mult(300) < 1.6, "climbs");
+        assert!((pristine_mult(100_000) - 3.0).abs() < 1e-9, "caps at 3x");
     }
 
     #[test]

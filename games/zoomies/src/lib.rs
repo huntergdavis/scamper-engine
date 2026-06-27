@@ -252,7 +252,7 @@ fn menu_loop(input: &mut Input) {
             match ITEMS[menu.selected()] {
                 Item::Run => {
                     let outcome = game::run(input, diff, now_ns());
-                    let dist = outcome.distance();
+                    let score = outcome.score();
                     let head = match outcome {
                         game::Outcome::Maxed { .. } => "You maxed the course!",
                         game::Outcome::Fell { .. } => "You fell between the buildings!",
@@ -261,18 +261,18 @@ fn menu_loop(input: &mut Input) {
                     };
                     // A qualifying run (not a deliberate quit) earns a name prompt,
                     // then goes on the board.
-                    let placed = if !matches!(outcome, game::Outcome::Quit { .. }) && save.qualifies(diff, dist) {
-                        let name = prompt_name(&mut out, input, dist);
-                        save.record(diff, &name, dist)
+                    let placed = if !matches!(outcome, game::Outcome::Quit { .. }) && save.qualifies(diff, score) {
+                        let name = prompt_name(&mut out, input, score);
+                        save.record(diff, &name, score)
                     } else {
                         None
                     };
                     let best = save.top(diff).first().map(|(_, v)| *v).unwrap_or(0);
-                    let mut lines = vec![head.to_string(), String::new(), format!("Distance:  {dist} m")];
+                    let mut lines = vec![head.to_string(), String::new(), format!("Score:  {score}")];
                     if let Some(rank) = placed {
                         lines.push(format!("★  NEW HIGH SCORE — #{}  ★", rank + 1));
                     }
-                    lines.push(format!("Best ({}):  {best} m", diff.label()));
+                    lines.push(format!("Best ({}):  {best}", diff.label()));
                     lines.push(String::new());
                     lines.push("press any key".to_string());
                     let refs: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
@@ -355,8 +355,8 @@ fn show_scores(out: &mut Vec<u8>, input: &mut Input, save: &Save, diff: Difficul
     let mut lines: Vec<String> = vec![format!("High Scores — {}", diff.label()), String::new()];
     for i in 0..TOP_N {
         match top.get(i) {
-            Some((name, v)) => lines.push(format!("{}.  {:<10} {:>6} m", i + 1, name, v)),
-            None => lines.push(format!("{}.  {:<10} {:>6}  ", i + 1, "---", "—")),
+            Some((name, v)) => lines.push(format!("{}.  {:<10} {:>7}", i + 1, name, v)),
+            None => lines.push(format!("{}.  {:<10} {:>7}", i + 1, "---", "—")),
         }
     }
     lines.push(String::new());
@@ -368,7 +368,7 @@ fn show_scores(out: &mut Vec<u8>, input: &mut Input, save: &Save, diff: Difficul
 
 /// Text-entry modal for a new high score. Type a name (letters/digits/space),
 /// Backspace to fix, Enter to confirm, Esc to skip (defaults to "YOU").
-fn prompt_name(out: &mut Vec<u8>, input: &mut Input, dist: u32) -> String {
+fn prompt_name(out: &mut Vec<u8>, input: &mut Input, score: u32) -> String {
     let mut name = String::new();
     loop {
         let ws = terminal::query_winsize();
@@ -378,7 +378,7 @@ fn prompt_name(out: &mut Vec<u8>, input: &mut Input, dist: u32) -> String {
         let lines = [
             "★  NEW HIGH SCORE!  ★".to_string(),
             String::new(),
-            format!("{dist} m"),
+            format!("score  {score}"),
             String::new(),
             "Enter your name:".to_string(),
             format!("[ {}_ ]", name),
