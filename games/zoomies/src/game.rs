@@ -126,10 +126,10 @@ pub fn run(input: &mut Input, difficulty: Difficulty, seed: u64) -> Outcome {
     let mut acc: u64 = 0;
     let mut prev = now_ns();
 
-    loop {
+    let outcome = 'game: loop {
         input.poll();
         if scamper::terminal::quit_requested() || input.quit || input.pressed(K_Q) || input.pressed(K_ESC) {
-            return Outcome::Quit { distance: distance_m(&sim, &course) };
+            break 'game Outcome::Quit { distance: distance_m(&sim, &course) };
         }
         if input.pressed(K_SPACE) || input.pressed(K_UP) || input.pressed(K_W) {
             pending_jump = true;
@@ -153,13 +153,13 @@ pub fn run(input: &mut Input, difficulty: Difficulty, seed: u64) -> Outcome {
                     if matches!(o, Outcome::Fell { .. }) {
                         draw_frame(&mut *backend, &mut out, &mut fb, &course, &sim, cam_x, cols, rows, fb_w, fb_h, true, fidelity, invuln, difficulty);
                     }
-                    return o;
+                    break 'game o;
                 }
                 Tick::Hit => {
                     let (nf, dead) = hit_result(fidelity);
                     fidelity = nf;
                     if dead {
-                        return Outcome::Downed { distance: distance_m(&sim, &course) };
+                        break 'game Outcome::Downed { distance: distance_m(&sim, &course) };
                     }
                     // Tear the old renderer down and rebuild one tier lower.
                     swap_backend(&mut backend, &mut out, fidelity);
@@ -175,7 +175,18 @@ pub fn run(input: &mut Input, difficulty: Difficulty, seed: u64) -> Outcome {
         draw_frame(&mut *backend, &mut out, &mut fb, &course, &sim, cam_x, cols, rows, fb_w, fb_h, full_redraw, fidelity, invuln, difficulty);
         full_redraw = false;
         sleep_until_ns(now_ns() + 16_000_000, 1_000_000);
+    };
+    // Tear the run's backend down (delete Kitty images, clear) so the caller's score
+    // card / menu paints over a clean screen.
+    let mut o2: Vec<u8> = Vec::new();
+    backend.teardown(&mut o2);
+    {
+        let mut o = std::io::stdout().lock();
+        let _ = o.write_all(&o2);
+        let _ = o.write_all(b"\x1b[2J");
+        let _ = o.flush();
     }
+    outcome
 }
 
 /// Swap to `tier`'s backend: tear the current one down, clear, and replace.

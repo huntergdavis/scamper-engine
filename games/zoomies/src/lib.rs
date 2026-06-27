@@ -231,21 +231,36 @@ fn menu_loop(input: &mut Input) {
             match ITEMS[menu.selected()] {
                 Item::Run => {
                     let outcome = game::run(input, diff, now_ns());
+                    let dist = outcome.distance();
                     let head = match outcome {
                         game::Outcome::Maxed { .. } => "You maxed the course!",
                         game::Outcome::Fell { .. } => "You fell between the buildings!",
                         game::Outcome::Downed { .. } => "Out of fidelity — downed!",
                         game::Outcome::Quit { .. } => "Run ended",
                     };
-                    let dist = format!("{} m", outcome.distance());
-                    show_card(&mut out, input, &[head, "", &dist, "", "press any key"]);
+                    // Record completed/failed runs (not a deliberate quit) to the table.
+                    let placed = if matches!(outcome, game::Outcome::Quit { .. }) {
+                        None
+                    } else {
+                        save.record(diff, dist)
+                    };
+                    let best = save.top(diff).first().copied().unwrap_or(0);
+                    let mut lines = vec![head.to_string(), String::new(), format!("Distance:  {dist} m")];
+                    if let Some(rank) = placed {
+                        lines.push(format!("★  NEW HIGH SCORE — #{}  ★", rank + 1));
+                    }
+                    lines.push(format!("Best ({}):  {best} m", diff.label()));
+                    lines.push(String::new());
+                    lines.push("press any key".to_string());
+                    let refs: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
+                    show_card(&mut out, input, &refs);
                 }
                 Item::Difficulty => {
                     diff = diff.next();
                     save.set_difficulty(diff);
                     menu.set_items(menu_labels(diff));
                 }
-                Item::Scores => show_scores(&mut out, input, &save),
+                Item::Scores => show_scores(&mut out, input, &save, diff),
                 Item::Help => show_help(&mut out, input),
                 Item::Back => return,
             }
@@ -311,14 +326,17 @@ fn show_help(out: &mut Vec<u8>, input: &mut Input) {
     );
 }
 
-fn show_scores(out: &mut Vec<u8>, input: &mut Input, save: &Save) {
-    let mut lines: Vec<String> = vec!["High Scores  (distance)".to_string(), String::new()];
-    for d in Difficulty::ALL {
-        let top = save.top(d);
-        let best = top.first().copied().unwrap_or(0);
-        lines.push(format!("{:<16} {:>6} m", d.label(), best));
+fn show_scores(out: &mut Vec<u8>, input: &mut Input, save: &Save, diff: Difficulty) {
+    let top = save.top(diff);
+    let mut lines: Vec<String> = vec![format!("High Scores — {}", diff.label()), String::new()];
+    for i in 0..TOP_N {
+        match top.get(i) {
+            Some(v) => lines.push(format!("{}.   {:>6} m", i + 1, v)),
+            None => lines.push(format!("{}.        —", i + 1)),
+        }
     }
     lines.push(String::new());
+    lines.push("(change difficulty in the menu)".to_string());
     lines.push("press any key".to_string());
     let refs: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
     show_card(out, input, &refs);
