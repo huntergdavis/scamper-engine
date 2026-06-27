@@ -258,7 +258,7 @@ pub fn run(input: &mut Input, difficulty: Difficulty, seed: u64) -> Outcome {
                     let px = sim.player.pos.x + sim.player.w / 2.0;
                     let clk = sim.clock();
                     sim.fx.spawn(&scamper::effects::SPARKLE, px, sim.player.pos.y, clk);
-                    sim.fx.spawn_word("YUM!", (140, 240, 150), px, sim.player.pos.y - 12.0, clk);
+                    sim.fx.spawn_word("✚ YUM", (120, 240, 140), px, sim.player.pos.y - 12.0, clk);
                 }
                 Tick::Continue => {}
             }
@@ -540,9 +540,17 @@ fn draw_frame(
             let w = frame.iter().map(|l| l.chars().count()).max().unwrap_or(0) as f64;
             overlays.push(Overlay { lines: lns, col: ((sx(*fxx) - w * cpw / 2.0) / cpw).round() as i32, row: (sy(*fxy) / cph).round() as i32, tint: Some(*tint), palette: None, z: 1000 + z });
         }
-        let word_lines: Vec<Vec<String>> = words.iter().map(|(t, ..)| vec![t.to_string()]).collect();
-        for ((text, tint, z, wx, wy), lns) in words.iter().zip(word_lines.iter()) {
-            overlays.push(Overlay { lines: lns, col: ((sx(*wx) - text.chars().count() as f64 * cpw / 2.0) / cpw).round() as i32, row: (sy(*wy) / cph).round() as i32, tint: Some(*tint), palette: None, z: 2000 + z });
+        let word_lines: Vec<Vec<String>> = words.iter().map(|(t, ..)| bigtext(t)).collect();
+        for ((_t, tint, z, wx, wy), lns) in words.iter().zip(word_lines.iter()) {
+            let wcells = lns.iter().map(|l| l.chars().count()).max().unwrap_or(0) as f64;
+            overlays.push(Overlay {
+                lines: lns,
+                col: ((sx(*wx) - wcells * cpw / 2.0) / cpw).round() as i32,
+                row: ((sy(*wy) - 5.0 * cph) / cph).round() as i32,
+                tint: Some(*tint),
+                palette: None,
+                z: 2000 + z,
+            });
         }
         backend.present(out, fb, cols, rows, full_redraw, &overlays);
     } else {
@@ -552,8 +560,12 @@ fn draw_frame(
         for &(frame, tint, _z, fxx, fxy) in &fxr {
             draw_effect_pixels(fb, frame, tint, sx(fxx), sy(fxy), cpw, cph);
         }
+        // Words spelled as 3x5 pixel-font art, so they're legible as letter shapes
+        // (a single glyph per letter would just be an unreadable block here).
         for &(text, tint, _z, wx, wy) in &words {
-            draw_effect_pixels(fb, &[text], tint, sx(wx), sy(wy), cpw, cph);
+            let art = bigtext(text);
+            let refs: Vec<&str> = art.iter().map(|s| s.as_str()).collect();
+            draw_effect_pixels(fb, &refs, tint, sx(wx), sy(wy) - 5.0 * cph, cpw, cph);
         }
         backend.present(out, fb, cols, rows, full_redraw, &[]);
     }
@@ -577,6 +589,60 @@ fn draw_hud(score: u32, mult: f64, speed: f64, fidelity: u8, cols: u16, status_r
     let mut o = std::io::stdout().lock();
     let _ = write!(o, "\x1b[{};1H\x1b[2K\x1b[7m{text}\x1b[0m", status_row);
     let _ = o.flush();
+}
+
+/// A character's 3×5 pixel-font rows ('#' on, ' ' off), upper-cased. Unknown glyphs
+/// fall back to a solid box so a word never silently drops a letter.
+fn glyph5(c: char) -> [&'static str; 5] {
+    match c.to_ascii_uppercase() {
+        'A' => ["###", "# #", "###", "# #", "# #"],
+        'B' => ["## ", "# #", "## ", "# #", "## "],
+        'C' => ["###", "#  ", "#  ", "#  ", "###"],
+        'D' => ["## ", "# #", "# #", "# #", "## "],
+        'E' => ["###", "#  ", "## ", "#  ", "###"],
+        'F' => ["###", "#  ", "## ", "#  ", "#  "],
+        'G' => ["###", "#  ", "# #", "# #", "###"],
+        'H' => ["# #", "# #", "###", "# #", "# #"],
+        'I' => ["###", " # ", " # ", " # ", "###"],
+        'J' => ["  #", "  #", "  #", "# #", "###"],
+        'K' => ["# #", "# #", "## ", "# #", "# #"],
+        'L' => ["#  ", "#  ", "#  ", "#  ", "###"],
+        'M' => ["# #", "###", "###", "# #", "# #"],
+        'N' => ["# #", "###", "###", "###", "# #"],
+        'O' => ["###", "# #", "# #", "# #", "###"],
+        'P' => ["###", "# #", "###", "#  ", "#  "],
+        'Q' => ["###", "# #", "# #", "###", "  #"],
+        'R' => ["## ", "# #", "## ", "# #", "# #"],
+        'S' => ["###", "#  ", "###", "  #", "###"],
+        'T' => ["###", " # ", " # ", " # ", " # "],
+        'U' => ["# #", "# #", "# #", "# #", "###"],
+        'V' => ["# #", "# #", "# #", "# #", " # "],
+        'W' => ["# #", "# #", "###", "###", "# #"],
+        'X' => ["# #", "# #", " # ", "# #", "# #"],
+        'Y' => ["# #", "# #", " # ", " # ", " # "],
+        'Z' => ["###", "  #", " # ", "#  ", "###"],
+        '0' => ["###", "# #", "# #", "# #", "###"],
+        '1' => [" # ", "## ", " # ", " # ", "###"],
+        '2' => ["###", "  #", "###", "#  ", "###"],
+        '3' => ["###", "  #", "###", "  #", "###"],
+        '4' => ["# #", "# #", "###", "  #", "  #"],
+        '5' => ["###", "#  ", "###", "  #", "###"],
+        '6' => ["###", "#  ", "###", "# #", "###"],
+        '7' => ["###", "  #", " # ", " # ", " # "],
+        '8' => ["###", "# #", "###", "# #", "###"],
+        '9' => ["###", "# #", "###", "  #", "###"],
+        '!' => [" # ", " # ", " # ", "   ", " # "],
+        '✚' => ["   ", " # ", "###", " # ", "   "], // medical cross — "this is good"
+        '-' => ["   ", "   ", "###", "   ", "   "],
+        ' ' => ["   ", "   ", "   ", "   ", "   "],
+        _ => ["###", "###", "###", "###", "###"],
+    }
+}
+
+/// Lay a string out as 5 rows of 3×5 pixel-font art (one space between letters).
+fn bigtext(s: &str) -> Vec<String> {
+    let glyphs: Vec<[&str; 5]> = s.chars().map(glyph5).collect();
+    (0..5).map(|r| glyphs.iter().map(|g| g[r]).collect::<Vec<_>>().join(" ")).collect()
 }
 
 /// Rasterize an effect clip / word into the framebuffer (pixel tiers): each glyph a
@@ -699,6 +765,17 @@ mod tests {
             }
             other => panic!("expected a fall without jumping, got {}", other.score()),
         }
+    }
+
+    #[test]
+    fn bigtext_spells_in_five_rows() {
+        let art = bigtext("HI");
+        assert_eq!(art.len(), 5, "3x5 font → 5 rows");
+        assert_eq!(art[0].chars().count(), 7, "two glyphs + a space = 7 cols");
+        assert!(art.iter().any(|r| r.contains('#')), "has ink");
+        // The medical cross is a recognizable plus (ink on the middle row).
+        let cross = bigtext("✚");
+        assert_eq!(cross[2], "###");
     }
 
     #[test]
