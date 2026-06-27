@@ -454,8 +454,9 @@ fn draw_frame(
             let ly = sy(o.y + o.h) - mh;
             let cx = lx + mw / 2.0;
             sprites.push((lines, lx, ly, sp.palette));
-            // A red "-" tag above it: this one HURTS (reads in B&W by shape alone).
-            let bar = bigtext("-");
+            // A red "X" above it: this one HURTS. X (diagonals) vs the steak's "+"
+            // cross (orthogonal) stays unmistakable in B&W where color is gone.
+            let bar = bigtext("X");
             let bw = bar[0].chars().count() as f64 * cpw;
             sprites.push((bar, cx - bw / 2.0, ly - 6.0 * cph, minus_rgb as fn(char) -> (u8, u8, u8)));
         }
@@ -504,7 +505,7 @@ fn draw_frame(
             let ly = sy(b.pos.y + b.h) - mh;
             let cx = lx + mw / 2.0;
             sprites.push((lines, lx, ly, sp.palette));
-            let bar = bigtext("-");
+            let bar = bigtext("X");
             let bw = bar[0].chars().count() as f64 * cpw;
             sprites.push((bar, cx - bw / 2.0, ly - 6.0 * cph, minus_rgb as fn(char) -> (u8, u8, u8)));
         }
@@ -784,6 +785,9 @@ mod tests {
         // The medical cross is a recognizable plus (ink on the middle row).
         let cross = bigtext("✚");
         assert_eq!(cross[2], "###");
+        // Good (+) and bad (X) markers are distinct shapes — the B&W differentiator.
+        assert_ne!(bigtext("✚"), bigtext("X"));
+        assert_ne!(bigtext("✚")[0], bigtext("X")[0], "differ on the top row, not just color");
     }
 
     #[test]
