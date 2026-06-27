@@ -66,12 +66,22 @@ pub struct Obstacle {
     pub h: f64,
 }
 
+/// A steak treat sitting on a roof: run through it to restore one fidelity tier.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Treat {
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+}
+
 /// A generated course: the tilemap plus the segment list (for gameplay + the
-/// fairness test), the rooftop hazards, and the spawn point on the first roof.
+/// fairness test), the rooftop hazards and treats, and the spawn point.
 pub struct Course {
     pub map: TileMap,
     pub segs: Vec<Seg>,
     pub obstacles: Vec<Obstacle>,
+    pub treats: Vec<Treat>,
     pub spawn: (f64, f64),
     pub rows: i32,
     pub width_tiles: i32,
@@ -86,13 +96,16 @@ struct Tuning {
     roof: (i32, i32),  // roof-row range (min=highest, max=lowest)
     max_down: i32,     // largest drop (tiles) to a lower roof
     haz_pct: i32,      // chance (0..100) a wide-enough building carries a hazard
+    treat_pct: i32,    // chance a hazard-free building carries a steak (heal)
 }
 
 fn tuning(d: Difficulty, rows: i32) -> Tuning {
-    let (start, max, ramp, bw, haz) = match d {
-        Difficulty::Cruise => (170.0, 300.0, 5000.0, (6, 11), 25),
-        Difficulty::Standard => (210.0, 410.0, 4000.0, (4, 9), 45),
-        Difficulty::Frantic => (255.0, 540.0, 3200.0, (3, 7), 70),
+    // (start, max, ramp, building-width, hazard%, treat%) — harder runs hit you more,
+    // so they also sprinkle a few more steaks to claw fidelity back.
+    let (start, max, ramp, bw, haz, treat) = match d {
+        Difficulty::Cruise => (170.0, 300.0, 5000.0, (6, 11), 25, 14),
+        Difficulty::Standard => (210.0, 410.0, 4000.0, (4, 9), 45, 20),
+        Difficulty::Frantic => (255.0, 540.0, 3200.0, (3, 7), 70, 28),
     };
     Tuning {
         start_speed: start,
@@ -100,6 +113,7 @@ fn tuning(d: Difficulty, rows: i32) -> Tuning {
         ramp_px: ramp,
         bw,
         haz_pct: haz,
+        treat_pct: treat,
         // Roofs occupy the upper-middle band; never so low that there's no fall room.
         roof: ((rows as f64 * 0.28) as i32, (rows as f64 * 0.62) as i32),
         max_down: 4,
@@ -174,6 +188,7 @@ pub fn generate(seed: u64, difficulty: Difficulty, width_tiles: i32, rows: i32) 
     let mut map = TileMap::new(width_tiles as usize, rows as usize);
     let mut segs: Vec<Seg> = Vec::new();
     let mut obstacles: Vec<Obstacle> = Vec::new();
+    let mut treats: Vec<Treat> = Vec::new();
 
     // First building: a generous flat run to stand on at spawn.
     let mut cur_roof = (t.roof.0 + t.roof.1) / 2;
@@ -211,10 +226,20 @@ pub fn generate(seed: u64, difficulty: Difficulty, width_tiles: i32, rows: i32) 
         segs.push(Seg::Building { roof: next_roof, width: bw });
 
         // Maybe a rooftop hazard, mid-building (≥2 tiles from each edge) so it never
-        // stacks with an edge jump. One tile tall — clearable with a hop.
+        // stacks with an edge jump. One tile tall — clearable with a hop. A
+        // hazard-free building may instead carry a steak you grab by just running
+        // through it (restores a fidelity tier).
         if bw >= 6 && rng.range(0, 99) < t.haz_pct {
             let col = x + rng.range(2, bw - 3);
             obstacles.push(Obstacle {
+                x: col as f64 * TILE + 2.0,
+                y: next_roof as f64 * TILE - 14.0,
+                w: 12.0,
+                h: 14.0,
+            });
+        } else if bw >= 5 && rng.range(0, 99) < t.treat_pct {
+            let col = x + rng.range(2, bw - 2);
+            treats.push(Treat {
                 x: col as f64 * TILE + 2.0,
                 y: next_roof as f64 * TILE - 14.0,
                 w: 12.0,
@@ -226,7 +251,7 @@ pub fn generate(seed: u64, difficulty: Difficulty, width_tiles: i32, rows: i32) 
     }
 
     map.spawn = spawn;
-    Course { map, segs, obstacles, spawn, rows, width_tiles }
+    Course { map, segs, obstacles, treats, spawn, rows, width_tiles }
 }
 
 /// Fill a building's solid columns: from `roof` down to the map floor, `width` tiles
@@ -278,6 +303,22 @@ mod tests {
                 let tx = (o.x / TILE) as i32;
                 let ty = ((o.y + o.h) / TILE) as i32;
                 assert!(course.map.is_solid(tx, ty), "{d:?}: hazard {o:?} not resting on a roof");
+            }
+        }
+    }
+
+    #[test]
+    fn treats_sit_on_roofs_clear_of_hazards() {
+        for d in Difficulty::ALL {
+            let course = generate(11, d, 2000, 24);
+            assert!(!course.treats.is_empty(), "{d:?}: expected some steaks sprinkled in");
+            for t in &course.treats {
+                let tx = (t.x / TILE) as i32;
+                let ty = ((t.y + t.h) / TILE) as i32;
+                assert!(course.map.is_solid(tx, ty), "{d:?}: steak {t:?} not on a roof");
+                // No steak shares a tile column with a hazard.
+                assert!(!course.obstacles.iter().any(|o| (o.x / TILE) as i32 == tx),
+                    "{d:?}: steak overlaps a hazard column at tile {tx}");
             }
         }
     }

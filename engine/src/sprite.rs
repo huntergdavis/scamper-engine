@@ -63,6 +63,7 @@ pub const ALL: &[Sprite] = &[
     Sprite { id: "lift", role: Role::Creature, w: 6, h: 2, anims: LIFT, palette: lift_rgb },
     Sprite { id: "tram", role: Role::Creature, w: 6, h: 2, anims: TRAM, palette: tram_rgb },
     Sprite { id: "star_bone", role: Role::Item, w: 3, h: 2, anims: STAR_BONE, palette: star_rgb },
+    Sprite { id: "steak", role: Role::Item, w: 4, h: 2, anims: STEAK, palette: steak_rgb },
     Sprite { id: "grow", role: Role::Item, w: 4, h: 2, anims: GROW, palette: grow_rgb },
     Sprite { id: "shrink", role: Role::Item, w: 4, h: 2, anims: SHRINK, palette: shrink_rgb },
     Sprite { id: "super", role: Role::Item, w: 4, h: 2, anims: SUPER, palette: super_rgb },
@@ -212,6 +213,14 @@ fn star_rgb(ch: char) -> (u8, u8, u8) {
 /// Grow arrow: a warm orange-red "get bigger" up-arrow.
 fn grow_rgb(_ch: char) -> (u8, u8, u8) {
     (255, 150, 70)
+}
+/// A juicy bone-in steak (a health treat): red meat, seared edge, marbled rim.
+fn steak_rgb(ch: char) -> (u8, u8, u8) {
+    match ch {
+        '#' => (188, 64, 52),       // red meat
+        '(' | ')' => (120, 50, 38), // seared edge
+        _ => (236, 214, 196),       // fat / marbling rim ( . - ' )
+    }
 }
 /// Shrink arrow: a cool blue "get smaller" down-arrow.
 fn shrink_rgb(_ch: char) -> (u8, u8, u8) {
@@ -389,6 +398,9 @@ const TRAM: &[Anim] = &[Anim { name: "idle", fps: 6, frames: TRAM_F }];
 // Star Bone — an invincibility power-up: a glowing winged bone that twinkles.
 const STAR_BONE_F: &[&[&str]] = &[&["\\*/", "(=)"], &["/*\\", "(=)"]];
 const STAR_BONE: &[Anim] = &[Anim { name: "idle", fps: 6, frames: STAR_BONE_F }];
+// A bone-in steak — the fidelity-restore treat (a tiny sizzle wobble on top).
+const STEAK_F: &[&[&str]] = &[&[".--.", "(##)"], &["'--'", "(##)"]];
+const STEAK: &[Anim] = &[Anim { name: "idle", fps: 4, frames: STEAK_F }];
 
 // Grow — the ▲ power-up that makes Munchii bigger. A bold up-arrow that pulses.
 const GROW_F: &[&[&str]] = &[&[" /\\ ", "/||\\"], &[" /\\ ", " || "]];

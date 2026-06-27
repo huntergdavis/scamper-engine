@@ -7,7 +7,7 @@
 //! (Kitty → half-blocks → ASCII → mono). A hit at mono (tier 1) ends the run, as
 //! does falling between buildings.
 
-use crate::gen::{self, Obstacle};
+use crate::gen::{self, Obstacle, Treat};
 use crate::Difficulty;
 use scamper::backend::{AsciiBackend, Backend, KittyBackend, MonoBackend, Overlay, TextBackend};
 use scamper::framebuffer::{Framebuffer, Rgba};
@@ -59,6 +59,7 @@ impl Outcome {
 enum Tick {
     Continue,
     Hit,
+    Heal,
     Ended(Outcome),
 }
 
@@ -122,6 +123,7 @@ pub fn run(input: &mut Input, difficulty: Difficulty, seed: u64) -> Outcome {
     let course_end_px = course.width_tiles as f64 * TILE;
     let death_y = rows_tiles as f64 * TILE;
 
+    let mut treats = course.treats.clone(); // live list; collected ones are removed
     let mut pending_jump = false;
     let mut full_redraw = true;
     let mut acc: u64 = 0;
@@ -148,13 +150,13 @@ pub fn run(input: &mut Input, difficulty: Difficulty, seed: u64) -> Outcome {
         }
         acc += elapsed;
         while acc >= SIM_DT_NS {
-            let tick = advance(&mut sim, &course, difficulty, base_fp, pending_jump, jump_held, down_held, death_y, course_end_px, &mut invuln);
+            let tick = advance(&mut sim, &course, &mut treats, difficulty, base_fp, pending_jump, jump_held, down_held, death_y, course_end_px, &mut invuln);
             pending_jump = false;
             acc -= SIM_DT_NS;
             match tick {
                 Tick::Ended(o) => {
                     if matches!(o, Outcome::Fell { .. }) {
-                        draw_frame(&mut *backend, &mut out, &mut fb, &course, &sim, cam_x, (0.0, 0.0), cols, rows, fb_w, fb_h, true, fidelity, invuln, difficulty);
+                        draw_frame(&mut *backend, &mut out, &mut fb, &course, &treats, &sim, cam_x, (0.0, 0.0), cols, rows, fb_w, fb_h, true, fidelity, invuln, difficulty);
                     }
                     break 'game o;
                 }
@@ -169,6 +171,16 @@ pub fn run(input: &mut Input, difficulty: Difficulty, seed: u64) -> Outcome {
                     shake.bump(0.6);
                     full_redraw = true;
                 }
+                Tick::Heal => {
+                    // A steak restores a fidelity tier — rebuild the renderer one step
+                    // sharper (no-op flash if already at full Kitty).
+                    if fidelity < 4 {
+                        fidelity += 1;
+                        swap_backend(&mut backend, &mut out, fidelity);
+                        full_redraw = true;
+                    }
+                    shake.bump(0.3);
+                }
                 Tick::Continue => {}
             }
         }
@@ -179,7 +191,7 @@ pub fn run(input: &mut Input, difficulty: Difficulty, seed: u64) -> Outcome {
         let sh = shake.offset(frame, 5.0);
         frame += 1;
         let needs_redraw = full_redraw || shake.active();
-        draw_frame(&mut *backend, &mut out, &mut fb, &course, &sim, cam_x, sh, cols, rows, fb_w, fb_h, needs_redraw, fidelity, invuln, difficulty);
+        draw_frame(&mut *backend, &mut out, &mut fb, &course, &treats, &sim, cam_x, sh, cols, rows, fb_w, fb_h, needs_redraw, fidelity, invuln, difficulty);
         full_redraw = false;
         sleep_until_ns(now_ns() + 16_000_000, 1_000_000);
     };
@@ -220,6 +232,7 @@ fn distance_m(sim: &Sim, course: &gen::Course) -> u32 {
 fn advance(
     sim: &mut Sim,
     course: &gen::Course,
+    treats: &mut Vec<Treat>,
     difficulty: Difficulty,
     base_fp: FeelParams,
     jump_pressed: bool,
@@ -239,13 +252,21 @@ fn advance(
     let inp = scamper::capture::InputFrame { axis_x: 1, jump_pressed, jump_held, down_held };
     sim.step(&course.map, inp);
 
-    if sim.player.pos.y > death_y {
+    let p = &sim.player;
+    if p.pos.y > death_y {
         return Tick::Ended(Outcome::Fell { distance: distance_m(sim, course) });
     }
-    if sim.player.pos.x + sim.player.w >= course_end_px {
+    if p.pos.x + p.w >= course_end_px {
         return Tick::Ended(Outcome::Maxed { distance: distance_m(sim, course) });
     }
-    if *invuln == 0 && hits_obstacle(&sim.player, &course.obstacles) {
+    // Grab a steak (any tick, even mid-i-frames) → heal a tier.
+    if let Some(i) = treats.iter().position(|t| {
+        (t.x - p.pos.x).abs() < 64.0 && aabb_overlap(p.pos.x, p.pos.y, p.w, p.h, t.x, t.y, t.w, t.h)
+    }) {
+        treats.swap_remove(i);
+        return Tick::Heal;
+    }
+    if *invuln == 0 && hits_obstacle(p, &course.obstacles) {
         *invuln = HIT_GRACE;
         return Tick::Hit;
     }
@@ -265,6 +286,7 @@ fn draw_frame(
     out: &mut Vec<u8>,
     fb: &mut Framebuffer,
     course: &gen::Course,
+    treats: &[Treat],
     sim: &Sim,
     cam_x_in: f64,
     shake: (f64, f64),
@@ -323,6 +345,25 @@ fn draw_frame(
             let (mw, mh) = (fw * cpw, lines.len() as f64 * cph);
             let lx = sx(o.x + o.w / 2.0) - mw / 2.0;
             let ly = sy(o.y + o.h) - mh;
+            sprites.push((lines, lx, ly, sp.palette));
+        }
+    }
+
+    // Steak treats (restore a fidelity tier on touch).
+    if let Some(sp) = scamper::sprite::get("steak") {
+        let an = sp.anim("idle");
+        let n = an.frames.len().max(1);
+        let fi = (sim.clock() / (NS_PER_SEC / an.fps.max(1) as u64)) as usize % n;
+        let frame = &an.frames[fi];
+        for tr in treats {
+            if tr.x < cam_x - TILE || tr.x > cam_x + fb_w as f64 + TILE {
+                continue;
+            }
+            let lines: Vec<String> = frame.iter().map(|s| s.to_string()).collect();
+            let fw = lines.iter().map(|l| l.chars().count()).max().unwrap_or(1) as f64;
+            let (mw, mh) = (fw * cpw, lines.len() as f64 * cph);
+            let lx = sx(tr.x + tr.w / 2.0) - mw / 2.0;
+            let ly = sy(tr.y + tr.h) - mh;
             sprites.push((lines, lx, ly, sp.palette));
         }
     }
@@ -441,9 +482,10 @@ mod tests {
         let course_end_px = course.width_tiles as f64 * TILE;
         let mut fidelity = 4u8;
         let mut invuln = 0u32;
+        let mut treats = course.treats.clone();
         for tick in 0..6000u32 {
             let jp = jump(&sim, &course);
-            match advance(&mut sim, &course, difficulty, base_fp, jp, jp, false, death_y, course_end_px, &mut invuln) {
+            match advance(&mut sim, &course, &mut treats, difficulty, base_fp, jp, jp, false, death_y, course_end_px, &mut invuln) {
                 Tick::Ended(o) => return (o, tick),
                 Tick::Hit => {
                     let (nf, dead) = hit_result(fidelity);
@@ -452,6 +494,7 @@ mod tests {
                         return (Outcome::Downed { distance: distance_m(&sim, &course) }, tick);
                     }
                 }
+                Tick::Heal => fidelity = (fidelity + 1).min(4),
                 Tick::Continue => {}
             }
         }
@@ -474,15 +517,31 @@ mod tests {
     }
 
     #[test]
+    fn grabbing_a_steak_signals_a_heal_and_consumes_it() {
+        let course = gen::generate(11, Difficulty::Standard, 2000, 24);
+        let mut treats = course.treats.clone();
+        assert!(!treats.is_empty(), "need a steak to test");
+        let t0 = treats[0];
+        // Drop the runner right onto the steak.
+        let mut sim = Sim::new(Player::new(t0.x, t0.y), (t0.x, t0.y));
+        let before = treats.len();
+        let mut invuln = 0u32;
+        let r = advance(&mut sim, &course, &mut treats, Difficulty::Standard, gen::base_feel(), false, false, false, 24.0 * TILE, 1.0e9, &mut invuln);
+        assert!(matches!(r, Tick::Heal), "touching a steak heals");
+        assert_eq!(treats.len(), before - 1, "the steak is consumed");
+    }
+
+    #[test]
     fn distance_is_monotonic_while_running() {
         let course = gen::generate(1, Difficulty::Cruise, 4000, 14);
         let base_fp = gen::base_feel();
         let mut sim = Sim::new(Player::new(course.spawn.0, course.spawn.1), course.spawn);
         sim.player.vel.x = gen::run_speed(Difficulty::Cruise, course.spawn.0);
         let mut invuln = 0u32;
+        let mut treats = course.treats.clone();
         let mut last = sim.player.pos.x;
         for _ in 0..30 {
-            advance(&mut sim, &course, Difficulty::Cruise, base_fp, false, false, false, 14.0 * TILE, 4000.0 * TILE, &mut invuln);
+            advance(&mut sim, &course, &mut treats, Difficulty::Cruise, base_fp, false, false, false, 14.0 * TILE, 4000.0 * TILE, &mut invuln);
             assert!(sim.player.pos.x >= last - 0.001, "x went backwards: {} < {}", sim.player.pos.x, last);
             last = sim.player.pos.x;
         }
