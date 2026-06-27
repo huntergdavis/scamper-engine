@@ -234,6 +234,7 @@ fn menu_loop(input: &mut Input) {
                     let head = match outcome {
                         game::Outcome::Maxed { .. } => "You maxed the course!",
                         game::Outcome::Fell { .. } => "You fell between the buildings!",
+                        game::Outcome::Downed { .. } => "Out of fidelity — downed!",
                         game::Outcome::Quit { .. } => "Run ended",
                     };
                     let dist = format!("{} m", outcome.distance());

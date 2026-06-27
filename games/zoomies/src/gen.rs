@@ -56,11 +56,22 @@ pub enum Seg {
     Gap { width: i32 },
 }
 
+/// A static rooftop hazard (a spiky vent): touch it and you lose a fidelity tier.
+/// Placed mid-building, clear of the edges, low enough to clear with a jump.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Obstacle {
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+}
+
 /// A generated course: the tilemap plus the segment list (for gameplay + the
-/// fairness test) and the spawn point on the first roof.
+/// fairness test), the rooftop hazards, and the spawn point on the first roof.
 pub struct Course {
     pub map: TileMap,
     pub segs: Vec<Seg>,
+    pub obstacles: Vec<Obstacle>,
     pub spawn: (f64, f64),
     pub rows: i32,
     pub width_tiles: i32,
@@ -74,19 +85,21 @@ struct Tuning {
     bw: (i32, i32),    // building width range (tiles)
     roof: (i32, i32),  // roof-row range (min=highest, max=lowest)
     max_down: i32,     // largest drop (tiles) to a lower roof
+    haz_pct: i32,      // chance (0..100) a wide-enough building carries a hazard
 }
 
 fn tuning(d: Difficulty, rows: i32) -> Tuning {
-    let (start, max, ramp, bw) = match d {
-        Difficulty::Cruise => (170.0, 300.0, 5000.0, (6, 11)),
-        Difficulty::Standard => (210.0, 410.0, 4000.0, (4, 9)),
-        Difficulty::Frantic => (255.0, 540.0, 3200.0, (3, 7)),
+    let (start, max, ramp, bw, haz) = match d {
+        Difficulty::Cruise => (170.0, 300.0, 5000.0, (6, 11), 25),
+        Difficulty::Standard => (210.0, 410.0, 4000.0, (4, 9), 45),
+        Difficulty::Frantic => (255.0, 540.0, 3200.0, (3, 7), 70),
     };
     Tuning {
         start_speed: start,
         max_speed: max,
         ramp_px: ramp,
         bw,
+        haz_pct: haz,
         // Roofs occupy the upper-middle band; never so low that there's no fall room.
         roof: ((rows as f64 * 0.28) as i32, (rows as f64 * 0.62) as i32),
         max_down: 4,
@@ -160,6 +173,7 @@ pub fn generate(seed: u64, difficulty: Difficulty, width_tiles: i32, rows: i32) 
     let mut rng = Rng::new(seed);
     let mut map = TileMap::new(width_tiles as usize, rows as usize);
     let mut segs: Vec<Seg> = Vec::new();
+    let mut obstacles: Vec<Obstacle> = Vec::new();
 
     // First building: a generous flat run to stand on at spawn.
     let mut cur_roof = (t.roof.0 + t.roof.1) / 2;
@@ -195,12 +209,24 @@ pub fn generate(seed: u64, difficulty: Difficulty, width_tiles: i32, rows: i32) 
         let bw = rng.range(t.bw.0, t.bw.1).min(width_tiles - x).max(1);
         fill_building(&mut map, x, bw, next_roof, rows);
         segs.push(Seg::Building { roof: next_roof, width: bw });
+
+        // Maybe a rooftop hazard, mid-building (≥2 tiles from each edge) so it never
+        // stacks with an edge jump. One tile tall — clearable with a hop.
+        if bw >= 6 && rng.range(0, 99) < t.haz_pct {
+            let col = x + rng.range(2, bw - 3);
+            obstacles.push(Obstacle {
+                x: col as f64 * TILE + 2.0,
+                y: next_roof as f64 * TILE - 14.0,
+                w: 12.0,
+                h: 14.0,
+            });
+        }
         x += bw;
         cur_roof = next_roof;
     }
 
     map.spawn = spawn;
-    Course { map, segs, spawn, rows, width_tiles }
+    Course { map, segs, obstacles, spawn, rows, width_tiles }
 }
 
 /// Fill a building's solid columns: from `roof` down to the map floor, `width` tiles
@@ -237,6 +263,23 @@ mod tests {
         // A different seed should (almost surely) differ.
         let c = generate(999, Difficulty::Standard, 600, 24);
         assert_ne!(a.segs, c.segs);
+    }
+
+    #[test]
+    fn obstacles_sit_on_solid_roofs_and_are_low() {
+        let fp = base_feel();
+        for d in Difficulty::ALL {
+            let course = generate(3, d, 1500, 24);
+            let min_climb_px = bounds(&fp, run_speed(d, 0.0)).1 as f64 * TILE;
+            for o in &course.obstacles {
+                assert!(o.h <= TILE, "{d:?}: hazard taller than a tile: {}", o.h);
+                assert!(o.h <= min_climb_px, "{d:?}: hazard {o:?} not clearable (climb {min_climb_px}px)");
+                // The tile directly under the hazard's base must be solid roof.
+                let tx = (o.x / TILE) as i32;
+                let ty = ((o.y + o.h) / TILE) as i32;
+                assert!(course.map.is_solid(tx, ty), "{d:?}: hazard {o:?} not resting on a roof");
+            }
+        }
     }
 
     #[test]

@@ -2,18 +2,21 @@
 //! speed, with an autonomous (player-following, never-backtracking) camera over a
 //! fixed horizon. Jump is the only input. Falling into a gap ends the run.
 //!
-//! Hits + the fidelity-as-health backend swap come in the next step; here the run is
-//! Kitty-only and ends on a fall or on reaching the end of the course.
+//! The twist: graphics fidelity is the health bar. You start at tier 4 (Kitty
+//! pixels); touching a rooftop hazard tears the renderer down one tier
+//! (Kitty → half-blocks → ASCII → mono). A hit at mono (tier 1) ends the run, as
+//! does falling between buildings.
 
-use crate::gen;
+use crate::gen::{self, Obstacle};
 use crate::Difficulty;
-use scamper::backend::{Backend, KittyBackend, Overlay};
+use scamper::backend::{AsciiBackend, Backend, KittyBackend, MonoBackend, Overlay, TextBackend};
 use scamper::framebuffer::{Framebuffer, Rgba};
 use scamper::input::{Input, K_ESC, K_Q, K_SPACE, K_UP, K_W};
 use scamper::level::art;
 use scamper::level::View;
+use scamper::mob::aabb_overlap;
 use scamper::munchii;
-use scamper::player::Player;
+use scamper::player::{FeelParams, Player};
 use scamper::sim::{Sim, SIM_DT_NS};
 use scamper::time::{now_ns, sleep_until_ns, NS_PER_SEC};
 use scamper::world::TILE;
@@ -25,11 +28,15 @@ const CELL_PH: usize = 8;
 const MAX_INTERNAL_DIM: usize = 384;
 /// Course length in tiles (finite-but-long; effectively endless at runner speeds).
 const COURSE_TILES: i32 = 4000;
+/// Invulnerability after a hit (~1.25s of i-frames at 60 Hz).
+const HIT_GRACE: u32 = 75;
 
 /// How a run ended.
 pub enum Outcome {
-    /// Fell into a gap (or was crushed) after `distance` metres.
+    /// Fell into a gap after `distance` metres.
     Fell { distance: u32 },
+    /// Took a hit at mono (tier 1) — out of fidelity.
+    Downed { distance: u32 },
     /// Reached the end of the course.
     Maxed { distance: u32 },
     /// Player quit back to the menu mid-run.
@@ -39,9 +46,43 @@ pub enum Outcome {
 impl Outcome {
     pub fn distance(&self) -> u32 {
         match *self {
-            Outcome::Fell { distance } | Outcome::Maxed { distance } | Outcome::Quit { distance } => distance,
+            Outcome::Fell { distance }
+            | Outcome::Downed { distance }
+            | Outcome::Maxed { distance }
+            | Outcome::Quit { distance } => distance,
         }
     }
+}
+
+/// What one sim tick produced.
+enum Tick {
+    Continue,
+    Hit,
+    Ended(Outcome),
+}
+
+/// The backend for a fidelity tier: 4 = Kitty pixels, 3 = half-blocks, 2 = ASCII,
+/// 1 = mono. (Tier 0 is death — never rendered.)
+fn backend_for_tier(tier: u8) -> Box<dyn Backend> {
+    match tier {
+        4 => Box::new(KittyBackend::new()),
+        3 => Box::new(TextBackend::new()),
+        2 => Box::new(AsciiBackend::new()),
+        _ => Box::new(MonoBackend::new()),
+    }
+}
+
+/// Apply a hit to a fidelity tier: returns `(new_tier, dead)`. A hit at tier 1
+/// (mono) drops to 0 = death.
+fn hit_result(fidelity: u8) -> (u8, bool) {
+    let new = fidelity.saturating_sub(1);
+    (new, new == 0)
+}
+
+/// The HUD fidelity bar: filled pips for current tier, hollow for lost ones.
+fn fidelity_pips(fidelity: u8) -> String {
+    let f = fidelity.min(4) as usize;
+    "●".repeat(f) + &"○".repeat(4 - f)
 }
 
 /// Viewport geometry: an internal framebuffer sized to a whole number of tiles, plus
@@ -57,8 +98,7 @@ fn play_view(ws: scamper::terminal::WinSize) -> (usize, usize, u16, u16) {
     (view_tw * tile, view_th * tile, (view_tw * cpt_x) as u16, (view_th * cpt_y) as u16)
 }
 
-/// Play one run. `seed` makes the course reproducible (the caller passes a fresh
-/// wall-clock seed for variety; tests can pin it). Returns how it ended + distance.
+/// Play one run. `seed` makes the course reproducible. Returns how it ended.
 pub fn run(input: &mut Input, difficulty: Difficulty, seed: u64) -> Outcome {
     let ws = scamper::terminal::query_winsize();
     let (fb_w, fb_h, cols, rows) = play_view(ws);
@@ -67,17 +107,19 @@ pub fn run(input: &mut Input, difficulty: Difficulty, seed: u64) -> Outcome {
     let course = gen::generate(seed, difficulty, COURSE_TILES, rows_tiles);
     let base_fp = gen::base_feel();
     let mut sim = Sim::new(Player::new(course.spawn.0, course.spawn.1), course.spawn);
-    sim.player.vel.x = gen::run_speed(difficulty, course.spawn.0); // start at run speed
+    sim.player.vel.x = gen::run_speed(difficulty, course.spawn.0);
     sim.player.facing = 1;
 
-    let mut backend: Box<dyn Backend> = Box::new(KittyBackend::new());
+    let mut fidelity: u8 = 4;
+    let mut invuln: u32 = 0;
+    let mut backend = backend_for_tier(fidelity);
     let mut fb = Framebuffer::new(fb_w, fb_h);
     let mut out: Vec<u8> = Vec::new();
 
     let left_margin = fb_w as f64 * 0.30;
     let mut cam_x = (course.spawn.0 - left_margin).max(0.0);
     let course_end_px = course.width_tiles as f64 * TILE;
-    let death_y = rows_tiles as f64 * TILE; // fell below the rooftops
+    let death_y = rows_tiles as f64 * TILE;
 
     let mut pending_jump = false;
     let mut full_redraw = true;
@@ -99,66 +141,104 @@ pub fn run(input: &mut Input, difficulty: Difficulty, seed: u64) -> Outcome {
         let mut elapsed = now - prev;
         prev = now;
         if elapsed > 8 * SIM_DT_NS {
-            elapsed = 8 * SIM_DT_NS; // clamp a long stall so we don't spiral
+            elapsed = 8 * SIM_DT_NS;
         }
         acc += elapsed;
         while acc >= SIM_DT_NS {
-            let outcome = advance(&mut sim, &course, difficulty, base_fp, pending_jump, jump_held, down_held, death_y, course_end_px);
+            let tick = advance(&mut sim, &course, difficulty, base_fp, pending_jump, jump_held, down_held, death_y, course_end_px, &mut invuln);
             pending_jump = false;
             acc -= SIM_DT_NS;
-            if let Some(o) = outcome {
-                if matches!(o, Outcome::Fell { .. }) {
-                    // Hold on the fallen frame for a beat so the fall reads.
-                    draw_frame(&mut *backend, &mut out, &mut fb, &course, &sim, cam_x, cols, rows, fb_w, fb_h, true, down_held, difficulty);
+            match tick {
+                Tick::Ended(o) => {
+                    if matches!(o, Outcome::Fell { .. }) {
+                        draw_frame(&mut *backend, &mut out, &mut fb, &course, &sim, cam_x, cols, rows, fb_w, fb_h, true, fidelity, invuln, difficulty);
+                    }
+                    return o;
                 }
-                return o;
+                Tick::Hit => {
+                    let (nf, dead) = hit_result(fidelity);
+                    fidelity = nf;
+                    if dead {
+                        return Outcome::Downed { distance: distance_m(&sim, &course) };
+                    }
+                    // Tear the old renderer down and rebuild one tier lower.
+                    swap_backend(&mut backend, &mut out, fidelity);
+                    full_redraw = true;
+                }
+                Tick::Continue => {}
             }
         }
 
         // Camera: follow the player, never backtrack (forced rightward).
         cam_x = cam_x.max(sim.player.pos.x - left_margin).max(0.0);
 
-        draw_frame(&mut *backend, &mut out, &mut fb, &course, &sim, cam_x, cols, rows, fb_w, fb_h, full_redraw, down_held, difficulty);
+        draw_frame(&mut *backend, &mut out, &mut fb, &course, &sim, cam_x, cols, rows, fb_w, fb_h, full_redraw, fidelity, invuln, difficulty);
         full_redraw = false;
         sleep_until_ns(now_ns() + 16_000_000, 1_000_000);
     }
+}
+
+/// Swap to `tier`'s backend: tear the current one down, clear, and replace.
+fn swap_backend(backend: &mut Box<dyn Backend>, out: &mut Vec<u8>, tier: u8) {
+    let mut o2: Vec<u8> = Vec::new();
+    backend.teardown(&mut o2);
+    {
+        let mut o = std::io::stdout().lock();
+        let _ = o.write_all(&o2);
+        let _ = o.write_all(b"\x1b[2J");
+        let _ = o.flush();
+    }
+    *backend = backend_for_tier(tier);
+    out.clear();
 }
 
 fn distance_m(sim: &Sim, course: &gen::Course) -> u32 {
     ((sim.player.pos.x - course.spawn.0).max(0.0) / TILE) as u32
 }
 
-/// Advance one sim tick of the run: ramp speed, drive auto-run + the jump input, then
-/// check the end conditions. Returns `Some(outcome)` when the run is over. Pure of
-/// any rendering, so it's headless-testable.
+/// Advance one sim tick: ramp speed, drive auto-run + jump, count down i-frames, then
+/// check hazards and the end conditions. Pure of rendering, so it's headless-testable.
 #[allow(clippy::too_many_arguments)]
 fn advance(
     sim: &mut Sim,
     course: &gen::Course,
     difficulty: Difficulty,
-    base_fp: scamper::player::FeelParams,
+    base_fp: FeelParams,
     jump_pressed: bool,
     jump_held: bool,
     down_held: bool,
     death_y: f64,
     course_end_px: f64,
-) -> Option<Outcome> {
-    // Auto-run: drive +x and ramp max_run to the speed for this position.
+    invuln: &mut u32,
+) -> Tick {
+    *invuln = invuln.saturating_sub(1);
+
     let v = gen::run_speed(difficulty, sim.player.pos.x);
     let mut fp = base_fp;
     fp.max_run = v;
-    fp.run_accel = base_fp.run_accel.max(v * 2.0); // reach speed promptly after a landing
+    fp.run_accel = base_fp.run_accel.max(v * 2.0);
     sim.fp = fp;
     let inp = scamper::capture::InputFrame { axis_x: 1, jump_pressed, jump_held, down_held };
     sim.step(&course.map, inp);
 
     if sim.player.pos.y > death_y {
-        return Some(Outcome::Fell { distance: distance_m(sim, course) });
+        return Tick::Ended(Outcome::Fell { distance: distance_m(sim, course) });
     }
     if sim.player.pos.x + sim.player.w >= course_end_px {
-        return Some(Outcome::Maxed { distance: distance_m(sim, course) });
+        return Tick::Ended(Outcome::Maxed { distance: distance_m(sim, course) });
     }
-    None
+    if *invuln == 0 && hits_obstacle(&sim.player, &course.obstacles) {
+        *invuln = HIT_GRACE;
+        return Tick::Hit;
+    }
+    Tick::Continue
+}
+
+/// Does the player's box overlap any hazard? (Only checks ones near its x.)
+fn hits_obstacle(p: &Player, obstacles: &[Obstacle]) -> bool {
+    obstacles.iter().any(|o| {
+        (o.x - p.pos.x).abs() < 64.0 && aabb_overlap(p.pos.x, p.pos.y, p.w, p.h, o.x, o.y, o.w, o.h)
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -174,7 +254,8 @@ fn draw_frame(
     fb_w: usize,
     fb_h: usize,
     full_redraw: bool,
-    down_held: bool,
+    fidelity: u8,
+    invuln: u32,
     difficulty: Difficulty,
 ) {
     let pal = art::palette(art::Theme::Rooftop);
@@ -205,39 +286,68 @@ fn draw_frame(
         }
     }
 
-    // The runner sprite: feet on the hitbox bottom, centered, always facing right.
-    let anim = munchii::anim(if sim.player.grounded { "walk" } else { "jump" });
-    let n = anim.frames.len().max(1);
-    let fi = (sim.clock() / (NS_PER_SEC / anim.fps.max(1) as u64)) as usize % n;
-    let lines: Vec<String> = anim.frames[fi].iter().map(|s| s.to_string()).collect();
-    let _ = down_held;
-    let fw = lines.iter().map(|l| l.chars().count()).max().unwrap_or(1) as f64;
-    let (mw, mh) = (fw * cpw, lines.len() as f64 * cph);
-    let lx = sx(sim.player.pos.x + sim.player.w / 2.0) - mw / 2.0;
-    let ly = sy(sim.player.pos.y + sim.player.h) - mh;
+    // Sprite list: hazards first, then the runner on top. (lines, top-left px, palette)
+    type Drawable = (Vec<String>, f64, f64, fn(char) -> (u8, u8, u8));
+    let mut sprites: Vec<Drawable> = Vec::new();
+
+    if let Some(sp) = scamper::sprite::get("prickle") {
+        let an = sp.anim("walk");
+        let frame = &an.frames[0];
+        for o in &course.obstacles {
+            if o.x < cam_x - TILE || o.x > cam_x + fb_w as f64 + TILE {
+                continue;
+            }
+            let lines: Vec<String> = frame.iter().map(|s| s.to_string()).collect();
+            let fw = lines.iter().map(|l| l.chars().count()).max().unwrap_or(1) as f64;
+            let (mw, mh) = (fw * cpw, lines.len() as f64 * cph);
+            let lx = sx(o.x + o.w / 2.0) - mw / 2.0;
+            let ly = sy(o.y + o.h) - mh;
+            sprites.push((lines, lx, ly, sp.palette));
+        }
+    }
+
+    // The runner: feet on the hitbox bottom, centered, always facing right. Blinks
+    // during post-hit i-frames.
+    let blink = invuln > 0 && (invuln / 4) % 2 == 0;
+    if !blink {
+        let anim = munchii::anim(if sim.player.grounded { "walk" } else { "jump" });
+        let n = anim.frames.len().max(1);
+        let fi = (sim.clock() / (NS_PER_SEC / anim.fps.max(1) as u64)) as usize % n;
+        let lines: Vec<String> = anim.frames[fi].iter().map(|s| s.to_string()).collect();
+        let fw = lines.iter().map(|l| l.chars().count()).max().unwrap_or(1) as f64;
+        let (mw, mh) = (fw * cpw, lines.len() as f64 * cph);
+        let lx = sx(sim.player.pos.x + sim.player.w / 2.0) - mw / 2.0;
+        let ly = sy(sim.player.pos.y + sim.player.h) - mh;
+        sprites.push((lines, lx, ly, munchii::beagle_rgb as fn(char) -> (u8, u8, u8)));
+    }
 
     if backend.draws_overlay() {
-        let overlays = [Overlay {
-            lines: &lines,
-            col: (lx / cpw).round() as i32,
-            row: (ly / cph).round() as i32,
-            tint: None,
-            palette: Some(munchii::beagle_rgb as fn(char) -> (u8, u8, u8)),
-            z: 0,
-        }];
+        let overlays: Vec<Overlay> = sprites
+            .iter()
+            .enumerate()
+            .map(|(i, (lns, lx, ly, p))| Overlay {
+                lines: lns,
+                col: (lx / cpw).round() as i32,
+                row: (ly / cph).round() as i32,
+                tint: None,
+                palette: Some(*p),
+                z: i as i32,
+            })
+            .collect();
         backend.present(out, fb, cols, rows, full_redraw, &overlays);
     } else {
-        draw_sprite_pixels(fb, &lines, lx, ly, cpw, cph, munchii::beagle_rgb);
+        for (lns, lx, ly, p) in &sprites {
+            draw_sprite_pixels(fb, lns, *lx, *ly, cpw, cph, *p);
+        }
         backend.present(out, fb, cols, rows, full_redraw, &[]);
     }
 
-    draw_hud(distance_m(sim, course), gen::run_speed(difficulty, sim.player.pos.x), cols);
+    draw_hud(distance_m(sim, course), gen::run_speed(difficulty, sim.player.pos.x), fidelity, cols);
 }
 
-/// A single status row painted on top (distance, speed, fidelity pips placeholder).
-fn draw_hud(dist: u32, speed: f64, cols: u16) {
-    let pips = "●●●●"; // fidelity bar lands with hits in the next step
-    let text = format!("  ⚡ {dist} m    {:.0} px/s    fidelity {pips}  ", speed);
+/// A single status row painted on top: distance, speed, and the fidelity bar.
+fn draw_hud(dist: u32, speed: f64, fidelity: u8, cols: u16) {
+    let text = format!("  ⚡ {dist} m    {:.0} px/s    fidelity {}  ", speed, fidelity_pips(fidelity));
     let text: String = text.chars().take(cols as usize).collect();
     let mut o = std::io::stdout().lock();
     let _ = write!(o, "\x1b[1;1H\x1b[7m{text}\x1b[0m");
@@ -265,8 +375,32 @@ fn draw_sprite_pixels(fb: &mut Framebuffer, lines: &[String], lx: f64, ly: f64, 
 mod tests {
     use super::*;
 
-    /// Headless harness mirroring `run`'s setup, looping `advance` with a fixed jump
-    /// policy — no terminal/render. Returns (outcome, ticks).
+    #[test]
+    fn fidelity_ladder_maps_tiers_to_backends() {
+        assert_eq!(backend_for_tier(4).name(), "kitty");
+        assert_eq!(backend_for_tier(3).name(), "text");
+        assert_eq!(backend_for_tier(2).name(), "ascii");
+        assert_eq!(backend_for_tier(1).name(), "mono");
+    }
+
+    #[test]
+    fn hits_walk_down_the_tiers_then_kill() {
+        let mut f = 4u8;
+        let mut deaths = 0;
+        for _ in 0..4 {
+            let (nf, dead) = hit_result(f);
+            f = nf;
+            if dead {
+                deaths += 1;
+            }
+        }
+        assert_eq!(f, 0, "four hits exhaust fidelity");
+        assert_eq!(deaths, 1, "only the hit at tier 1 is fatal");
+        assert_eq!(fidelity_pips(4), "●●●●");
+        assert_eq!(fidelity_pips(1), "●○○○");
+    }
+
+    /// Headless harness mirroring `run`'s setup, looping `advance` with a jump policy.
     fn simulate(seed: u64, difficulty: Difficulty, rows_tiles: i32, jump: impl Fn(&Sim, &gen::Course) -> bool) -> (Outcome, u32) {
         let course = gen::generate(seed, difficulty, 4000, rows_tiles);
         let base_fp = gen::base_feel();
@@ -275,10 +409,20 @@ mod tests {
         sim.player.facing = 1;
         let death_y = rows_tiles as f64 * TILE;
         let course_end_px = course.width_tiles as f64 * TILE;
+        let mut fidelity = 4u8;
+        let mut invuln = 0u32;
         for tick in 0..6000u32 {
             let jp = jump(&sim, &course);
-            if let Some(o) = advance(&mut sim, &course, difficulty, base_fp, jp, jp, false, death_y, course_end_px) {
-                return (o, tick);
+            match advance(&mut sim, &course, difficulty, base_fp, jp, jp, false, death_y, course_end_px, &mut invuln) {
+                Tick::Ended(o) => return (o, tick),
+                Tick::Hit => {
+                    let (nf, dead) = hit_result(fidelity);
+                    fidelity = nf;
+                    if dead {
+                        return (Outcome::Downed { distance: distance_m(&sim, &course) }, tick);
+                    }
+                }
+                Tick::Continue => {}
             }
         }
         (Outcome::Quit { distance: distance_m(&sim, &course) }, 6000)
@@ -286,29 +430,29 @@ mod tests {
 
     #[test]
     fn spawns_on_a_solid_roof_and_auto_runs() {
-        // With NO jumping, the runner should cross several tiles of the flat opening
-        // roof before reaching the first gap and falling — proving it spawns on solid
-        // ground, auto-runs right, and gap-death is detected (not an instant fall).
+        // With NO jumping, the runner clears some flat opening roof, then falls at the
+        // first gap (the opening building has no hazard) — proving spawn-on-solid,
+        // auto-run, and gap-death detection.
         let (outcome, _) = simulate(7, Difficulty::Standard, 14, |_, _| false);
         match outcome {
             Outcome::Fell { distance } => {
                 assert!(distance >= 3, "should clear some opening roof first, got {distance} m");
                 assert!(distance < 60, "without jumping it can't get far, got {distance} m");
             }
-            other => panic!("expected a fall without jumping, got {} m via other outcome", other.distance()),
+            other => panic!("expected a fall without jumping, got {} m", other.distance()),
         }
     }
 
     #[test]
     fn distance_is_monotonic_while_running() {
-        // Sanity: auto-run never moves the player left over the opening stretch.
         let course = gen::generate(1, Difficulty::Cruise, 4000, 14);
         let base_fp = gen::base_feel();
         let mut sim = Sim::new(Player::new(course.spawn.0, course.spawn.1), course.spawn);
         sim.player.vel.x = gen::run_speed(Difficulty::Cruise, course.spawn.0);
+        let mut invuln = 0u32;
         let mut last = sim.player.pos.x;
         for _ in 0..30 {
-            advance(&mut sim, &course, Difficulty::Cruise, base_fp, false, false, false, 14.0 * TILE, 4000.0 * TILE);
+            advance(&mut sim, &course, Difficulty::Cruise, base_fp, false, false, false, 14.0 * TILE, 4000.0 * TILE, &mut invuln);
             assert!(sim.player.pos.x >= last - 0.001, "x went backwards: {} < {}", sim.player.pos.x, last);
             last = sim.player.pos.x;
         }
