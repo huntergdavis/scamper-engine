@@ -5,6 +5,10 @@ edition = "2021"
 description = "Super Munchii — the sample side-scrolling platformer that exercises (and tests) the scamper engine."
 license = "MIT OR Apache-2.0"
 
+[lib]
+name = "supermunchii"
+path = "src/lib.rs"
+
 [[bin]]
 name = "supermunchii"
 path = "src/main.rs"
