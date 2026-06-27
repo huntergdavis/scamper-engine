@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Build and launch Scamper.
 #   ./run.sh                   # play the game (default)
-#   ./run.sh -i                # interactive menu (game / sprite viewer / tools)
+#   ./run.sh -i                # interactive menu (pick a game / tools)
+#   ./run.sh zoomies           # Zoomies: the rooftop infinite-runner sample
 #   ./run.sh sprites           # sprite-lab: view sprite animations
 #   ./run.sh verify ./scratch  # headless: scripted scenarios + PNG dumps
 #   ./run.sh record <name>     # play + capture per-tick inputs (q saves)
@@ -34,6 +35,15 @@ run_game() {
     [[ "${SCAMP_NODEBUG:-0}" != "1" ]] && extra+=(--debug)
     tmux_warn
     "target/$profile_dir/supermunchii" "${extra[@]}"
+}
+
+# Zoomies — the rooftop infinite-runner sample. Launches into its own in-game menu
+# (Run / Difficulty / High Scores / Help), where fidelity is your health bar.
+run_zoomies() {
+    local extra=()
+    [[ "${SCAMP_NODEBUG:-0}" != "1" ]] && extra+=(--debug)
+    tmux_warn
+    "target/$profile_dir/zoomies" "${extra[@]}"
 }
 
 # Arrow-key TUI menu. Args: title, then item labels. Sets MENU_SEL to the chosen
@@ -335,16 +345,18 @@ EOF
 interactive_menu() {
     cargo build "${profile_args[@]}"
     while true; do
-        # Front door: play the game, learn the controls, or step into the tools.
+        # Front door: pick a sample game, learn the controls, or step into the tools.
         menu "SCAMPER  (a terminal 2D game engine)" \
-            "Play Super Munchii" \
-            "How to play" \
+            "Play Super Munchii  (platformer)" \
+            "Play Zoomies  (rooftop runner)" \
+            "How to play  (Super Munchii)" \
             "Engine tools" \
             "quit"
         case "$MENU_SEL" in
             0) munchii_menu ;;
-            1) how_to_play ;;
-            2) tools_menu ;;
+            1) run_zoomies ;;
+            2) how_to_play ;;
+            3) tools_menu ;;
             *) break ;;
         esac
     done
@@ -355,6 +367,10 @@ interactive_menu() {
 case "${1:-}" in
     -i | --interactive | -interactive)
         interactive_menu
+        ;;
+    zoomies | zoom | runner)
+        cargo build "${profile_args[@]}" --bin zoomies
+        run_zoomies
         ;;
     sprites | lab | sprite-lab)
         cargo build "${profile_args[@]}" --bin sprite-lab
