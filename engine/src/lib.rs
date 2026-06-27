@@ -10,6 +10,7 @@ pub mod input;
 pub mod kitty;
 pub mod level;
 pub mod math;
+pub mod menu;
 pub mod mob;
 pub mod munchii;
 pub mod player;
