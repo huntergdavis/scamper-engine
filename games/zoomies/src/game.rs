@@ -108,6 +108,24 @@ fn play_view(ws: scamper::terminal::WinSize) -> (usize, usize, u16, u16) {
     (view_tw * tile, view_th * tile, (view_tw * cpt_x) as u16, (view_th * cpt_y) as u16)
 }
 
+/// Build the live bird mobs from a course: strafers slide at roof level (Track),
+/// divers bob vertically at a fixed x, dipping to the roof (Swoop). Speed 0 — Track
+/// oscillates on its own and a still Swoop is a pure vertical dive.
+fn build_birds(course: &gen::Course) -> Vec<Mob> {
+    course
+        .birds
+        .iter()
+        .map(|b| {
+            let (y, gait) = if b.dive {
+                (b.roof as f64 * TILE - 34.0, Gait::Swoop)
+            } else {
+                (b.roof as f64 * TILE - 12.0, Gait::Track)
+            };
+            Mob::new(b.home_x, y, 14.0, 12.0, -1, 0.0, gait)
+        })
+        .collect()
+}
+
 /// Play one run. `seed` makes the course reproducible. Returns how it ended.
 pub fn run(input: &mut Input, difficulty: Difficulty, seed: u64) -> Outcome {
     let ws = scamper::terminal::query_winsize();
@@ -133,7 +151,7 @@ pub fn run(input: &mut Input, difficulty: Difficulty, seed: u64) -> Outcome {
 
     let mut treats = course.treats.clone(); // live list; collected ones are removed
     // Patrol birds: Track gait oscillates them ±~3 tiles around their home x.
-    let mut birds: Vec<Mob> = course.birds.iter().map(|&(x, y)| Mob::new(x, y, 14.0, 12.0, -1, 0.0, Gait::Track)).collect();
+    let mut birds = build_birds(&course);
     let mut pending_jump = false;
     let mut full_redraw = true;
     let mut acc: u64 = 0;
@@ -580,7 +598,7 @@ mod tests {
         let mut fidelity = 4u8;
         let mut invuln = 0u32;
         let mut treats = course.treats.clone();
-        let mut birds: Vec<Mob> = course.birds.iter().map(|&(x, y)| Mob::new(x, y, 14.0, 12.0, -1, 0.0, Gait::Track)).collect();
+        let mut birds = build_birds(&course);
         for tick in 0..6000u32 {
             let jp = jump(&sim, &course);
             match advance(&mut sim, &course, &mut treats, &mut birds, difficulty, base_fp, jp, jp, false, death_y, course_end_px, &mut invuln) {

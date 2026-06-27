@@ -75,6 +75,16 @@ pub struct Treat {
     pub h: f64,
 }
 
+/// A patrolling bird anchored over a building's centre. A `strafe` bird slides
+/// side-to-side at roof level (Track gait); a `dive` bird bobs up and down at a
+/// fixed x, dipping to the roof (Swoop gait). Either way you hop the moving target.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Bird {
+    pub home_x: f64,
+    pub roof: i32,
+    pub dive: bool,
+}
+
 /// A generated course: the tilemap plus the segment list (for gameplay + the
 /// fairness test), the rooftop hazards, treats, and patrolling birds, and the spawn.
 pub struct Course {
@@ -82,8 +92,8 @@ pub struct Course {
     pub segs: Vec<Seg>,
     pub obstacles: Vec<Obstacle>,
     pub treats: Vec<Treat>,
-    /// Bird patrol anchors `(home_x, y)` — a moving rooftop hazard you hop over.
-    pub birds: Vec<(f64, f64)>,
+    /// Patrolling birds — a moving rooftop hazard you hop over.
+    pub birds: Vec<Bird>,
     pub spawn: (f64, f64),
     pub rows: i32,
     pub width_tiles: i32,
@@ -193,7 +203,7 @@ pub fn generate(seed: u64, difficulty: Difficulty, width_tiles: i32, rows: i32) 
     let mut segs: Vec<Seg> = Vec::new();
     let mut obstacles: Vec<Obstacle> = Vec::new();
     let mut treats: Vec<Treat> = Vec::new();
-    let mut birds: Vec<(f64, f64)> = Vec::new();
+    let mut birds: Vec<Bird> = Vec::new();
 
     // First building: a generous flat run to stand on at spawn.
     let mut cur_roof = (t.roof.0 + t.roof.1) / 2;
@@ -251,10 +261,10 @@ pub fn generate(seed: u64, difficulty: Difficulty, width_tiles: i32, rows: i32) 
                 h: 14.0,
             });
         } else if bw >= 8 && rng.range(0, 99) < t.bird_pct {
-            // A bird patrols ±~3 tiles around the building centre (Track gait), at
-            // roof level — wide building so there's room to land after hopping it.
+            // A bird over the building centre — wide building so there's room to land
+            // after hopping it. Coin-flip between a side-strafer and a vertical diver.
             let home_x = (x as f64 + bw as f64 / 2.0) * TILE;
-            birds.push((home_x, next_roof as f64 * TILE - 12.0));
+            birds.push(Bird { home_x, roof: next_roof, dive: rng.range(0, 1) == 1 });
         }
         x += bw;
         cur_roof = next_roof;
@@ -335,16 +345,17 @@ mod tests {
 
     #[test]
     fn birds_patrol_over_solid_roof() {
-        // A bird's whole ±TRACK_AMP sweep must stay over its building (never a gap),
-        // so there's always roof to land on after hopping it.
+        // A strafer's whole ±TRACK_AMP sweep must stay over its building (never a
+        // gap), so there's always roof to land on after hopping it. A diver holds a
+        // fixed x, so only that column needs to be solid.
         for d in Difficulty::ALL {
             let course = generate(5, d, 2500, 24);
             let track_amp = 52.0; // engine mob::TRACK_AMP
-            for &(home_x, y) in &course.birds {
-                let roof = ((y + 12.0) / TILE) as i32;
-                for off in [-track_amp, 0.0, track_amp] {
-                    let tx = ((home_x + off) / TILE) as i32;
-                    assert!(course.map.is_solid(tx, roof), "{d:?}: bird sweep leaves the roof at tile {tx}");
+            for b in &course.birds {
+                let offs: &[f64] = if b.dive { &[0.0] } else { &[-track_amp, 0.0, track_amp] };
+                for &off in offs {
+                    let tx = ((b.home_x + off) / TILE) as i32;
+                    assert!(course.map.is_solid(tx, b.roof), "{d:?}: bird sweep leaves the roof at tile {tx}");
                 }
             }
         }
