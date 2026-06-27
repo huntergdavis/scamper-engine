@@ -14,7 +14,7 @@ use scamper::framebuffer::{Framebuffer, Rgba};
 use scamper::input::{Input, K_ESC, K_Q, K_SPACE, K_UP, K_W};
 use scamper::level::art;
 use scamper::level::View;
-use scamper::mob::aabb_overlap;
+use scamper::mob::{aabb_overlap, Gait, Mob};
 use scamper::munchii;
 use scamper::player::{FeelParams, Player};
 use scamper::shake::Shake;
@@ -132,6 +132,8 @@ pub fn run(input: &mut Input, difficulty: Difficulty, seed: u64) -> Outcome {
     let death_y = rows_tiles as f64 * TILE;
 
     let mut treats = course.treats.clone(); // live list; collected ones are removed
+    // Patrol birds: Track gait oscillates them ±~3 tiles around their home x.
+    let mut birds: Vec<Mob> = course.birds.iter().map(|&(x, y)| Mob::new(x, y, 14.0, 12.0, -1, 0.0, Gait::Track)).collect();
     let mut pending_jump = false;
     let mut full_redraw = true;
     let mut acc: u64 = 0;
@@ -158,13 +160,13 @@ pub fn run(input: &mut Input, difficulty: Difficulty, seed: u64) -> Outcome {
         }
         acc += elapsed;
         while acc >= SIM_DT_NS {
-            let tick = advance(&mut sim, &course, &mut treats, difficulty, base_fp, pending_jump, jump_held, down_held, death_y, course_end_px, &mut invuln);
+            let tick = advance(&mut sim, &course, &mut treats, &mut birds, difficulty, base_fp, pending_jump, jump_held, down_held, death_y, course_end_px, &mut invuln);
             pending_jump = false;
             acc -= SIM_DT_NS;
             match tick {
                 Tick::Ended(o) => {
                     if matches!(o, Outcome::Fell { .. }) {
-                        draw_frame(&mut *backend, &mut out, &mut fb, &course, &treats, &sim, cam_x, (0.0, 0.0), cols, rows, fb_w, fb_h, true, fidelity, invuln, difficulty);
+                        draw_frame(&mut *backend, &mut out, &mut fb, &course, &treats, &birds, &sim, cam_x, (0.0, 0.0), cols, rows, fb_w, fb_h, true, fidelity, invuln, difficulty);
                     }
                     break 'game o;
                 }
@@ -199,7 +201,7 @@ pub fn run(input: &mut Input, difficulty: Difficulty, seed: u64) -> Outcome {
         let sh = shake.offset(frame, 5.0);
         frame += 1;
         let needs_redraw = full_redraw || shake.active();
-        draw_frame(&mut *backend, &mut out, &mut fb, &course, &treats, &sim, cam_x, sh, cols, rows, fb_w, fb_h, needs_redraw, fidelity, invuln, difficulty);
+        draw_frame(&mut *backend, &mut out, &mut fb, &course, &treats, &birds, &sim, cam_x, sh, cols, rows, fb_w, fb_h, needs_redraw, fidelity, invuln, difficulty);
         full_redraw = false;
         sleep_until_ns(now_ns() + 16_000_000, 1_000_000);
     };
@@ -241,6 +243,7 @@ fn advance(
     sim: &mut Sim,
     course: &gen::Course,
     treats: &mut Vec<Treat>,
+    birds: &mut [Mob],
     difficulty: Difficulty,
     base_fp: FeelParams,
     jump_pressed: bool,
@@ -259,6 +262,9 @@ fn advance(
     sim.fp = fp;
     let inp = scamper::capture::InputFrame { axis_x: 1, jump_pressed, jump_held, down_held };
     sim.step(&course.map, inp);
+    for b in birds.iter_mut() {
+        b.step(&course.map); // Track gait: oscillate horizontally over the roof
+    }
 
     let p = &sim.player;
     if p.pos.y > death_y {
@@ -274,7 +280,8 @@ fn advance(
         treats.swap_remove(i);
         return Tick::Heal;
     }
-    if *invuln == 0 && hits_obstacle(p, &course.obstacles) {
+    // A static hazard or a patrolling bird hurts (gated by i-frames).
+    if *invuln == 0 && (hits_obstacle(p, &course.obstacles) || hits_bird(p, birds)) {
         *invuln = HIT_GRACE;
         return Tick::Hit;
     }
@@ -288,6 +295,13 @@ fn hits_obstacle(p: &Player, obstacles: &[Obstacle]) -> bool {
     })
 }
 
+/// Does the player's box overlap a patrolling bird?
+fn hits_bird(p: &Player, birds: &[Mob]) -> bool {
+    birds.iter().any(|b| {
+        (b.pos.x - p.pos.x).abs() < 64.0 && aabb_overlap(p.pos.x, p.pos.y, p.w, p.h, b.pos.x, b.pos.y, b.w, b.h)
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn draw_frame(
     backend: &mut dyn Backend,
@@ -295,6 +309,7 @@ fn draw_frame(
     fb: &mut Framebuffer,
     course: &gen::Course,
     treats: &[Treat],
+    birds: &[Mob],
     sim: &Sim,
     cam_x_in: f64,
     shake: (f64, f64),
@@ -379,6 +394,27 @@ fn draw_frame(
             sprites.push((lines, lx, ly, sp.palette));
             // A green "+" tag above it: this one HEALS.
             sprites.push((vec!["+".to_string()], cx - cpw / 2.0, ly - cph, plus_rgb as fn(char) -> (u8, u8, u8)));
+        }
+    }
+
+    // Patrolling birds (a moving hazard) — tagged "-" like the static ones.
+    if let Some(sp) = scamper::sprite::get("swooper") {
+        let an = sp.anim("walk");
+        let n = an.frames.len().max(1);
+        let fi = (sim.clock() / (NS_PER_SEC / an.fps.max(1) as u64)) as usize % n;
+        let frame = &an.frames[fi];
+        for b in birds {
+            if b.pos.x < cam_x - TILE || b.pos.x > cam_x + fb_w as f64 + TILE {
+                continue;
+            }
+            let lines: Vec<String> = frame.iter().map(|s| s.to_string()).collect();
+            let fw = lines.iter().map(|l| l.chars().count()).max().unwrap_or(1) as f64;
+            let (mw, mh) = (fw * cpw, lines.len() as f64 * cph);
+            let lx = sx(b.pos.x + b.w / 2.0) - mw / 2.0;
+            let ly = sy(b.pos.y + b.h) - mh;
+            let cx = lx + mw / 2.0;
+            sprites.push((lines, lx, ly, sp.palette));
+            sprites.push((vec!["-".to_string()], cx - cpw / 2.0, ly - cph, minus_rgb as fn(char) -> (u8, u8, u8)));
         }
     }
 
@@ -497,9 +533,10 @@ mod tests {
         let mut fidelity = 4u8;
         let mut invuln = 0u32;
         let mut treats = course.treats.clone();
+        let mut birds: Vec<Mob> = course.birds.iter().map(|&(x, y)| Mob::new(x, y, 14.0, 12.0, -1, 0.0, Gait::Track)).collect();
         for tick in 0..6000u32 {
             let jp = jump(&sim, &course);
-            match advance(&mut sim, &course, &mut treats, difficulty, base_fp, jp, jp, false, death_y, course_end_px, &mut invuln) {
+            match advance(&mut sim, &course, &mut treats, &mut birds, difficulty, base_fp, jp, jp, false, death_y, course_end_px, &mut invuln) {
                 Tick::Ended(o) => return (o, tick),
                 Tick::Hit => {
                     let (nf, dead) = hit_result(fidelity);
@@ -540,7 +577,8 @@ mod tests {
         let mut sim = Sim::new(Player::new(t0.x, t0.y), (t0.x, t0.y));
         let before = treats.len();
         let mut invuln = 0u32;
-        let r = advance(&mut sim, &course, &mut treats, Difficulty::Standard, gen::base_feel(), false, false, false, 24.0 * TILE, 1.0e9, &mut invuln);
+        let mut birds: Vec<Mob> = Vec::new();
+        let r = advance(&mut sim, &course, &mut treats, &mut birds, Difficulty::Standard, gen::base_feel(), false, false, false, 24.0 * TILE, 1.0e9, &mut invuln);
         assert!(matches!(r, Tick::Heal), "touching a steak heals");
         assert_eq!(treats.len(), before - 1, "the steak is consumed");
     }
@@ -553,9 +591,10 @@ mod tests {
         sim.player.vel.x = gen::run_speed(Difficulty::Cruise, course.spawn.0);
         let mut invuln = 0u32;
         let mut treats = course.treats.clone();
+        let mut birds: Vec<Mob> = Vec::new();
         let mut last = sim.player.pos.x;
         for _ in 0..30 {
-            advance(&mut sim, &course, &mut treats, Difficulty::Cruise, base_fp, false, false, false, 14.0 * TILE, 4000.0 * TILE, &mut invuln);
+            advance(&mut sim, &course, &mut treats, &mut birds, Difficulty::Cruise, base_fp, false, false, false, 14.0 * TILE, 4000.0 * TILE, &mut invuln);
             assert!(sim.player.pos.x >= last - 0.001, "x went backwards: {} < {}", sim.player.pos.x, last);
             last = sim.player.pos.x;
         }

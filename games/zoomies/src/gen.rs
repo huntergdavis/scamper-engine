@@ -76,12 +76,14 @@ pub struct Treat {
 }
 
 /// A generated course: the tilemap plus the segment list (for gameplay + the
-/// fairness test), the rooftop hazards and treats, and the spawn point.
+/// fairness test), the rooftop hazards, treats, and patrolling birds, and the spawn.
 pub struct Course {
     pub map: TileMap,
     pub segs: Vec<Seg>,
     pub obstacles: Vec<Obstacle>,
     pub treats: Vec<Treat>,
+    /// Bird patrol anchors `(home_x, y)` — a moving rooftop hazard you hop over.
+    pub birds: Vec<(f64, f64)>,
     pub spawn: (f64, f64),
     pub rows: i32,
     pub width_tiles: i32,
@@ -97,15 +99,16 @@ struct Tuning {
     max_down: i32,     // largest drop (tiles) to a lower roof
     haz_pct: i32,      // chance (0..100) a wide-enough building carries a hazard
     treat_pct: i32,    // chance a hazard-free building carries a steak (heal)
+    bird_pct: i32,     // chance a wide, otherwise-empty building carries a patrol bird
 }
 
 fn tuning(d: Difficulty, rows: i32) -> Tuning {
-    // (start, max, ramp, building-width, hazard%, treat%) — harder runs hit you more,
-    // so they also sprinkle a few more steaks to claw fidelity back.
-    let (start, max, ramp, bw, haz, treat) = match d {
-        Difficulty::Cruise => (170.0, 300.0, 5000.0, (6, 11), 25, 14),
-        Difficulty::Standard => (210.0, 410.0, 4000.0, (4, 9), 45, 20),
-        Difficulty::Frantic => (255.0, 540.0, 3200.0, (3, 7), 70, 28),
+    // (start, max, ramp, building-width, hazard%, treat%, bird%) — harder runs hit
+    // you more, so they also sprinkle a few more steaks to claw fidelity back.
+    let (start, max, ramp, bw, haz, treat, bird) = match d {
+        Difficulty::Cruise => (170.0, 300.0, 5000.0, (6, 11), 25, 14, 10),
+        Difficulty::Standard => (210.0, 410.0, 4000.0, (4, 9), 45, 20, 16),
+        Difficulty::Frantic => (255.0, 540.0, 3200.0, (3, 7), 70, 28, 22),
     };
     Tuning {
         start_speed: start,
@@ -114,6 +117,7 @@ fn tuning(d: Difficulty, rows: i32) -> Tuning {
         bw,
         haz_pct: haz,
         treat_pct: treat,
+        bird_pct: bird,
         // Roofs occupy the upper-middle band; never so low that there's no fall room.
         roof: ((rows as f64 * 0.28) as i32, (rows as f64 * 0.62) as i32),
         max_down: 4,
@@ -189,6 +193,7 @@ pub fn generate(seed: u64, difficulty: Difficulty, width_tiles: i32, rows: i32) 
     let mut segs: Vec<Seg> = Vec::new();
     let mut obstacles: Vec<Obstacle> = Vec::new();
     let mut treats: Vec<Treat> = Vec::new();
+    let mut birds: Vec<(f64, f64)> = Vec::new();
 
     // First building: a generous flat run to stand on at spawn.
     let mut cur_roof = (t.roof.0 + t.roof.1) / 2;
@@ -245,13 +250,18 @@ pub fn generate(seed: u64, difficulty: Difficulty, width_tiles: i32, rows: i32) 
                 w: 12.0,
                 h: 14.0,
             });
+        } else if bw >= 8 && rng.range(0, 99) < t.bird_pct {
+            // A bird patrols ±~3 tiles around the building centre (Track gait), at
+            // roof level — wide building so there's room to land after hopping it.
+            let home_x = (x as f64 + bw as f64 / 2.0) * TILE;
+            birds.push((home_x, next_roof as f64 * TILE - 12.0));
         }
         x += bw;
         cur_roof = next_roof;
     }
 
     map.spawn = spawn;
-    Course { map, segs, obstacles, treats, spawn, rows, width_tiles }
+    Course { map, segs, obstacles, treats, birds, spawn, rows, width_tiles }
 }
 
 /// Fill a building's solid columns: from `roof` down to the map floor, `width` tiles
@@ -319,6 +329,23 @@ mod tests {
                 // No steak shares a tile column with a hazard.
                 assert!(!course.obstacles.iter().any(|o| (o.x / TILE) as i32 == tx),
                     "{d:?}: steak overlaps a hazard column at tile {tx}");
+            }
+        }
+    }
+
+    #[test]
+    fn birds_patrol_over_solid_roof() {
+        // A bird's whole ±TRACK_AMP sweep must stay over its building (never a gap),
+        // so there's always roof to land on after hopping it.
+        for d in Difficulty::ALL {
+            let course = generate(5, d, 2500, 24);
+            let track_amp = 52.0; // engine mob::TRACK_AMP
+            for &(home_x, y) in &course.birds {
+                let roof = ((y + 12.0) / TILE) as i32;
+                for off in [-track_amp, 0.0, track_amp] {
+                    let tx = ((home_x + off) / TILE) as i32;
+                    assert!(course.map.is_solid(tx, roof), "{d:?}: bird sweep leaves the roof at tile {tx}");
+                }
             }
         }
     }
