@@ -1,0 +1,15 @@
+[package]
+name = "arcade"
+version = "0.1.0"
+edition = "2021"
+description = "The scamper arcade — a thin launcher whose menu lists the sample games and hands off to each."
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "arcade"
+path = "src/main.rs"
+
+[dependencies]
+scamper = { path = "../../engine" }
+supermunchii = { path = "../supermunchii" }
+zoomies = { path = "../zoomies" }
