@@ -277,6 +277,7 @@ fn draw_frame(
     invuln: u32,
     difficulty: Difficulty,
 ) {
+    out.clear(); // the backends append this frame's bytes; we flush them below
     let pal = art::palette(art::Theme::Rooftop);
     let cpw = fb_w as f64 / cols.max(1) as f64;
     let cph = fb_h as f64 / rows.max(1) as f64;
@@ -360,6 +361,13 @@ fn draw_frame(
             draw_sprite_pixels(fb, lns, *lx, *ly, cpw, cph, *p);
         }
         backend.present(out, fb, cols, rows, full_redraw, &[]);
+    }
+
+    // Flush the encoded frame to the terminal (present only appended it to `out`).
+    {
+        let mut o = std::io::stdout().lock();
+        let _ = o.write_all(out);
+        let _ = o.flush();
     }
 
     // HUD on the row just below the play image (not over it — avoids fighting the
