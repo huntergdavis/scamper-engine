@@ -1,5 +1,5 @@
 [workspace]
-members = ["engine", "games/supermunchii"]
+members = ["engine", "games/supermunchii", "games/zoomies"]
 resolver = "2"
 
 # Profiles live in the workspace root (Cargo ignores them in member manifests).

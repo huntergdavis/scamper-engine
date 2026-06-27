@@ -1,0 +1,17 @@
+[package]
+name = "zoomies"
+version = "0.1.0"
+edition = "2021"
+description = "Zoomies — a rooftop infinite-runner sample game on the scamper engine, where graphics fidelity is your health bar."
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "zoomies"
+path = "src/lib.rs"
+
+[[bin]]
+name = "zoomies"
+path = "src/main.rs"
+
+[dependencies]
+scamper = { path = "../../engine" }
