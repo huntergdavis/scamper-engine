@@ -81,6 +81,14 @@ fn hit_result(fidelity: u8) -> (u8, bool) {
     (new, new == 0)
 }
 
+/// Tag colors: green for a heal "+", red for a hazard "-". (Shape carries it in mono.)
+fn plus_rgb(_: char) -> (u8, u8, u8) {
+    (120, 240, 140)
+}
+fn minus_rgb(_: char) -> (u8, u8, u8) {
+    (240, 110, 100)
+}
+
 /// The HUD fidelity bar: filled pips for current tier, hollow for lost ones.
 fn fidelity_pips(fidelity: u8) -> String {
     let f = fidelity.min(4) as usize;
@@ -345,7 +353,10 @@ fn draw_frame(
             let (mw, mh) = (fw * cpw, lines.len() as f64 * cph);
             let lx = sx(o.x + o.w / 2.0) - mw / 2.0;
             let ly = sy(o.y + o.h) - mh;
+            let cx = lx + mw / 2.0;
             sprites.push((lines, lx, ly, sp.palette));
+            // A red "-" tag above it: this one HURTS (reads in B&W by shape alone).
+            sprites.push((vec!["-".to_string()], cx - cpw / 2.0, ly - cph, minus_rgb as fn(char) -> (u8, u8, u8)));
         }
     }
 
@@ -364,7 +375,10 @@ fn draw_frame(
             let (mw, mh) = (fw * cpw, lines.len() as f64 * cph);
             let lx = sx(tr.x + tr.w / 2.0) - mw / 2.0;
             let ly = sy(tr.y + tr.h) - mh;
+            let cx = lx + mw / 2.0;
             sprites.push((lines, lx, ly, sp.palette));
+            // A green "+" tag above it: this one HEALS.
+            sprites.push((vec!["+".to_string()], cx - cpw / 2.0, ly - cph, plus_rgb as fn(char) -> (u8, u8, u8)));
         }
     }
 
