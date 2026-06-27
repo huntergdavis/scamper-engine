@@ -29,6 +29,7 @@ pub const K_P: u32 = 112;
 pub const K_X: u32 = 120;
 pub const K_TAB: u32 = 9;
 pub const K_ENTER: u32 = 13; // Return — menu "select" (CR; LF is folded onto it)
+pub const K_BACKSPACE: u32 = 127; // DEL; byte 8 is folded onto it for text entry
 pub const K_HELP: u32 = 104; // 'h'
 pub const K_LEFT: u32 = 1_000;
 pub const K_DOWN: u32 = 1_001;
@@ -202,8 +203,11 @@ impl Input {
                     // Enter arrives as CR (raw mode keeps ICRNL off); fold a stray LF
                     // onto it too, so menus are selectable on plain terminals.
                     13 | 10 => self.legacy_byte(K_ENTER),
-                    K_A | K_D | K_W | K_S | K_SPACE | K_Z | K_K | K_TAB | K_HELP | K_Q
-                    | K_Y | K_N | K_T | K_P | K_X | K_G | K_1 | K_2 | K_3 | K_4 => self.legacy_byte(code),
+                    8 | 127 => self.legacy_byte(K_BACKSPACE), // backspace for text entry
+                    9 => self.legacy_byte(K_TAB),
+                    // Space + all printable ASCII: covers every game key and enables
+                    // name entry. (Unmapped codes are simply never queried.)
+                    32..=126 => self.legacy_byte(code),
                     _ => {}
                 }
                 i += 1;
@@ -299,6 +303,22 @@ impl Input {
     /// Any key pressed this frame — for "press any key to start" prompts.
     pub fn any_pressed(&self) -> bool {
         !self.pressed.is_empty()
+    }
+
+    /// Printable characters pressed this frame (a–z, 0–9, space), upper-cased — for
+    /// text entry like a high-score name. Sorted for stable ordering within a frame.
+    pub fn typed(&self) -> Vec<char> {
+        let mut v: Vec<char> = self
+            .pressed
+            .iter()
+            .filter_map(|&c| match c {
+                97..=122 => char::from_u32(c - 32), // a–z → A–Z
+                48..=57 | 32 => char::from_u32(c),  // digits / space
+                _ => None,
+            })
+            .collect();
+        v.sort_unstable();
+        v
     }
 
     /// Horizontal input axis in [-1, 1].
@@ -420,6 +440,23 @@ mod tests {
         let mut l2 = Input::new(false);
         feed(&mut l2, b"\n");
         assert!(l2.pressed(K_ENTER), "legacy LF Enter");
+    }
+
+    #[test]
+    fn typed_returns_uppercase_printables() {
+        let mut k = Input::new(true);
+        feed(&mut k, b"\x1b[97u"); // 'a'
+        assert_eq!(k.typed(), vec!['A']);
+        let mut k2 = Input::new(true);
+        feed(&mut k2, b"\x1b[32u"); // space
+        assert_eq!(k2.typed(), vec![' ']);
+        // legacy raw byte 'b' → typed 'B'; backspace byte 8 → K_BACKSPACE press.
+        let mut l = Input::new(false);
+        feed(&mut l, b"b");
+        assert_eq!(l.typed(), vec!['B']);
+        let mut l2 = Input::new(false);
+        feed(&mut l2, &[8]);
+        assert!(l2.pressed(K_BACKSPACE));
     }
 
     #[test]

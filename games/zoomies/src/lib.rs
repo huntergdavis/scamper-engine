@@ -8,7 +8,7 @@
 //! generator and gameplay land in later steps. Exposed as a library so the arcade
 //! launcher can start it via [`launch`].
 
-use scamper::input::{Input, K_DOWN, K_ENTER, K_ESC, K_Q, K_S, K_SPACE, K_UP, K_W};
+use scamper::input::{Input, K_BACKSPACE, K_DOWN, K_ENTER, K_ESC, K_Q, K_S, K_SPACE, K_UP, K_W};
 use scamper::menu::Menu;
 use scamper::terminal;
 use scamper::time::{now_ns, sleep_until_ns};
@@ -72,20 +72,27 @@ impl Difficulty {
 }
 
 /// Insert `dist` into a descending top-`n` list, returning the 0-based rank if it
-/// placed (ties keep the incumbent ahead). Pure, so it unit-tests directly.
-fn insert_ranked(list: &mut Vec<u32>, dist: u32, n: usize) -> Option<usize> {
-    let pos = list.iter().position(|&d| dist > d).unwrap_or(list.len());
-    if pos >= n {
-        return None;
+/// Sanitize a typed name for storage: keep letters/digits/spaces (no `,`/`|` which
+/// are our delimiters), upper-case, trim, cap length; empty falls back to "YOU".
+fn clean_name(raw: &str) -> String {
+    let s: String = raw
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == ' ')
+        .take(10)
+        .collect::<String>()
+        .trim()
+        .to_ascii_uppercase();
+    if s.is_empty() {
+        "YOU".to_string()
+    } else {
+        s
     }
-    list.insert(pos, dist);
-    list.truncate(n);
-    Some(pos)
 }
 
-/// The on-disk save: the chosen difficulty plus a top-N distance table per
+/// The on-disk save: the chosen difficulty plus a top-N high-score table per
 /// difficulty, in one tab-separated key/value file (`~/.zoomies`). Keys are
-/// `difficulty` and `score.<name>` (a comma-separated descending list).
+/// `difficulty` and `score.<name>` (a comma-separated descending list of
+/// `NAME|DISTANCE` entries; legacy bare-number entries still parse).
 pub struct Save {
     path: PathBuf,
     kv: HashMap<String, String>,
@@ -116,24 +123,40 @@ impl Save {
         self.persist();
     }
 
-    /// The top distances for a difficulty, descending.
-    pub fn top(&self, d: Difficulty) -> Vec<u32> {
+    /// The top `(name, distance)` entries for a difficulty, descending by distance.
+    pub fn top(&self, d: Difficulty) -> Vec<(String, u32)> {
         self.kv
             .get(&format!("score.{}", d.name()))
-            .map(|csv| csv.split(',').filter_map(|t| t.trim().parse::<u32>().ok()).collect())
+            .map(|csv| {
+                csv.split(',')
+                    .filter_map(|e| match e.split_once('|') {
+                        Some((n, dv)) => Some((n.to_string(), dv.trim().parse::<u32>().ok()?)),
+                        None => e.trim().parse::<u32>().ok().map(|v| ("---".to_string(), v)), // legacy
+                    })
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
-    /// Record a run's distance; returns the 0-based rank if it made the table.
-    pub fn record(&mut self, d: Difficulty, dist: u32) -> Option<usize> {
+    /// Would `dist` make the table (so we should ask for a name)?
+    pub fn qualifies(&self, d: Difficulty, dist: u32) -> bool {
+        let e = self.top(d);
+        e.len() < TOP_N || dist > e.last().map(|(_, v)| *v).unwrap_or(0)
+    }
+
+    /// Record a run under `name`; returns the 0-based rank if it made the table.
+    pub fn record(&mut self, d: Difficulty, name: &str, dist: u32) -> Option<usize> {
         let mut list = self.top(d);
-        let rank = insert_ranked(&mut list, dist, TOP_N);
-        if rank.is_some() {
-            let csv = list.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(",");
-            self.kv.insert(format!("score.{}", d.name()), csv);
-            self.persist();
+        let pos = list.iter().position(|(_, v)| dist > *v).unwrap_or(list.len());
+        if pos >= TOP_N {
+            return None;
         }
-        rank
+        list.insert(pos, (clean_name(name), dist));
+        list.truncate(TOP_N);
+        let csv = list.iter().map(|(n, v)| format!("{n}|{v}")).collect::<Vec<_>>().join(",");
+        self.kv.insert(format!("score.{}", d.name()), csv);
+        self.persist();
+        Some(pos)
     }
 
     fn persist(&self) {
@@ -236,13 +259,15 @@ fn menu_loop(input: &mut Input) {
                         game::Outcome::Downed { .. } => "Out of fidelity — downed!",
                         game::Outcome::Quit { .. } => "Run ended",
                     };
-                    // Record completed/failed runs (not a deliberate quit) to the table.
-                    let placed = if matches!(outcome, game::Outcome::Quit { .. }) {
-                        None
+                    // A qualifying run (not a deliberate quit) earns a name prompt,
+                    // then goes on the board.
+                    let placed = if !matches!(outcome, game::Outcome::Quit { .. }) && save.qualifies(diff, dist) {
+                        let name = prompt_name(&mut out, input, dist);
+                        save.record(diff, &name, dist)
                     } else {
-                        save.record(diff, dist)
+                        None
                     };
-                    let best = save.top(diff).first().copied().unwrap_or(0);
+                    let best = save.top(diff).first().map(|(_, v)| *v).unwrap_or(0);
                     let mut lines = vec![head.to_string(), String::new(), format!("Distance:  {dist} m")];
                     if let Some(rank) = placed {
                         lines.push(format!("★  NEW HIGH SCORE — #{}  ★", rank + 1));
@@ -312,9 +337,10 @@ fn show_help(out: &mut Vec<u8>, input: &mut Input) {
             "You auto-run right; the screen never waits.",
             "Jump:  Space  /  ↑      Fast-fall:  ↓",
             "",
-            "Each hit drops your graphics one tier:",
+            "A hit (- spikes / birds) drops graphics a tier:",
             "Kitty → half-blocks → ASCII → mono.",
             "A hit at mono ends the run.",
+            "Grab a + steak to get a tier back!",
             "Fall between buildings = instant death.",
             "",
             "Score = distance run. Pick difficulty in the menu.",
@@ -329,8 +355,8 @@ fn show_scores(out: &mut Vec<u8>, input: &mut Input, save: &Save, diff: Difficul
     let mut lines: Vec<String> = vec![format!("High Scores — {}", diff.label()), String::new()];
     for i in 0..TOP_N {
         match top.get(i) {
-            Some(v) => lines.push(format!("{}.   {:>6} m", i + 1, v)),
-            None => lines.push(format!("{}.        —", i + 1)),
+            Some((name, v)) => lines.push(format!("{}.  {:<10} {:>6} m", i + 1, name, v)),
+            None => lines.push(format!("{}.  {:<10} {:>6}  ", i + 1, "---", "—")),
         }
     }
     lines.push(String::new());
@@ -338,6 +364,54 @@ fn show_scores(out: &mut Vec<u8>, input: &mut Input, save: &Save, diff: Difficul
     lines.push("press any key".to_string());
     let refs: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
     show_card(out, input, &refs);
+}
+
+/// Text-entry modal for a new high score. Type a name (letters/digits/space),
+/// Backspace to fix, Enter to confirm, Esc to skip (defaults to "YOU").
+fn prompt_name(out: &mut Vec<u8>, input: &mut Input, dist: u32) -> String {
+    let mut name = String::new();
+    loop {
+        let ws = terminal::query_winsize();
+        out.clear();
+        out.extend_from_slice(b"\x1b[2J");
+        let mut s = String::new();
+        let lines = [
+            "★  NEW HIGH SCORE!  ★".to_string(),
+            String::new(),
+            format!("{dist} m"),
+            String::new(),
+            "Enter your name:".to_string(),
+            format!("[ {}_ ]", name),
+            String::new(),
+            "type · Backspace · Enter to save".to_string(),
+        ];
+        let refs: Vec<&str> = lines.iter().map(|l| l.as_str()).collect();
+        let top = (ws.rows as i32 / 2 - lines.len() as i32 / 2).max(1) as u16;
+        ui::center_card(&mut s, ws.cols, top, &refs, true);
+        out.extend_from_slice(s.as_bytes());
+        flush(out);
+
+        if terminal::quit_requested() {
+            break;
+        }
+        input.poll();
+        if input.quit || input.pressed(K_ESC) {
+            break;
+        }
+        if input.pressed(K_ENTER) {
+            break;
+        }
+        if input.pressed(K_BACKSPACE) {
+            name.pop();
+        }
+        for c in input.typed() {
+            if name.chars().count() < 10 {
+                name.push(c);
+            }
+        }
+        sleep_until_ns(now_ns() + 16_000_000, 1_000_000);
+    }
+    clean_name(&name)
 }
 
 fn flush(out: &[u8]) {
@@ -351,23 +425,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn insert_ranked_keeps_top_n_descending() {
-        let mut l = vec![];
-        assert_eq!(insert_ranked(&mut l, 100, 3), Some(0));
-        assert_eq!(insert_ranked(&mut l, 50, 3), Some(1));
-        assert_eq!(insert_ranked(&mut l, 200, 3), Some(0));
-        assert_eq!(l, vec![200, 100, 50]);
-        // Full list: a low score doesn't place; a high one bumps the tail.
-        assert_eq!(insert_ranked(&mut l, 10, 3), None);
-        assert_eq!(insert_ranked(&mut l, 150, 3), Some(1));
-        assert_eq!(l, vec![200, 150, 100]);
+    fn clean_name_sanitizes_and_defaults() {
+        assert_eq!(clean_name("hugh"), "HUGH");
+        assert_eq!(clean_name("  a,b|c  "), "ABC"); // delimiters/punct stripped
+        assert_eq!(clean_name(""), "YOU");
+        assert_eq!(clean_name("!!!"), "YOU");
+        assert_eq!(clean_name("abcdefghijklmnop").len(), 10); // capped
     }
 
     #[test]
-    fn insert_ranked_ties_keep_incumbent_ahead() {
-        let mut l = vec![100];
-        assert_eq!(insert_ranked(&mut l, 100, 5), Some(1)); // equal -> placed after
-        assert_eq!(l, vec![100, 100]);
+    fn scores_rank_and_qualify_by_distance() {
+        let mut path = std::env::temp_dir();
+        path.push("zoomies_rank_test.kv");
+        let _ = std::fs::remove_file(&path);
+        let mut s = Save::load_from(path.clone());
+        let d = Difficulty::Standard;
+        assert!(s.qualifies(d, 1), "empty board accepts anything");
+        assert_eq!(s.record(d, "a", 100), Some(0));
+        assert_eq!(s.record(d, "b", 50), Some(1));
+        assert_eq!(s.record(d, "c", 200), Some(0)); // beats the top
+        assert_eq!(s.top(d).iter().map(|(_, v)| *v).collect::<Vec<_>>(), vec![200, 100, 50]);
+        // Fill to TOP_N, then a low score neither qualifies nor records.
+        for v in [10, 20] {
+            s.record(d, "x", v);
+        }
+        assert!(!s.qualifies(d, 5), "board full, 5 doesn't beat the tail");
+        assert_eq!(s.record(d, "z", 5), None);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
@@ -396,13 +480,13 @@ mod tests {
         let mut s = Save::load_from(path.clone());
         assert_eq!(s.difficulty(), Difficulty::Standard, "default");
         s.set_difficulty(Difficulty::Frantic);
-        assert_eq!(s.record(Difficulty::Frantic, 500), Some(0));
-        assert_eq!(s.record(Difficulty::Frantic, 300), Some(1));
+        assert_eq!(s.record(Difficulty::Frantic, "Hugh", 500), Some(0));
+        assert_eq!(s.record(Difficulty::Frantic, "Bo", 300), Some(1));
 
-        // Reload from disk: settings + scores survived.
+        // Reload from disk: settings + named scores survived.
         let s2 = Save::load_from(path.clone());
         assert_eq!(s2.difficulty(), Difficulty::Frantic);
-        assert_eq!(s2.top(Difficulty::Frantic), vec![500, 300]);
+        assert_eq!(s2.top(Difficulty::Frantic), vec![("HUGH".to_string(), 500), ("BO".to_string(), 300)]);
         assert!(s2.top(Difficulty::Cruise).is_empty());
 
         let _ = std::fs::remove_file(&path);
