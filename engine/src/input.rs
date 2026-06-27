@@ -28,6 +28,7 @@ pub const K_N: u32 = 110;
 pub const K_P: u32 = 112;
 pub const K_X: u32 = 120;
 pub const K_TAB: u32 = 9;
+pub const K_ENTER: u32 = 13; // Return — menu "select" (CR; LF is folded onto it)
 pub const K_HELP: u32 = 104; // 'h'
 pub const K_LEFT: u32 = 1_000;
 pub const K_DOWN: u32 = 1_001;
@@ -198,6 +199,9 @@ impl Input {
                 // Legacy mode: raw byte keys.
                 let code = b as u32;
                 match code {
+                    // Enter arrives as CR (raw mode keeps ICRNL off); fold a stray LF
+                    // onto it too, so menus are selectable on plain terminals.
+                    13 | 10 => self.legacy_byte(K_ENTER),
                     K_A | K_D | K_W | K_S | K_SPACE | K_Z | K_K | K_TAB | K_HELP | K_Q
                     | K_Y | K_N | K_T | K_P | K_X | K_G | K_1 | K_2 | K_3 | K_4 => self.legacy_byte(code),
                     _ => {}
@@ -401,6 +405,21 @@ mod tests {
         feed(&mut inp, b"\x1b[9u"); // Tab
         assert!(inp.pressed(K_TAB));
         assert!(!inp.quit);
+    }
+
+    #[test]
+    fn enter_selects_in_both_modes() {
+        // Kitty mode: Return arrives as CSI 13 u.
+        let mut k = Input::new(true);
+        feed(&mut k, b"\x1b[13u");
+        assert!(k.pressed(K_ENTER), "kitty Enter");
+        // Legacy mode: Return arrives as a raw CR byte (and a stray LF folds onto it).
+        let mut l = Input::new(false);
+        feed(&mut l, b"\r");
+        assert!(l.pressed(K_ENTER), "legacy CR Enter");
+        let mut l2 = Input::new(false);
+        feed(&mut l2, b"\n");
+        assert!(l2.pressed(K_ENTER), "legacy LF Enter");
     }
 
     #[test]

@@ -8,7 +8,7 @@
 //! generator and gameplay land in later steps. Exposed as a library so the arcade
 //! launcher can start it via [`launch`].
 
-use scamper::input::{Input, K_DOWN, K_ESC, K_Q, K_S, K_SPACE, K_UP, K_W};
+use scamper::input::{Input, K_DOWN, K_ENTER, K_ESC, K_Q, K_S, K_SPACE, K_UP, K_W};
 use scamper::menu::Menu;
 use scamper::terminal;
 use scamper::time::{now_ns, sleep_until_ns};
@@ -20,8 +20,6 @@ use std::path::PathBuf;
 mod game;
 mod gen;
 
-/// Enter key (kitty reports it as CSI 13 u). Space also selects, for legacy terminals.
-const K_ENTER: u32 = 13;
 /// How many scores we keep per difficulty.
 const TOP_N: usize = 5;
 

@@ -6,13 +6,11 @@
 //! must not hold one while a game runs. Each menu pass takes a guard for the duration
 //! of the menu, drops it before launching the chosen game, then re-enters on return.
 
-use scamper::input::{Input, K_DOWN, K_ESC, K_Q, K_S, K_SPACE, K_UP, K_W};
+use scamper::input::{Input, K_DOWN, K_ENTER, K_ESC, K_Q, K_S, K_SPACE, K_UP, K_W};
 use scamper::menu::Menu;
 use scamper::terminal;
 use scamper::time::{now_ns, sleep_until_ns};
 use std::io::Write;
-
-const K_ENTER: u32 = 13;
 
 #[derive(Clone, Copy)]
 enum Game {
