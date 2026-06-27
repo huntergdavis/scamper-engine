@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Build and launch Scamper.
 #   ./run.sh                   # play the game (default)
-#   ./run.sh -i                # interactive menu (pick a game / tools)
+#   ./run.sh -i                # interactive menu (arcade / levels / tools)
+#   ./run.sh arcade            # the game picker (Super Munchii · Zoomies)
 #   ./run.sh zoomies           # Zoomies: the rooftop infinite-runner sample
 #   ./run.sh sprites           # sprite-lab: view sprite animations
 #   ./run.sh verify ./scratch  # headless: scripted scenarios + PNG dumps
@@ -44,6 +45,16 @@ run_zoomies() {
     [[ "${SCAMP_NODEBUG:-0}" != "1" ]] && extra+=(--debug)
     tmux_warn
     "target/$profile_dir/zoomies" "${extra[@]}"
+}
+
+# The arcade launcher — its menu lists the sample games (Super Munchii, Zoomies)
+# and hands off to each game's own loop. This is the game picker; the bash menu
+# only wraps it (plus the dev level-browsers and engine tools).
+run_arcade() {
+    local extra=()
+    [[ "${SCAMP_NODEBUG:-0}" != "1" ]] && extra+=(--debug)
+    tmux_warn
+    "target/$profile_dir/arcade" "${extra[@]}"
 }
 
 # Arrow-key TUI menu. Args: title, then item labels. Sets MENU_SEL to the chosen
@@ -345,16 +356,17 @@ EOF
 interactive_menu() {
     cargo build "${profile_args[@]}"
     while true; do
-        # Front door: pick a sample game, learn the controls, or step into the tools.
+        # Front door: into the arcade (the game picker), the Super Munchii level
+        # browsers, the controls card, or the engine tools.
         menu "SCAMPER  (a terminal 2D game engine)" \
-            "Play Super Munchii  (platformer)" \
-            "Play Zoomies  (rooftop runner)" \
+            "Arcade  (Super Munchii \xc2\xb7 Zoomies)" \
+            "Super Munchii levels & sandbox" \
             "How to play  (Super Munchii)" \
             "Engine tools" \
             "quit"
         case "$MENU_SEL" in
-            0) munchii_menu ;;
-            1) run_zoomies ;;
+            0) run_arcade ;;
+            1) munchii_menu ;;
             2) how_to_play ;;
             3) tools_menu ;;
             *) break ;;
@@ -367,6 +379,10 @@ interactive_menu() {
 case "${1:-}" in
     -i | --interactive | -interactive)
         interactive_menu
+        ;;
+    arcade | -a | games)
+        cargo build "${profile_args[@]}" --bin arcade
+        run_arcade
         ;;
     zoomies | zoom | runner)
         cargo build "${profile_args[@]}" --bin zoomies
