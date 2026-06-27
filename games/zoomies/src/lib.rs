@@ -17,6 +17,8 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
 
+mod gen;
+
 /// Enter key (kitty reports it as CSI 13 u). Space also selects, for legacy terminals.
 const K_ENTER: u32 = 13;
 /// How many scores we keep per difficulty.
