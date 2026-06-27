@@ -17,6 +17,7 @@ use scamper::level::View;
 use scamper::mob::aabb_overlap;
 use scamper::munchii;
 use scamper::player::{FeelParams, Player};
+use scamper::shake::Shake;
 use scamper::sim::{Sim, SIM_DT_NS};
 use scamper::time::{now_ns, sleep_until_ns, NS_PER_SEC};
 use scamper::world::TILE;
@@ -125,6 +126,8 @@ pub fn run(input: &mut Input, difficulty: Difficulty, seed: u64) -> Outcome {
     let mut full_redraw = true;
     let mut acc: u64 = 0;
     let mut prev = now_ns();
+    let mut shake = Shake::new();
+    let mut frame: u64 = 0;
 
     let outcome = 'game: loop {
         input.poll();
@@ -151,7 +154,7 @@ pub fn run(input: &mut Input, difficulty: Difficulty, seed: u64) -> Outcome {
             match tick {
                 Tick::Ended(o) => {
                     if matches!(o, Outcome::Fell { .. }) {
-                        draw_frame(&mut *backend, &mut out, &mut fb, &course, &sim, cam_x, cols, rows, fb_w, fb_h, true, fidelity, invuln, difficulty);
+                        draw_frame(&mut *backend, &mut out, &mut fb, &course, &sim, cam_x, (0.0, 0.0), cols, rows, fb_w, fb_h, true, fidelity, invuln, difficulty);
                     }
                     break 'game o;
                 }
@@ -161,8 +164,9 @@ pub fn run(input: &mut Input, difficulty: Difficulty, seed: u64) -> Outcome {
                     if dead {
                         break 'game Outcome::Downed { distance: distance_m(&sim, &course) };
                     }
-                    // Tear the old renderer down and rebuild one tier lower.
+                    // Tear the old renderer down and rebuild one tier lower, with a jolt.
                     swap_backend(&mut backend, &mut out, fidelity);
+                    shake.bump(0.6);
                     full_redraw = true;
                 }
                 Tick::Continue => {}
@@ -172,7 +176,10 @@ pub fn run(input: &mut Input, difficulty: Difficulty, seed: u64) -> Outcome {
         // Camera: follow the player, never backtrack (forced rightward).
         cam_x = cam_x.max(sim.player.pos.x - left_margin).max(0.0);
 
-        draw_frame(&mut *backend, &mut out, &mut fb, &course, &sim, cam_x, cols, rows, fb_w, fb_h, full_redraw, fidelity, invuln, difficulty);
+        let sh = shake.offset(frame, 5.0);
+        frame += 1;
+        let needs_redraw = full_redraw || shake.active();
+        draw_frame(&mut *backend, &mut out, &mut fb, &course, &sim, cam_x, sh, cols, rows, fb_w, fb_h, needs_redraw, fidelity, invuln, difficulty);
         full_redraw = false;
         sleep_until_ns(now_ns() + 16_000_000, 1_000_000);
     };
@@ -260,6 +267,7 @@ fn draw_frame(
     course: &gen::Course,
     sim: &Sim,
     cam_x_in: f64,
+    shake: (f64, f64),
     cols: u16,
     rows: u16,
     fb_w: usize,
@@ -273,7 +281,8 @@ fn draw_frame(
     let cpw = fb_w as f64 / cols.max(1) as f64;
     let cph = fb_h as f64 / rows.max(1) as f64;
 
-    let mut view = View { cam_x: cam_x_in, cam_y: 0.0, zoom: 1, view_w: fb_w, view_h: fb_h };
+    // Shake nudges the camera before snapping, so it trembles by whole pixels/cells.
+    let mut view = View { cam_x: cam_x_in + shake.0, cam_y: shake.1, zoom: 1, view_w: fb_w, view_h: fb_h };
     if backend.pixel_exact() {
         view.snap_pixels();
     } else {
@@ -353,15 +362,17 @@ fn draw_frame(
         backend.present(out, fb, cols, rows, full_redraw, &[]);
     }
 
-    draw_hud(distance_m(sim, course), gen::run_speed(difficulty, sim.player.pos.x), fidelity, cols);
+    // HUD on the row just below the play image (not over it — avoids fighting the
+    // Kitty image at the top, which flickers on recomposite).
+    draw_hud(distance_m(sim, course), gen::run_speed(difficulty, sim.player.pos.x), fidelity, cols, rows + 1);
 }
 
-/// A single status row painted on top: distance, speed, and the fidelity bar.
-fn draw_hud(dist: u32, speed: f64, fidelity: u8, cols: u16) {
+/// A single status row (distance, speed, fidelity bar) on `status_row`, full width.
+fn draw_hud(dist: u32, speed: f64, fidelity: u8, cols: u16, status_row: u16) {
     let text = format!("  ⚡ {dist} m    {:.0} px/s    fidelity {}  ", speed, fidelity_pips(fidelity));
     let text: String = text.chars().take(cols as usize).collect();
     let mut o = std::io::stdout().lock();
-    let _ = write!(o, "\x1b[1;1H\x1b[7m{text}\x1b[0m");
+    let _ = write!(o, "\x1b[{};1H\x1b[2K\x1b[7m{text}\x1b[0m", status_row);
     let _ = o.flush();
 }
 
