@@ -206,10 +206,11 @@ struct WordPop {
 }
 
 /// Word pops play at this cadence for this many frames (≈ lifetime in seconds =
-/// frames / fps), rising `WORD_RISE` px per frame.
+/// frames / fps), rising `WORD_RISE` px per frame. At 60fps a 0.75s pop barely
+/// registers, so they linger ~1.8s and drift up gently enough to stay readable.
 const WORD_FPS: u32 = 12;
-const WORD_FRAMES: u64 = 9;
-const WORD_RISE: f64 = 1.6;
+const WORD_FRAMES: u64 = 22;
+const WORD_RISE: f64 = 1.1;
 
 /// The set of currently-playing effect instances.
 #[derive(Default)]
