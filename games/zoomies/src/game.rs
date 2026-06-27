@@ -99,6 +99,31 @@ fn pristine_mult(pristine_ticks: u32) -> f64 {
     1.0 + (pristine_ticks as f64 / 600.0).min(2.0)
 }
 
+/// World px per time-of-day phase (~250 tiles), cycling night→dawn→day→dusk.
+const PHASE_LEN_PX: f64 = 4000.0;
+/// Sky keyframes for the cycle, in phase order.
+const SKIES: [(u8, u8, u8); 4] = [(18, 20, 40), (64, 42, 74), (74, 110, 150), (96, 52, 58)];
+
+fn phase_name(phase: u32) -> &'static str {
+    match phase % 4 {
+        0 => "NIGHT",
+        1 => "DAWN",
+        2 => "DAY",
+        _ => "DUSK",
+    }
+}
+
+/// Re-tint a palette's sky for the time of day at world x — the backdrop (which is
+/// sky + a faint bump) rides along, so the skyline glows dawn/day/dusk as you run.
+fn time_palette(mut p: art::Palette, x_px: f64) -> art::Palette {
+    let t = (x_px / PHASE_LEN_PX).max(0.0);
+    let (i, f) = ((t as usize) % 4, t.fract());
+    let (a, b) = (SKIES[i], SKIES[(i + 1) % 4]);
+    let lerp = |a: u8, b: u8| (a as f64 + (b as f64 - a as f64) * f) as u8;
+    p.sky = Rgba::rgb(lerp(a.0, b.0), lerp(a.1, b.1), lerp(a.2, b.2));
+    p
+}
+
 /// The HUD fidelity bar: filled pips for current tier, hollow for lost ones.
 fn fidelity_pips(fidelity: u8) -> String {
     let f = fidelity.min(4) as usize;
@@ -164,6 +189,7 @@ pub fn run(input: &mut Input, difficulty: Difficulty, seed: u64) -> Outcome {
     let mut birds = build_birds(&course);
     let mut score = 0.0f64; // distance, boosted by the pristine multiplier
     let mut pristine = 0u32; // ticks held at full fidelity (drives the multiplier)
+    let mut last_phase = (sim.player.pos.x / PHASE_LEN_PX) as u32; // time-of-day phase
     let mut pending_jump = false;
     let mut full_redraw = true;
     let mut acc: u64 = 0;
@@ -244,6 +270,14 @@ pub fn run(input: &mut Input, difficulty: Difficulty, seed: u64) -> Outcome {
                 pristine = 0;
             }
             score += ((sim.player.pos.x - px0).max(0.0) / TILE) * pristine_mult(pristine);
+        }
+
+        // Time-of-day milestone: announce each new phase as you cross into it.
+        let phase = (sim.player.pos.x / PHASE_LEN_PX) as u32;
+        if phase != last_phase {
+            last_phase = phase;
+            let px = sim.player.pos.x + sim.player.w / 2.0;
+            sim.fx.spawn_word(phase_name(phase), (210, 215, 255), px, sim.player.pos.y - 14.0, sim.clock());
         }
 
         // Camera: follow the player, never backtrack (forced rightward).
@@ -373,7 +407,7 @@ fn draw_frame(
     mult: f64,
 ) {
     out.clear(); // the backends append this frame's bytes; we flush them below
-    let pal = art::palette(art::Theme::Rooftop);
+    let pal = time_palette(art::palette(art::Theme::Rooftop), sim.player.pos.x);
     let cpw = fb_w as f64 / cols.max(1) as f64;
     let cph = fb_h as f64 / rows.max(1) as f64;
 
@@ -665,6 +699,17 @@ mod tests {
             }
             other => panic!("expected a fall without jumping, got {}", other.score()),
         }
+    }
+
+    #[test]
+    fn time_of_day_shifts_the_sky() {
+        let base = art::palette(art::Theme::Rooftop);
+        let night = time_palette(base, 0.0).sky;
+        let day = time_palette(base, 2.0 * PHASE_LEN_PX).sky;
+        assert_ne!(night, day, "sky changes from night to day");
+        assert_eq!(phase_name(0), "NIGHT");
+        assert_eq!(phase_name(2), "DAY");
+        assert_eq!(phase_name(5), "DAWN"); // wraps (5 % 4 == 1)
     }
 
     #[test]
