@@ -407,7 +407,16 @@ fn draw_frame(
     mult: f64,
 ) {
     out.clear(); // the backends append this frame's bytes; we flush them below
-    let pal = time_palette(art::palette(art::Theme::Rooftop), sim.player.pos.x);
+    // Time-of-day sky only on the color tiers (4=kitty, 3=half-block). The glyph
+    // tiers (2=ascii, 1=mono) map luma onto a character ramp whose blank cell tops
+    // out at luma ~28/~64; the DAY/DUSK skies exceed that, so a tinted sky floods
+    // the background with ramp glyphs (and flickers as the lerp crosses steps).
+    // The base rooftop sky is calibrated to stay in the blank cell.
+    let pal = if fidelity >= 3 {
+        time_palette(art::palette(art::Theme::Rooftop), sim.player.pos.x)
+    } else {
+        art::palette(art::Theme::Rooftop)
+    };
     let cpw = fb_w as f64 / cols.max(1) as f64;
     let cph = fb_h as f64 / rows.max(1) as f64;
 
